@@ -348,7 +348,7 @@ pub(crate) struct SourceGlobalBindingSite {
     pub(crate) publishable: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SourceGlobalContributorKind {
     Ordinary,
     Namespace,

@@ -1,6 +1,88 @@
 use super::*;
 
 #[cfg(any(test, feature = "test-utils"))]
+type CompleteCombinedUserTickets = BTreeMap<UserRecordTicket, ((usize, usize), LibraryEventKey)>;
+
+#[cfg(any(test, feature = "test-utils"))]
+thread_local! {
+    static COMPLETE_COMBINED_REPLAY_ORACLE_DEPTH: Cell<u32> = const { Cell::new(0) };
+    static COMPLETE_COMBINED_REPLAY_ORACLE_USER_EVENT_OFFSET: Cell<Option<usize>> = const { Cell::new(None) };
+    static COMPLETE_COMBINED_REPLAY_ORACLE_USER_TICKETS: RefCell<Option<CompleteCombinedUserTickets>> = const { RefCell::new(None) };
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+struct CompleteCombinedReplayOracleScope;
+
+#[cfg(any(test, feature = "test-utils"))]
+impl CompleteCombinedReplayOracleScope {
+    fn enter() -> Self {
+        COMPLETE_COMBINED_REPLAY_ORACLE_DEPTH.with(|depth| {
+            depth.set(depth.get().saturating_add(1));
+        });
+        Self
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl Drop for CompleteCombinedReplayOracleScope {
+    fn drop(&mut self) {
+        COMPLETE_COMBINED_REPLAY_ORACLE_DEPTH.with(|depth| {
+            depth.set(depth.get().saturating_sub(1));
+        });
+        COMPLETE_COMBINED_REPLAY_ORACLE_USER_TICKETS.with(|tickets| {
+            *tickets.borrow_mut() = None;
+        });
+        COMPLETE_COMBINED_REPLAY_ORACLE_USER_EVENT_OFFSET.set(None);
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub(in crate::check::checker) fn complete_combined_replay_oracle_is_active() -> bool {
+    COMPLETE_COMBINED_REPLAY_ORACLE_DEPTH.with(|depth| depth.get() != 0)
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub(super) fn set_complete_combined_replay_oracle_user_tickets(
+    event_offset: usize,
+    rows: CompleteCombinedUserTickets,
+) {
+    COMPLETE_COMBINED_REPLAY_ORACLE_USER_EVENT_OFFSET.set(Some(event_offset));
+    COMPLETE_COMBINED_REPLAY_ORACLE_USER_TICKETS.with(|tickets| {
+        *tickets.borrow_mut() = Some(rows);
+    });
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub(super) fn complete_combined_replay_oracle_user_event_offset() -> Option<usize> {
+    COMPLETE_COMBINED_REPLAY_ORACLE_USER_EVENT_OFFSET.get()
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub(super) fn complete_combined_replay_oracle_user_tickets() -> Option<CompleteCombinedUserTickets>
+{
+    COMPLETE_COMBINED_REPLAY_ORACLE_USER_TICKETS.with(|tickets| tickets.borrow().clone())
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub(super) fn complete_combined_replay_oracle_ticket_key(
+    ticket: PrivateCombinedRecordTicket,
+) -> (usize, usize) {
+    match ticket {
+        PrivateCombinedRecordTicket::Library(ticket)
+        | PrivateCombinedRecordTicket::DisabledLibrary(ticket) => library_record_ticket_key(ticket),
+        PrivateCombinedRecordTicket::User(ticket) => COMPLETE_COMBINED_REPLAY_ORACLE_USER_TICKETS
+            .with(|tickets| {
+                tickets
+                    .borrow()
+                    .as_ref()
+                    .and_then(|rows| rows.get(&ticket))
+                    .map(|(ticket, _)| *ticket)
+                    .expect("combined replay oracle validated every user ticket before checking")
+            }),
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
 pub fn run_injected_profile(
     sources: &[InjectedLibrarySource<'_>],
 ) -> Result<InjectedProfileRun, InjectedProfileError> {
@@ -16,6 +98,25 @@ pub fn compile_complete_combined_profile_for_test(
         compile_owned_injected_frontend(
             frontend,
             ReplayIndexPlan::None,
+            LibraryRecordRetention::Collect,
+            CanonicalLibraryEvidenceCapture::Skip,
+            OwnerSiteStorageMode::Flat,
+        )
+        .map(|(run, runtime, _)| (run, runtime))
+    })
+}
+
+/// Run the combined-source oracle while retaining the admitted dependency graph.
+#[cfg(any(test, feature = "test-utils"))]
+pub fn compile_complete_combined_replay_oracle_for_test(
+    sources: &[InjectedLibrarySource<'_>],
+    library_count: usize,
+) -> Result<(InjectedProfileRun, OwnedLibraryRuntimeState), InjectedProfileError> {
+    let _oracle_scope = CompleteCombinedReplayOracleScope::enter();
+    with_canonical_frontend(sources, Some(library_count), |frontend| {
+        compile_owned_injected_frontend(
+            frontend,
+            ReplayIndexPlan::Assemble,
             LibraryRecordRetention::Collect,
             CanonicalLibraryEvidenceCapture::Skip,
             OwnerSiteStorageMode::Flat,

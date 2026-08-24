@@ -1,6 +1,265 @@
 use super::*;
 
+#[cfg(any(test, feature = "test-utils"))]
+use super::super::namespace_values::NamespaceValueUnavailableCause;
+
+#[cfg(any(test, feature = "test-utils"))]
+use typokat_binder::binder::roots::{
+    collect_final_global_object_contributors, FinalGlobalContributorInventory,
+};
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CompleteSourceNamespaceFragmentForTest {
+    pub origin: typokat_core::source::CompilationOrigin,
+    pub source_start: u32,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompleteSourceNamespaceUnavailableReasonForTest {
+    MissingExportedMemberName,
+    DuplicateExportedValue,
+    UnboundExportedVariable,
+    MissingExportedVariableSyntax,
+    InvalidUsingDeclaration,
+    VariableSurfaceUnavailable,
+    UnboundExportedFunction,
+    MissingExportedFunctionSyntax,
+    UnboundExportedClass,
+    UnboundExportedClassIdentity,
+    UnboundNestedNamespace,
+    UnsupportedExportedMember,
+    DeferredExportedMember,
+    FunctionNamespacePayloadUnavailable,
+    FunctionOwnerCallSurfaceUnavailable,
+    FunctionSurfaceUnavailable,
+    ClassSurfaceUnavailable,
+    NestedNamespaceUnavailable,
+    ExistingOwnerUnavailable,
+    NamespaceContainmentCycle,
+    InvalidPrivateNamespaceMember,
+    ClassValueSurfaceUnavailable,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+const fn complete_source_namespace_unavailable_reason(
+    reason: NamespaceValueUnavailableCause,
+) -> CompleteSourceNamespaceUnavailableReasonForTest {
+    use CompleteSourceNamespaceUnavailableReasonForTest as Target;
+    match reason {
+        NamespaceValueUnavailableCause::MissingExportedMemberName => {
+            Target::MissingExportedMemberName
+        }
+        NamespaceValueUnavailableCause::DuplicateExportedValue => Target::DuplicateExportedValue,
+        NamespaceValueUnavailableCause::UnboundExportedVariable => Target::UnboundExportedVariable,
+        NamespaceValueUnavailableCause::MissingExportedVariableSyntax => {
+            Target::MissingExportedVariableSyntax
+        }
+        NamespaceValueUnavailableCause::InvalidUsingDeclaration => Target::InvalidUsingDeclaration,
+        NamespaceValueUnavailableCause::VariableSurfaceUnavailable => {
+            Target::VariableSurfaceUnavailable
+        }
+        NamespaceValueUnavailableCause::UnboundExportedFunction => Target::UnboundExportedFunction,
+        NamespaceValueUnavailableCause::MissingExportedFunctionSyntax => {
+            Target::MissingExportedFunctionSyntax
+        }
+        NamespaceValueUnavailableCause::UnboundExportedClass => Target::UnboundExportedClass,
+        NamespaceValueUnavailableCause::UnboundExportedClassIdentity => {
+            Target::UnboundExportedClassIdentity
+        }
+        NamespaceValueUnavailableCause::UnboundNestedNamespace => Target::UnboundNestedNamespace,
+        NamespaceValueUnavailableCause::UnsupportedExportedMember => {
+            Target::UnsupportedExportedMember
+        }
+        NamespaceValueUnavailableCause::DeferredExportedMember => Target::DeferredExportedMember,
+        NamespaceValueUnavailableCause::FunctionNamespacePayloadUnavailable => {
+            Target::FunctionNamespacePayloadUnavailable
+        }
+        NamespaceValueUnavailableCause::FunctionOwnerCallSurfaceUnavailable => {
+            Target::FunctionOwnerCallSurfaceUnavailable
+        }
+        NamespaceValueUnavailableCause::FunctionSurfaceUnavailable => {
+            Target::FunctionSurfaceUnavailable
+        }
+        NamespaceValueUnavailableCause::ClassSurfaceUnavailable => Target::ClassSurfaceUnavailable,
+        NamespaceValueUnavailableCause::NestedNamespaceUnavailable => {
+            Target::NestedNamespaceUnavailable
+        }
+        NamespaceValueUnavailableCause::ExistingOwnerUnavailable => {
+            Target::ExistingOwnerUnavailable
+        }
+        NamespaceValueUnavailableCause::NamespaceContainmentCycle => {
+            Target::NamespaceContainmentCycle
+        }
+        NamespaceValueUnavailableCause::InvalidPrivateNamespaceMember => {
+            Target::InvalidPrivateNamespaceMember
+        }
+        NamespaceValueUnavailableCause::ClassValueSurfaceUnavailable => {
+            Target::ClassValueSurfaceUnavailable
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompleteSourceStandaloneNamespaceTerminalForTest {
+    Ready,
+    Unavailable(CompleteSourceNamespaceUnavailableReasonForTest),
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompleteSourceStandaloneNamespaceTerminalRowForTest {
+    pub name: String,
+    pub fragments: Vec<CompleteSourceNamespaceFragmentForTest>,
+    pub terminal: CompleteSourceStandaloneNamespaceTerminalForTest,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompleteSourceReplayGraphForTest {
+    pub final_global_contributors: FinalGlobalContributorInventory,
+    pub standalone_namespace_terminals: Vec<CompleteSourceStandaloneNamespaceTerminalRowForTest>,
+    pub owner_partition: Vec<ReplayOwner>,
+    pub owner_names: Vec<(ReplayOwner, String)>,
+    pub root_slots: Vec<ReplayRootSlot>,
+    pub owner_sites: Vec<ReplayOwnerSite>,
+    pub reverse_edges: Vec<super::replay_index::ReplayReverseEdge>,
+    pub root_slot_consumers: Vec<super::replay_index::ReplayRootConsumer>,
+    pub scc_membership: Vec<super::replay_index::ReplayScc>,
+    pub statement_owners: Vec<(LibraryEventKey, ReplayOwner)>,
+    pub unowned_demand_count: u64,
+    pub invalid_owner_site_count: u64,
+    pub noncanonical_edge_count: u64,
+    pub typed_reference_coverage_misses: u64,
+}
+
 impl OwnedLibraryRuntimeState {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn complete_source_replay_graph_for_test(
+        &self,
+    ) -> Result<CompleteSourceReplayGraphForTest, &'static str> {
+        let index = self
+            .replay_index()
+            .ok_or("complete-source replay oracle has no admitted index")?;
+        let mut owner_names = Vec::with_capacity(index.owner_partition.len());
+        for owner in &index.owner_partition {
+            let name = match *owner {
+                ReplayOwner::TypeGroup(group) => self
+                    .binder
+                    .type_groups
+                    .get(group)
+                    .map(|row| row.name.clone())
+                    .ok_or("replay type-group owner is outside the binder")?,
+                ReplayOwner::Value(storage) => {
+                    let mut names = self
+                        .binder
+                        .symbols
+                        .iter()
+                        .filter(|(_, symbol)| symbol.value == Some(storage))
+                        .map(|(_, symbol)| symbol.name.clone())
+                        .collect::<Vec<_>>();
+                    names.sort();
+                    names.dedup();
+                    if names.is_empty() {
+                        "<anonymous-value>".to_owned()
+                    } else {
+                        names.join(",")
+                    }
+                }
+                ReplayOwner::Namespace(namespace) => self
+                    .binder
+                    .namespaces
+                    .get(namespace)
+                    .map(|row| row.name.clone())
+                    .ok_or("replay namespace owner is outside the binder")?,
+                ReplayOwner::Class(class) => self
+                    .runtime
+                    .class_names
+                    .get(&class)
+                    .cloned()
+                    .ok_or("replay class owner has no retained name")?,
+                ReplayOwner::GlobalObject => "globalThis".to_owned(),
+                ReplayOwner::Statement(key) => format!(
+                    "statement:{}:{}:{}:{}",
+                    key.file_ordinal.index(),
+                    key.source_start,
+                    key.event_ordinal,
+                    key.record_ordinal
+                ),
+            };
+            owner_names.push((*owner, name));
+        }
+        let final_global_contributors = collect_final_global_object_contributors(&self.binder)
+            .map_err(|_| "complete-source final global contributor inventory is invalid")?;
+        let mut standalone_namespace_terminals = Vec::new();
+        for row in self.runtime.namespace_terminals.snapshot_parts()? {
+            let namespace = self
+                .binder
+                .namespaces
+                .get(row.namespace)
+                .ok_or("namespace terminal is outside the binder")?;
+            let mut fragments = namespace
+                .fragments
+                .iter()
+                .map(|fragment| {
+                    let fragment = self
+                        .binder
+                        .namespaces
+                        .fragment(*fragment)
+                        .ok_or("namespace terminal fragment is outside the binder")?;
+                    let origin = self
+                        .binder
+                        .namespaces
+                        .compilation_origin_for_source(fragment.source)
+                        .ok_or("namespace terminal fragment has no compilation origin")?;
+                    Ok(CompleteSourceNamespaceFragmentForTest {
+                        origin,
+                        source_start: fragment.source_start,
+                    })
+                })
+                .collect::<Result<Vec<_>, &'static str>>()?;
+            fragments.sort();
+            let terminal = match row.terminal {
+                FrozenNamespaceValueTerminalSnapshot::Ready { .. } => {
+                    CompleteSourceStandaloneNamespaceTerminalForTest::Ready
+                }
+                FrozenNamespaceValueTerminalSnapshot::Unavailable(cause) => {
+                    CompleteSourceStandaloneNamespaceTerminalForTest::Unavailable(
+                        complete_source_namespace_unavailable_reason(cause),
+                    )
+                }
+            };
+            standalone_namespace_terminals.push(
+                CompleteSourceStandaloneNamespaceTerminalRowForTest {
+                    name: namespace.name.clone(),
+                    fragments,
+                    terminal,
+                },
+            );
+        }
+        standalone_namespace_terminals.sort_by(|left, right| {
+            (&left.name, &left.fragments).cmp(&(&right.name, &right.fragments))
+        });
+        Ok(CompleteSourceReplayGraphForTest {
+            final_global_contributors,
+            standalone_namespace_terminals,
+            owner_partition: index.owner_partition.clone(),
+            owner_names,
+            root_slots: index.root_slots.clone(),
+            owner_sites: index.owner_sites.clone(),
+            reverse_edges: index.reverse_edges.clone(),
+            root_slot_consumers: index.root_slot_consumers.clone(),
+            scc_membership: index.scc_membership.clone(),
+            statement_owners: index.statement_owners.clone(),
+            unowned_demand_count: index.unowned_demand_count,
+            invalid_owner_site_count: index.invalid_owner_site_count,
+            noncanonical_edge_count: index.noncanonical_edge_count,
+            typed_reference_coverage_misses: index.typed_reference_coverage_misses,
+        })
+    }
+
     pub fn complete_replay_binder_checkpoint(
         &self,
     ) -> Result<LibraryBinderCheckpoint, &'static str> {

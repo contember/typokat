@@ -14,6 +14,8 @@ use oxc_ast::ast::{
     BreakStatement, ContinueStatement, Declaration, IfStatement, LabeledStatement, Statement,
     SwitchStatement, WhileStatement,
 };
+#[cfg(any(test, feature = "test-utils"))]
+use oxc_span::GetSpan;
 
 use super::context::*;
 use super::narrowing::clause_terminates;
@@ -43,6 +45,31 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     }
 
     fn build_flow_stmt(&mut self, scope: ScopeId, stmt: &Statement<'_>) {
+        #[cfg(any(test, feature = "test-utils"))]
+        if super::library_compiler::complete_combined_replay_oracle_is_active()
+            && matches!(self.current_source, crate::source::SourceUnit::User { .. })
+        {
+            let ticket = self
+                .lexical_events
+                .owner_at(
+                    super::lexical_events::source_ordinal(self.current_source),
+                    stmt.span().start,
+                    super::lexical_events::LexicalOwnerPhase::Immediate,
+                )
+                .expect("flow statement has a preallocated lexical owner")
+                .ticket;
+            let owner = self
+                .replay_trace
+                .as_ref()
+                .expect("combined replay oracle has an active trace")
+                .statement_owner((self.pending_effect_key)(ticket))
+                .expect("flow statement ticket has an exact replay owner");
+            return self.with_replay_owner(owner, |pass| pass.build_flow_stmt_inner(scope, stmt));
+        }
+        self.build_flow_stmt_inner(scope, stmt);
+    }
+
+    fn build_flow_stmt_inner(&mut self, scope: ScopeId, stmt: &Statement<'_>) {
         match stmt {
             Statement::VariableDeclaration(decl) => {
                 // A declaration does not narrow (the M0–M22 behavior): a reference

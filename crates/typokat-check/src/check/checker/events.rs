@@ -433,6 +433,32 @@ impl EventStore {
         self.events.len()
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(in crate::check::checker) fn reserved_ticket_keys_for_test(
+        &self,
+    ) -> Vec<(UserRecordTicket, EventKey)> {
+        self.events
+            .iter()
+            .enumerate()
+            .flat_map(|(event_index, meta)| {
+                (0..meta.next_record_ordinal).map(move |record_ordinal| {
+                    (
+                        UserRecordTicket {
+                            event: EventId(event_index),
+                            record_ordinal,
+                        },
+                        EventKey {
+                            module_ordinal: meta.module_ordinal,
+                            source_start: meta.source_start,
+                            event_ordinal: meta.event_ordinal,
+                            record_ordinal,
+                        },
+                    )
+                })
+            })
+            .collect()
+    }
+
     /// Heap slots the store has allocated for records. Reservation must never move this.
     #[cfg(test)]
     fn stored_record_capacity(&self) -> usize {

@@ -253,6 +253,14 @@ fn value_probe_for_symbol<Ticket: Copy>(
     let call_signature_count = visible
         .map(|ty| signature_ids(store, ty).len())
         .unwrap_or_default();
+    let signatures = visible
+        .map(|ty| {
+            signature_ids(store, ty)
+                .into_iter()
+                .filter_map(|signature| signature_probe(store, signature))
+                .collect()
+        })
+        .unwrap_or_default();
     let member_names = visible
         .and_then(|ty| store.object_type(ty))
         .map(|object| {
@@ -272,9 +280,12 @@ fn value_probe_for_symbol<Ticket: Copy>(
                 .filter(|member| member.kind == MergeDeclarationKind::Function)
                 .filter_map(|member| {
                     let member_identity = member.value_storage?;
-                    let file_ordinal = library_ordinal(member.origin)?;
                     let reservation =
                         namespace_values.namespace_function_reservation(member.declaration)?;
+                    let source = match member.origin {
+                        CompilationOrigin::Library(file_ordinal) => library_unit(file_ordinal),
+                        CompilationOrigin::User(_) => reservation.unit,
+                    };
                     let property_ty = visible
                         .and_then(|ty| store.object_type(ty))
                         .and_then(|object| object.property(member.name))
@@ -287,7 +298,7 @@ fn value_probe_for_symbol<Ticket: Copy>(
                     Some(CallableMemberProbe {
                         name: member.name.to_owned(),
                         identity: member_identity,
-                        source: library_unit(file_ordinal),
+                        source,
                         reservation_source: reservation.unit,
                         source_start: member.site.declaration_span.start,
                         call_signature_count: signature_ids.len(),
@@ -303,6 +314,7 @@ fn value_probe_for_symbol<Ticket: Copy>(
         participant_identities,
         declaration_count: symbol.declarations.len(),
         call_signature_count,
+        signatures,
         member_names,
         callable_members,
     })

@@ -97,8 +97,107 @@ pub struct ValueProbe {
     pub participant_identities: Vec<(LibraryFileOrdinal, ValueStorageId)>,
     pub declaration_count: usize,
     pub call_signature_count: usize,
+    pub signatures: Vec<SignatureProbe>,
     pub member_names: Vec<String>,
     pub callable_members: Vec<CallableMemberProbe>,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NormalizedSpanForTest {
+    pub start: u32,
+    pub end: u32,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NormalizedDiagnosticForTest {
+    pub span: NormalizedSpanForTest,
+    pub code: String,
+    pub severity: String,
+    pub message: String,
+    pub elaboration: Vec<String>,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NormalizedIncompleteForTest {
+    pub span: NormalizedSpanForTest,
+    pub id: String,
+    pub context: String,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NormalizedCheckerRecordForTest {
+    Diagnostic(NormalizedDiagnosticForTest),
+    Incomplete(NormalizedIncompleteForTest),
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NormalizedUserEventRecordForTest {
+    pub source_ordinal: LibraryFileOrdinal,
+    pub module_ordinal: ModuleOrdinal,
+    pub source_start: u32,
+    pub event_ordinal: usize,
+    pub record_ordinal: usize,
+    pub record: NormalizedCheckerRecordForTest,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NormalizedCheckResultForTest {
+    pub source_ordinal: LibraryFileOrdinal,
+    pub module_ordinal: ModuleOrdinal,
+    pub unit_slot: UnitSlot,
+    pub diagnostics: Vec<NormalizedDiagnosticForTest>,
+    pub incomplete: Vec<NormalizedIncompleteForTest>,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NormalizedTypeProbeForTest {
+    pub name: String,
+    pub declaration_count: usize,
+    pub member_names: Vec<String>,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NormalizedModuleTypeProbeForTest {
+    pub source_ordinal: LibraryFileOrdinal,
+    pub probe: NormalizedTypeProbeForTest,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NormalizedCallableMemberProbeForTest {
+    pub name: String,
+    pub source_ordinal: LibraryFileOrdinal,
+    pub reservation_source_ordinal: LibraryFileOrdinal,
+    pub source_start: u32,
+    pub call_signature_count: usize,
+    pub signatures: Vec<SignatureProbe>,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NormalizedValueProbeForTest {
+    pub name: String,
+    pub declaration_count: usize,
+    pub call_signature_count: usize,
+    pub signatures: Vec<SignatureProbe>,
+    pub member_names: Vec<String>,
+    pub callable_members: Vec<NormalizedCallableMemberProbeForTest>,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NormalizedSemanticProbesForTest {
+    pub global_types: Vec<NormalizedTypeProbeForTest>,
+    pub module_types: Vec<NormalizedModuleTypeProbeForTest>,
+    pub global_values: Vec<NormalizedValueProbeForTest>,
 }
 
 #[derive(Debug)]
@@ -127,6 +226,14 @@ pub struct InjectedProfileRun {
     pub(super) user_results: Vec<super::CheckResult>,
     #[cfg(any(test, feature = "test-utils"))]
     pub(super) ordered_user_records: Vec<(LibraryFileOrdinal, CheckerRecord)>,
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(super) ordered_user_event_records: Vec<(
+        LibraryFileOrdinal,
+        super::super::events::EventKey,
+        CheckerRecord,
+    )>,
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(super) user_result_source_ordinals: BTreeMap<ModuleOrdinal, LibraryFileOrdinal>,
     #[cfg(any(test, feature = "test-utils"))]
     pub pass_source_units: Vec<ExactUnit>,
     #[cfg(any(test, feature = "test-utils"))]
@@ -364,6 +471,202 @@ impl InjectedProfileRun {
     pub fn global_value_probe(&self, name: &str) -> Option<&ValueProbe> {
         self.global_values.get(name)
     }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn normalized_user_event_store_ledger_for_test(
+        &self,
+    ) -> Vec<NormalizedUserEventRecordForTest> {
+        self.ordered_user_event_records
+            .iter()
+            .map(
+                |(source_ordinal, key, record)| NormalizedUserEventRecordForTest {
+                    source_ordinal: *source_ordinal,
+                    module_ordinal: key.module_ordinal,
+                    source_start: key.source_start,
+                    event_ordinal: key.event_ordinal,
+                    record_ordinal: key.record_ordinal,
+                    record: normalize_checker_record(record),
+                },
+            )
+            .collect()
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn normalized_user_check_results_for_test(
+        &self,
+    ) -> Result<Vec<NormalizedCheckResultForTest>, InjectedProfileError> {
+        self.user_results
+            .iter()
+            .map(|result| {
+                let source_ordinal = self
+                    .user_result_source_ordinals
+                    .get(&result.module_ordinal)
+                    .copied()
+                    .ok_or_else(|| {
+                        InjectedProfileError::CanonicalProjection(format!(
+                            "complete-source result omits source ordinal for user module {}",
+                            result.module_ordinal.index(),
+                        ))
+                    })?;
+                Ok(NormalizedCheckResultForTest {
+                    source_ordinal,
+                    module_ordinal: result.module_ordinal,
+                    unit_slot: result.unit_slot,
+                    diagnostics: result
+                        .diagnostics
+                        .iter()
+                        .map(normalize_diagnostic)
+                        .collect(),
+                    incomplete: result.incomplete.iter().map(normalize_incomplete).collect(),
+                })
+            })
+            .collect()
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn normalized_raw_semantic_probes_for_test(
+        &self,
+    ) -> Result<NormalizedSemanticProbesForTest, InjectedProfileError> {
+        let global_types = self
+            .global_types
+            .iter()
+            .map(|(name, probe)| normalize_type_probe(name, probe))
+            .collect();
+        let module_types = self
+            .module_types
+            .iter()
+            .map(
+                |((source_ordinal, name), probe)| NormalizedModuleTypeProbeForTest {
+                    source_ordinal: *source_ordinal,
+                    probe: normalize_type_probe(name, probe),
+                },
+            )
+            .collect();
+        let global_values = self
+            .global_values
+            .iter()
+            .map(|(name, probe)| {
+                normalize_value_probe(name, probe, &self.user_result_source_ordinals)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(NormalizedSemanticProbesForTest {
+            global_types,
+            module_types,
+            global_values,
+        })
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn normalize_span(span: Span) -> NormalizedSpanForTest {
+    NormalizedSpanForTest {
+        start: span.start,
+        end: span.end,
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn normalize_diagnostic(
+    diagnostic: &crate::diagnostics::Diagnostic,
+) -> NormalizedDiagnosticForTest {
+    NormalizedDiagnosticForTest {
+        span: normalize_span(diagnostic.span),
+        code: diagnostic.code.as_str().to_owned(),
+        severity: match diagnostic.severity {
+            crate::diagnostics::Severity::Error => "error",
+            crate::diagnostics::Severity::Warning => "warning",
+        }
+        .to_owned(),
+        message: diagnostic.message.clone(),
+        elaboration: diagnostic.elaboration().to_vec(),
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn normalize_incomplete(
+    incomplete: &crate::diagnostics::IncompleteSurface,
+) -> NormalizedIncompleteForTest {
+    NormalizedIncompleteForTest {
+        span: normalize_span(incomplete.span),
+        id: incomplete.id.clone(),
+        context: incomplete.context.clone(),
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn normalize_checker_record(record: &CheckerRecord) -> NormalizedCheckerRecordForTest {
+    match record {
+        CheckerRecord::Diagnostic(diagnostic) => {
+            NormalizedCheckerRecordForTest::Diagnostic(normalize_diagnostic(diagnostic))
+        }
+        CheckerRecord::Incomplete(incomplete) => {
+            NormalizedCheckerRecordForTest::Incomplete(normalize_incomplete(incomplete))
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn normalize_type_probe(name: &str, probe: &TypeProbe) -> NormalizedTypeProbeForTest {
+    NormalizedTypeProbeForTest {
+        name: name.to_owned(),
+        declaration_count: probe.declaration_count,
+        member_names: probe.member_names.clone(),
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn normalized_library_source_ordinal(
+    source: ExactUnit,
+    user_source_ordinals: &BTreeMap<ModuleOrdinal, LibraryFileOrdinal>,
+) -> Result<LibraryFileOrdinal, InjectedProfileError> {
+    match source {
+        SourceUnit::Library { file_ordinal } => Ok(file_ordinal),
+        SourceUnit::User { module_ordinal, .. } => user_source_ordinals
+            .get(&module_ordinal)
+            .copied()
+            .ok_or_else(|| {
+                InjectedProfileError::CanonicalProjection(format!(
+                    "semantic probe omits source ordinal for user module {}",
+                    module_ordinal.index(),
+                ))
+            }),
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn normalize_value_probe(
+    name: &str,
+    probe: &ValueProbe,
+    user_source_ordinals: &BTreeMap<ModuleOrdinal, LibraryFileOrdinal>,
+) -> Result<NormalizedValueProbeForTest, InjectedProfileError> {
+    let callable_members = probe
+        .callable_members
+        .iter()
+        .map(|member| {
+            Ok(NormalizedCallableMemberProbeForTest {
+                name: member.name.clone(),
+                source_ordinal: normalized_library_source_ordinal(
+                    member.source,
+                    user_source_ordinals,
+                )?,
+                reservation_source_ordinal: normalized_library_source_ordinal(
+                    member.reservation_source,
+                    user_source_ordinals,
+                )?,
+                source_start: member.source_start,
+                call_signature_count: member.call_signature_count,
+                signatures: member.signatures.clone(),
+            })
+        })
+        .collect::<Result<Vec<_>, InjectedProfileError>>()?;
+    Ok(NormalizedValueProbeForTest {
+        name: name.to_owned(),
+        declaration_count: probe.declaration_count,
+        call_signature_count: probe.call_signature_count,
+        signatures: probe.signatures.clone(),
+        member_names: probe.member_names.clone(),
+        callable_members,
+    })
 }
 
 pub(super) struct CanonicalInput<'source> {
@@ -388,10 +691,12 @@ pub(super) fn independent_event_owner_sites_for_oracle(
         reservations
             .reserve_program_with_declaration_manifest(program, manifest, &mut allocator)
             .map_err(|message| InjectedProfileError::Reservation(message.to_owned()))?;
-        allocator.reserve_exact_site(
-            Span::from_oxc(program.span),
-            CollisionReplayEventPhase::Immediate,
-        );
+        if matches!(input.origin, CompilationOrigin::Library(_)) {
+            allocator.reserve_exact_site(
+                Span::from_oxc(program.span),
+                CollisionReplayEventPhase::Immediate,
+            );
+        }
     }
     for descriptor in independent_library_reporting_site_descriptors(binder) {
         allocator.select_file(descriptor.file_ordinal);

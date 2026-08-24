@@ -425,6 +425,8 @@ pub(super) fn build_collision_replay_index(
     let mut explicit_global_this = false;
     let mut contributor_sites = Vec::new();
     let mut explicit_global_this_sites = Vec::new();
+    #[cfg(any(test, feature = "test-utils"))]
+    let mut oracle_library_root_names = BTreeSet::new();
     for ((input, program), module) in canonical.iter().zip(parsed).zip(module_scopes) {
         let provenance = source_global_binding_census_with_provenance(
             program,
@@ -446,6 +448,12 @@ pub(super) fn build_collision_replay_index(
                 .into_iter()
                 .map(|span| (input.file_ordinal, span)),
         );
+        #[cfg(any(test, feature = "test-utils"))]
+        if super::complete_source::complete_combined_replay_oracle_is_active()
+            && matches!(input.origin, CompilationOrigin::Library(_))
+        {
+            oracle_library_root_names.extend(provenance.census.candidates.keys().cloned());
+        }
         for (name, candidate) in provenance.census.candidates {
             let aggregate = candidates
                 .entry(name)
@@ -467,10 +475,22 @@ pub(super) fn build_collision_replay_index(
         ));
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
+    let mut root_rows = collect_root_rows(binder)
+        .map_err(|error| InjectedProfileError::CanonicalProjection(format!("{error:?}")))?;
+    #[cfg(not(any(test, feature = "test-utils")))]
     let root_rows = collect_root_rows(binder)
         .map_err(|error| InjectedProfileError::CanonicalProjection(format!("{error:?}")))?;
     let normalized = normalize_source_root_candidates(candidates, binder);
+    #[cfg(any(test, feature = "test-utils"))]
+    let mut candidates = normalized.candidates;
+    #[cfg(not(any(test, feature = "test-utils")))]
     let candidates = normalized.candidates;
+    #[cfg(any(test, feature = "test-utils"))]
+    if super::complete_source::complete_combined_replay_oracle_is_active() {
+        candidates.retain(|name, _| oracle_library_root_names.contains(name));
+        root_rows.retain(|row| oracle_library_root_names.contains(&row.name));
+    }
     for (name, kind, file_ordinal, span) in contributor_sites {
         let admitted = match kind {
             SourceGlobalContributorKind::Ordinary => candidates.contains_key(&name),

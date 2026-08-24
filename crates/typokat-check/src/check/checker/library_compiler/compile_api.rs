@@ -333,6 +333,11 @@ pub(super) trait InjectedCompileRoute {
 
     fn ticket_key() -> fn(Self::Ticket) -> (usize, usize);
 
+    #[cfg(any(test, feature = "test-utils"))]
+    fn oracle_user_ticket(_ticket: Self::Ticket) -> Option<UserRecordTicket> {
+        None
+    }
+
     fn user_ticket(owner: UserRecordTicket) -> Result<Self::Ticket, InjectedProfileError>;
 
     fn complete_batches(
@@ -525,7 +530,20 @@ impl InjectedCompileRoute for CompleteSourceRoute {
     }
 
     fn ticket_key() -> fn(Self::Ticket) -> (usize, usize) {
+        #[cfg(any(test, feature = "test-utils"))]
+        if super::complete_source::complete_combined_replay_oracle_is_active() {
+            return super::complete_source::complete_combined_replay_oracle_ticket_key;
+        }
         private_combined_record_ticket_key
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    fn oracle_user_ticket(ticket: Self::Ticket) -> Option<UserRecordTicket> {
+        match ticket {
+            PrivateCombinedRecordTicket::User(ticket) => Some(ticket),
+            PrivateCombinedRecordTicket::Library(_)
+            | PrivateCombinedRecordTicket::DisabledLibrary(_) => None,
+        }
     }
 
     fn user_ticket(owner: UserRecordTicket) -> Result<Self::Ticket, InjectedProfileError> {

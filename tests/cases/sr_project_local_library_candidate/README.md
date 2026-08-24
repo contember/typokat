@@ -11,6 +11,14 @@ The new fixtures cover gaps that the shipped frozen/sparse corpus does not isola
 - `mixed_group_{forward,reverse}` merge one library group from a script and a module
   `declare global` fragment in both source orders;
 - `isolation_{a,b}` require two incompatible project-local augmentations with no cross-project leak.
+- `official_assignment_compat_between_tuple_and_array.ts` pins one exact `IN` frame from the
+  authenticated TypeScript commit in the official-suite manifest. Its tuple/Array relations give
+  the demand trace an upstream semantic consumer instead of a local-only calibration.
+
+`semantic-demand-oracle.json` is the WU4 complete-source control. Its receipt is recomputed from
+raw normalized owners, dependency edges, root consumers, SCC membership, and the canonical library
+record ledger. Candidate acceptance consumes a typed raw execution trace and derives its own
+receipt; candidate-reported counters or digests are not trusted.
 
 The candidate gate also reuses, rather than duplicates, these shipped controls:
 

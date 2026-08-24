@@ -313,7 +313,103 @@ pub(super) fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRo
         .filter(|declaration| user_declaration_contributors.contains(&declaration.id))
         .filter_map(|declaration| declaration.value_storage)
         .collect::<rustc_hash::FxHashSet<ValueStorageId>>();
+    #[cfg(any(test, feature = "test-utils"))]
+    if super::complete_source::complete_combined_replay_oracle_is_active() {
+        let library_file_ordinals = canonical
+            .iter()
+            .filter(|input| matches!(input.origin, CompilationOrigin::Library(_)))
+            .map(|input| input.file_ordinal)
+            .collect::<BTreeSet<_>>();
+        let library_event_count = independent_event_owner_sites
+            .iter()
+            .filter_map(|site| match site.owner {
+                ReplayOwner::Statement(key)
+                    if library_file_ordinals.contains(&key.file_ordinal) =>
+                {
+                    Some((key.file_ordinal, key.event_ordinal))
+                }
+                ReplayOwner::TypeGroup(_)
+                | ReplayOwner::Value(_)
+                | ReplayOwner::Namespace(_)
+                | ReplayOwner::Class(_)
+                | ReplayOwner::GlobalObject
+                | ReplayOwner::Statement(_) => None,
+            })
+            .collect::<BTreeSet<_>>()
+            .len();
+        let mut user_ticket_rows = BTreeMap::new();
+        let mut user_event_keys = BTreeMap::new();
+        let mut mapped_tickets = BTreeSet::new();
+        for (ticket, key) in user_events.reserved_ticket_keys_for_test() {
+            let Some(file_ordinal) = user_file_ordinals.get(&key.module_ordinal).copied() else {
+                return Err(InjectedProfileError::CanonicalProjection(format!(
+                    "combined replay oracle event {} references unknown user module {}",
+                    ticket.event.index(),
+                    key.module_ordinal.index(),
+                )));
+            };
+            if ticket.record_ordinal != key.record_ordinal {
+                return Err(InjectedProfileError::CanonicalProjection(
+                    "combined replay oracle user ticket record metadata is permuted".to_owned(),
+                ));
+            }
+            let Some(mapped_event) = library_event_count.checked_add(ticket.event.index()) else {
+                return Err(InjectedProfileError::SourceKeyOverflow);
+            };
+            let mapped_ticket = (mapped_event, ticket.record_ordinal);
+            let event_key = LibraryEventKey {
+                file_ordinal,
+                source_start: key.source_start,
+                event_ordinal: key.event_ordinal,
+                record_ordinal: key.record_ordinal,
+            };
+            if !mapped_tickets.insert(mapped_ticket)
+                || user_event_keys.insert(event_key, ticket).is_some()
+                || user_ticket_rows
+                    .insert(ticket, (mapped_ticket, event_key))
+                    .is_some()
+            {
+                return Err(InjectedProfileError::CanonicalProjection(
+                    "combined replay oracle user ticket metadata is not bijective".to_owned(),
+                ));
+            }
+        }
+        if user_ticket_rows.len() != user_event_keys.len()
+            || user_ticket_rows.len() != mapped_tickets.len()
+        {
+            return Err(InjectedProfileError::CanonicalProjection(
+                "combined replay oracle user ticket translation is incomplete".to_owned(),
+            ));
+        }
+        super::complete_source::set_complete_combined_replay_oracle_user_tickets(
+            library_event_count,
+            user_ticket_rows,
+        );
+    }
     let pending_tickets = Route::pending_tickets(&lexical_events);
+    #[cfg(any(test, feature = "test-utils"))]
+    if super::complete_source::complete_combined_replay_oracle_is_active() {
+        let translated = super::complete_source::complete_combined_replay_oracle_user_tickets()
+            .ok_or_else(|| {
+                InjectedProfileError::CanonicalProjection(
+                    "combined replay oracle user ticket translation is missing".to_owned(),
+                )
+            })?;
+        let pending_users = pending_tickets
+            .iter()
+            .filter_map(|ticket| Route::oracle_user_ticket(*ticket))
+            .collect::<BTreeSet<_>>();
+        if pending_users.len() != translated.len()
+            || pending_users
+                .iter()
+                .any(|ticket| !translated.contains_key(ticket))
+        {
+            return Err(InjectedProfileError::CanonicalProjection(
+                "combined replay oracle pending user tickets do not match EventStore metadata"
+                    .to_owned(),
+            ));
+        }
+    }
     let mut pass = build_pass_with_tickets(
         &mut interner,
         &binder,
@@ -406,6 +502,92 @@ pub(super) fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRo
         let mut replay_trace_seed = ledger
             .take_replay_trace_seed()
             .map_err(InjectedProfileError::Reporting)?;
+        #[cfg(any(test, feature = "test-utils"))]
+        if super::complete_source::complete_combined_replay_oracle_is_active() {
+            let translated = super::complete_source::complete_combined_replay_oracle_user_tickets()
+                .ok_or_else(|| {
+                    InjectedProfileError::CanonicalProjection(
+                        "combined replay oracle user ticket translation is missing".to_owned(),
+                    )
+                })?;
+            let user_files = user_file_ordinals
+                .values()
+                .copied()
+                .collect::<BTreeSet<_>>();
+            let user_owner_site_rows = independent_event_owner_sites
+                .iter()
+                .filter_map(|site| match site.owner {
+                    ReplayOwner::Statement(owner) if user_files.contains(&owner.file_ordinal) => {
+                        Some((owner, site.clone()))
+                    }
+                    ReplayOwner::TypeGroup(_)
+                    | ReplayOwner::Value(_)
+                    | ReplayOwner::Namespace(_)
+                    | ReplayOwner::Class(_)
+                    | ReplayOwner::GlobalObject
+                    | ReplayOwner::Statement(_) => None,
+                })
+                .collect::<Vec<_>>();
+            let mut user_owner_sites = user_owner_site_rows
+                .iter()
+                .cloned()
+                .collect::<BTreeMap<_, _>>();
+            if user_owner_site_rows.len() != user_owner_sites.len() {
+                return Err(InjectedProfileError::CanonicalProjection(
+                    format!(
+                        "combined replay oracle user owner-site mapping contains duplicate EventKeys: owner-site rows={}, unique owner keys={}",
+                        user_owner_site_rows.len(),
+                        user_owner_sites.len(),
+                    ),
+                ));
+            }
+            let mut user_event_offset = 0;
+            while replay_trace_seed.contains_owner_site_ticket((user_event_offset, 0)) {
+                user_event_offset = user_event_offset.saturating_add(1);
+            }
+            if super::complete_source::complete_combined_replay_oracle_user_event_offset()
+                != Some(user_event_offset)
+            {
+                return Err(InjectedProfileError::CanonicalProjection(
+                    "combined replay oracle library event censuses disagree".to_owned(),
+                ));
+            }
+            let translated_key_count = translated.len();
+            let translated_key_range = translated.values().map(|(_, key)| *key).fold(
+                None::<(LibraryEventKey, LibraryEventKey)>,
+                |range, key| match range {
+                    Some((first, last)) => Some((first.min(key), last.max(key))),
+                    None => Some((key, key)),
+                },
+            );
+            for (_user_ticket, (mapped_ticket, owner)) in translated {
+                if !replay_trace_seed.reserve_owner_site_ticket(mapped_ticket, owner) {
+                    return Err(InjectedProfileError::CanonicalProjection(
+                        "combined replay oracle could not seed a user statement owner".to_owned(),
+                    ));
+                }
+                if let Some(site) = user_owner_sites.remove(&owner) {
+                    if replay_trace_seed.record_ticket_owner_site(mapped_ticket, site)
+                        != Some(false)
+                    {
+                        return Err(InjectedProfileError::CanonicalProjection(
+                            "combined replay oracle could not attach an independent user owner site"
+                                .to_owned(),
+                        ));
+                    }
+                }
+            }
+            if !user_owner_sites.is_empty() {
+                let unmatched = user_owner_sites.keys().take(3).copied().collect::<Vec<_>>();
+                return Err(InjectedProfileError::CanonicalProjection(
+                    format!(
+                        "combined replay oracle owner sites contain an EventStore permutation: remaining={}, first={unmatched:?}, translated={}, translated-range={translated_key_range:?}",
+                        user_owner_sites.len(),
+                        translated_key_count,
+                    ),
+                ));
+            }
+        }
         #[cfg(any(test, feature = "test-utils"))]
         if FORCED_COLLISION_PLAN_FAILURE.get()
             == Some(ForcedCollisionPlanFailure::LateOwnerReservation)
@@ -530,6 +712,15 @@ pub(super) fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRo
         });
         pass.global_object_type = Some(base_global_object);
 
+        #[cfg(any(test, feature = "test-utils"))]
+        let oracle_global_object_scope =
+            super::complete_source::complete_combined_replay_oracle_is_active()
+                .then(|| {
+                    pass.replay_trace
+                        .as_ref()
+                        .map(|trace| trace.scope(ReplayOwner::GlobalObject))
+                })
+                .flatten();
         for (((user_input, user_program), _user_module), semantic_scope) in canonical
             .iter()
             .zip(&parsed)
@@ -554,6 +745,8 @@ pub(super) fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRo
             }
             user_global_contributor_names.push(contributor_names);
         }
+        #[cfg(any(test, feature = "test-utils"))]
+        drop(oracle_global_object_scope);
     }
     for (index, (((input, program), module), semantic_scope)) in canonical
         .iter()
@@ -577,6 +770,15 @@ pub(super) fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRo
             )
         });
         pass.global_object_type = Some(global_object);
+        #[cfg(any(test, feature = "test-utils"))]
+        let oracle_global_refresh_scope =
+            super::complete_source::complete_combined_replay_oracle_is_active()
+                .then(|| {
+                    pass.replay_trace
+                        .as_ref()
+                        .map(|trace| trace.scope(ReplayOwner::GlobalObject))
+                })
+                .flatten();
         pass.refresh_user_global_object(
             canonical
                 .iter()
@@ -591,6 +793,8 @@ pub(super) fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRo
                     )
                 }),
         );
+        #[cfg(any(test, feature = "test-utils"))]
+        drop(oracle_global_refresh_scope);
     }
     for (index, ((((input, program), module), semantic_scope), mut reserved)) in canonical
         .iter()
@@ -691,6 +895,22 @@ pub(super) fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRo
                     ))
                 })?;
             Ok((file_ordinal, record.clone()))
+        })
+        .collect::<Result<Vec<_>, InjectedProfileError>>()?;
+    #[cfg(any(test, feature = "test-utils"))]
+    let ordered_user_event_record_evidence = ordered_user_records
+        .iter()
+        .map(|(key, record)| {
+            let source_ordinal = user_file_ordinals
+                .get(&key.module_ordinal)
+                .copied()
+                .ok_or_else(|| {
+                    InjectedProfileError::CanonicalProjection(format!(
+                        "complete-source user file ordinal mapping omits module ordinal {}",
+                        key.module_ordinal.index()
+                    ))
+                })?;
+            Ok((source_ordinal, *key, record.clone()))
         })
         .collect::<Result<Vec<_>, InjectedProfileError>>()?;
     let user_records = ordered_user_records.into_iter().fold(
@@ -861,11 +1081,30 @@ pub(super) fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRo
                     oracle.reverse_edges.dedup();
                 }
             });
+            #[cfg(any(test, feature = "test-utils"))]
+            let mut replay_roots = collect_root_rows(&binder)
+                .map_err(|error| InjectedProfileError::CanonicalProjection(error.to_string()))?
+                .into_iter()
+                .map(|row| (row.name, row.value, row.ty, row.namespace))
+                .collect::<Vec<_>>();
+            #[cfg(not(any(test, feature = "test-utils")))]
             let replay_roots = collect_root_rows(&binder)
                 .map_err(|error| InjectedProfileError::CanonicalProjection(error.to_string()))?
                 .into_iter()
                 .map(|row| (row.name, row.value, row.ty, row.namespace))
                 .collect::<Vec<_>>();
+            #[cfg(any(test, feature = "test-utils"))]
+            if super::complete_source::complete_combined_replay_oracle_is_active() {
+                let populated_root_names = replay_index
+                    .root_slots
+                    .iter()
+                    .filter(|root| {
+                        root.value.is_some() || root.ty.is_some() || root.namespace.is_some()
+                    })
+                    .map(|root| root.name.as_str())
+                    .collect::<BTreeSet<_>>();
+                replay_roots.retain(|root| populated_root_names.contains(root.0.as_str()));
+            }
             let replay_index = admit_generated_collision_replay_index(
                 replay_index,
                 ReplayIndexAdmissionLimits {
@@ -978,6 +1217,10 @@ pub(super) fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRo
         user_results,
         #[cfg(any(test, feature = "test-utils"))]
         ordered_user_records: ordered_user_record_evidence,
+        #[cfg(any(test, feature = "test-utils"))]
+        ordered_user_event_records: ordered_user_event_record_evidence,
+        #[cfg(any(test, feature = "test-utils"))]
+        user_result_source_ordinals: user_file_ordinals,
         #[cfg(any(test, feature = "test-utils"))]
         pass_source_units,
         #[cfg(any(test, feature = "test-utils"))]

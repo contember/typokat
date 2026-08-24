@@ -137,6 +137,9 @@ mod library_declaration_product_integration_spec;
 mod project_local_declaration_universe_spec;
 
 #[cfg(test)]
+mod project_local_semantic_universe_spec;
+
+#[cfg(test)]
 mod type_group_ordering_spec;
 
 #[cfg(test)]

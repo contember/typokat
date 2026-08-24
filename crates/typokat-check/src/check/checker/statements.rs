@@ -151,6 +151,8 @@ struct NamespaceAliasCandidateCollector<'a> {
     binder: &'a crate::binder::Binder,
     module: ScopeId,
     candidates: Vec<(ValueStorageId, ScopeId, String)>,
+    #[cfg(any(test, feature = "test-utils"))]
+    oracle_owner_sites: Vec<(ValueStorageId, crate::binder::declaration::DeclId, u32)>,
 }
 
 struct LaterObjectBindingReferenceFinder<'a> {
@@ -209,6 +211,12 @@ impl<'ast> Visit<'ast> for NamespaceAliasCandidateCollector<'_> {
                 };
                 self.candidates
                     .push((alias_storage, scope, source.name.to_string()));
+                #[cfg(any(test, feature = "test-utils"))]
+                self.oracle_owner_sites.push((
+                    alias_storage,
+                    alias_declaration.id,
+                    declarator.span.start,
+                ));
             }
         }
         walk::walk_variable_declaration(self, declaration);
@@ -311,21 +319,66 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         modules: &[(ScopeId, &'ast [Statement<'ast>])],
     ) {
         let mut candidates = Vec::new();
+        #[cfg(any(test, feature = "test-utils"))]
+        let mut oracle_owner_sites = Vec::new();
         for (module, statements) in modules {
             let mut collector = NamespaceAliasCandidateCollector {
                 binder: self.binder,
                 module: *module,
                 candidates: Vec::new(),
+                #[cfg(any(test, feature = "test-utils"))]
+                oracle_owner_sites: Vec::new(),
             };
             for statement in *statements {
                 collector.visit_statement(statement);
             }
             candidates.extend(collector.candidates);
+            #[cfg(any(test, feature = "test-utils"))]
+            oracle_owner_sites.extend(collector.oracle_owner_sites);
         }
+
+        #[cfg(any(test, feature = "test-utils"))]
+        let oracle_owners = if super::library_compiler::complete_combined_replay_oracle_is_active()
+        {
+            let mut owners = FxHashMap::default();
+            for (alias, declaration, source_start) in oracle_owner_sites {
+                let source = self
+                    .lexical_events
+                    .declaration_source(declaration)
+                    .expect("namespace alias candidate has a reserved declaration source");
+                let owner = self
+                    .lexical_events
+                    .owner_at(
+                        super::lexical_events::source_ordinal(source.unit),
+                        source_start,
+                        LexicalOwnerPhase::Immediate,
+                    )
+                    .expect("namespace alias candidate has a preallocated lexical owner")
+                    .ticket;
+                assert!(
+                    owners.insert(alias, owner).is_none(),
+                    "namespace alias oracle owner mapping must be bijective"
+                );
+            }
+            owners
+        } else {
+            FxHashMap::default()
+        };
 
         let mut remaining = candidates
             .into_iter()
             .filter_map(|(alias, scope, source)| {
+                #[cfg(any(test, feature = "test-utils"))]
+                let _oracle_scope = oracle_owners.get(&alias).map(|ticket| {
+                    let trace = self
+                        .replay_trace
+                        .as_ref()
+                        .expect("namespace alias oracle requires an active replay trace");
+                    let owner = trace
+                        .statement_owner((self.pending_effect_key)(*ticket))
+                        .expect("namespace alias oracle ticket must have an exact statement owner");
+                    trace.scope(owner)
+                });
                 self.resolve_value_replay(scope, &source)
                     .and_then(|symbol| self.binder.symbols.get(symbol))
                     .and_then(|symbol| symbol.value)
@@ -336,6 +389,17 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             let mut next = Vec::new();
             let mut progressed = false;
             for (alias, source) in remaining {
+                #[cfg(any(test, feature = "test-utils"))]
+                let _oracle_scope = oracle_owners.get(&alias).map(|ticket| {
+                    let trace = self
+                        .replay_trace
+                        .as_ref()
+                        .expect("namespace alias oracle requires an active replay trace");
+                    let owner = trace
+                        .statement_owner((self.pending_effect_key)(*ticket))
+                        .expect("namespace alias oracle ticket must have an exact statement owner");
+                    trace.scope(owner)
+                });
                 let root = self
                     .binder
                     .standalone_namespace_for_storage(source)
@@ -2222,6 +2286,28 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 let TSTypeName::IdentifierReference(identifier) = &reference.type_name else {
                     continue;
                 };
+                #[cfg(any(test, feature = "test-utils"))]
+                let _oracle_scope =
+                    if super::library_compiler::complete_combined_replay_oracle_is_active() {
+                        let owner = self
+                            .lexical_events
+                            .owner_at(
+                                super::lexical_events::source_ordinal(self.current_source),
+                                declarator.span.start,
+                                LexicalOwnerPhase::Immediate,
+                            )
+                            .expect("combined replay oracle declarator owner must be preallocated")
+                            .ticket;
+                        let trace = self.replay_trace.as_ref().expect(
+                            "combined replay oracle annotation requires an active replay trace",
+                        );
+                        let statement_owner = trace
+                        .statement_owner((self.pending_effect_key)(owner))
+                        .expect("combined replay oracle annotation ticket must have an exact statement owner");
+                        Some(trace.scope(statement_owner))
+                    } else {
+                        None
+                    };
                 let group = if self.capture_compact_replay_dependencies {
                     self.compact_type_decl_id_replay(scope, identifier.name.as_str())
                 } else {

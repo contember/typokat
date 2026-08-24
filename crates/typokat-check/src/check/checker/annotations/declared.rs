@@ -118,6 +118,21 @@ impl PlannedRecipe {
 }
 
 impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
+    #[cfg(any(test, feature = "test-utils"))]
+    fn record_declared_array_dependency_for_oracle(&self) {
+        if !self.capture_compact_replay_dependencies
+            || !super::super::library_compiler::complete_combined_replay_oracle_is_active()
+        {
+            return;
+        }
+        if let Some(group) = self
+            .native_array_groups()
+            .group_for_alias(NativeArrayAlias::Array)
+        {
+            self.record_replay_demand(super::super::replay_index::ReplayOwner::TypeGroup(group));
+        }
+    }
+
     pub(in crate::check::checker) fn try_plan_declared_interface_property_annotation<
         'node,
         'syntax,
@@ -458,6 +473,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 selected_binders,
             ),
             TSType::TSArrayType(array) => {
+                #[cfg(any(test, feature = "test-utils"))]
+                self.record_declared_array_dependency_for_oracle();
                 let element = self.plan_declared_recipe(
                     scope,
                     &array.element_type,
@@ -468,6 +485,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 Some(PlannedRecipe::array(element))
             }
             TSType::TSTupleType(tuple) => {
+                #[cfg(any(test, feature = "test-utils"))]
+                self.record_declared_array_dependency_for_oracle();
                 let mut elements = Vec::with_capacity(tuple.element_types.len());
                 for element in &tuple.element_types {
                     elements.push(self.plan_declared_tuple_element(

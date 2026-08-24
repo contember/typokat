@@ -1,6 +1,8 @@
 //! Stable full-library identities used by native-syntax member projection.
 
 use super::context::{Pass, TypeDecl};
+#[cfg(any(test, feature = "test-utils"))]
+use super::replay_index::ReplayOwner;
 use super::type_groups::{
     PublishedTypeEnvironment, PublishedTypeGroupSurface, PublishedTypeGroupTerminal,
 };
@@ -108,7 +110,10 @@ impl NativeArrayGroups {
         None
     }
 
-    fn group_for_alias(self, alias: NativeArrayAlias) -> Option<TypeGroupId> {
+    pub(in crate::check::checker) fn group_for_alias(
+        self,
+        alias: NativeArrayAlias,
+    ) -> Option<TypeGroupId> {
         match alias {
             NativeArrayAlias::Array => self.array,
             NativeArrayAlias::ReadonlyArray => self.readonly_array,
@@ -574,6 +579,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             );
             return LibraryMemberProjection::Unavailable;
         };
+        #[cfg(any(test, feature = "test-utils"))]
+        if super::library_compiler::complete_combined_replay_oracle_is_active() {
+            self.record_replay_demand(ReplayOwner::TypeGroup(identity.group));
+        }
         if (matches!(self.current_source, crate::source::SourceUnit::User { .. })
             || self.combined_user_source)
             && self
