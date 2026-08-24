@@ -3497,7 +3497,153 @@ mod tests {
         }
     }
 
+    #[test]
+    #[ignore = "RED until the WU2 intrinsic/cooked product contract is implemented"]
+    fn template_recipe_authenticates_cooked_segments_not_raw_escape_spelling() {
+        let escaped_source = r#"type Escaped<T> = `start\n${T}\u0041`;"#;
+        let braced_source = r#"type Escaped<T> = `start\n${T}\u{41}`;"#;
+        let different_source = r#"type Escaped<T> = `start\n${T}\u{42}`;"#;
+        assert_eq!(escaped_source.len(), braced_source.len());
+        assert_eq!(braced_source.len(), different_source.len());
+        let escaped = project_test_source("template-cooked.d.ts", escaped_source);
+        let braced = project_test_source("template-cooked.d.ts", braced_source);
+        let different = project_test_source("template-cooked.d.ts", different_source);
+        escaped.validate().expect("escaped product validates");
+        braced.validate().expect("braced product validates");
+        different.validate().expect("different product validates");
+
+        let template_text = |product: &product::LibraryDeclarationProduct| {
+            let texts = product
+                .types()
+                .iter()
+                .find_map(|recipe| match &recipe.node {
+                    product::TypeRecipeNode::Template { texts, holes: _ } => Some(texts),
+                    _ => None,
+                })
+                .expect("template type recipe");
+            texts
+                .iter()
+                .map(|key| product.strings()[key.index()].clone())
+                .collect::<Vec<_>>()
+        };
+        let cooked = ["start\n".to_owned(), "A".to_owned()];
+        assert_ne!(cooked, [r"start\n".to_owned(), r"\u0041".to_owned()]);
+        assert_eq!(template_text(&escaped), cooked);
+        assert_eq!(template_text(&braced), cooked);
+        assert_eq!(escaped.types(), braced.types());
+
+        let canonical = escaped.canonical_audit_render();
+        assert_eq!(canonical, braced.canonical_audit_render());
+        assert_eq!(
+            escaped.audit_receipt().canonical_digest,
+            product::sha256_hex(canonical.as_bytes())
+        );
+        assert_eq!(
+            escaped.audit_receipt().canonical_digest,
+            braced.audit_receipt().canonical_digest
+        );
+        assert_ne!(
+            escaped.audit_receipt().canonical_digest,
+            different.audit_receipt().canonical_digest
+        );
+    }
+
+    #[test]
+    fn ordinary_alias_names_cannot_certify_intrinsic_markers() {
+        const PACKAGED_PROFILE: &str =
+            "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
+        for (control, name, ordinal, byte_len, trusted_sha256, source_body) in [
+            (
+                "ordinary aliases",
+                "lib.es5.d.ts",
+                0usize,
+                218_972usize,
+                "bcd24271a113971ba9eb71ff8cb01bc6b0f872a85c23fdbe5d93065b375933cd",
+                r#"
+                    type Uppercase<S extends string> = string;
+                    type Lowercase<S extends string> = string;
+                    type Capitalize<S extends string> = string;
+                    type Uncapitalize<S extends string> = string;
+                    type NoInfer<T> = T;
+                "#,
+            ),
+            (
+                "intrinsic aliases",
+                "lib.es5.d.ts",
+                0usize,
+                218_972usize,
+                "bcd24271a113971ba9eb71ff8cb01bc6b0f872a85c23fdbe5d93065b375933cd",
+                r#"
+                    type Uppercase<S extends string> = intrinsic;
+                    type Lowercase<S extends string> = intrinsic;
+                    type Capitalize<S extends string> = intrinsic;
+                    type Uncapitalize<S extends string> = intrinsic;
+                    type NoInfer<T> = intrinsic;
+                    type UntrustedIntrinsic<T> = intrinsic;
+                "#,
+            ),
+            (
+                "ordinary alias",
+                "lib.es2015.iterable.d.ts",
+                20usize,
+                18_185usize,
+                "ebd9f816d4002697cb2864bea1f0b70a103124e18a8cd9645eeccc09bdf80ab4",
+                "type BuiltinIteratorReturn = string;",
+            ),
+            (
+                "intrinsic alias",
+                "lib.es2015.iterable.d.ts",
+                20usize,
+                18_185usize,
+                "ebd9f816d4002697cb2864bea1f0b70a103124e18a8cd9645eeccc09bdf80ab4",
+                "type BuiltinIteratorReturn = intrinsic; type UntrustedIntrinsic = intrinsic;",
+            ),
+        ] {
+            let source = padded_source(source_body, byte_len);
+            for claimed_sha256 in ["wrong-source-sha256", trusted_sha256] {
+                let product = project_test_source_with_identity(
+                    name,
+                    &source,
+                    PACKAGED_PROFILE,
+                    claimed_sha256,
+                    ordinal,
+                );
+                product.validate().expect("control product validates");
+                let source_row = &product.sources()[0];
+                assert_eq!(source_row.ordinal, u32::try_from(ordinal).expect("ordinal"));
+                assert_eq!(
+                    source_row.byte_len,
+                    u32::try_from(byte_len).expect("length")
+                );
+                assert_eq!(product.strings()[source_row.sha256.index()], claimed_sha256);
+                assert!(
+                    product.intrinsic_marker_rows().is_empty(),
+                    "{control}:{name}:{claimed_sha256}"
+                );
+            }
+        }
+    }
+
+    fn padded_source(body: &str, byte_len: usize) -> String {
+        let padding = byte_len
+            .checked_sub(body.len().saturating_add(5))
+            .expect("fake source fits official byte length");
+        let source = format!("{body}\n/*{}*/", " ".repeat(padding));
+        assert_eq!(source.len(), byte_len);
+        source
+    }
+
     fn project_test_source(name: &str, source: &str) -> product::LibraryDeclarationProduct {
+        project_test_source_with_identity(name, source, "test-control", "00", 0)
+    }
+
+    fn project_test_source_with_identity(
+        name: &str,
+        source: &str,
+        profile_identity: &str,
+        source_sha256: &str,
+        ordinal: usize,
+    ) -> product::LibraryDeclarationProduct {
         let allocator = Allocator::default();
         let parsed = Parser::new(&allocator, source, SourceType::d_ts()).parse();
         assert!(!parsed.panicked);
@@ -3506,9 +3652,10 @@ mod tests {
         let prelude_allocator = Allocator::default();
         let prelude = Parser::new(&prelude_allocator, "", SourceType::d_ts()).parse();
         let mut builder = ProjectBinderBuilder::new_empty_library_prelude(&prelude.program);
+        let ordinal_u32 = u32::try_from(ordinal).expect("source ordinal");
         let unit = CompilationUnit {
-            source: SourceUnitKey(1),
-            origin: CompilationOrigin::Library(LibraryFileOrdinal::new(0)),
+            source: SourceUnitKey(ordinal_u32.checked_add(1).expect("source key")),
+            origin: CompilationOrigin::Library(LibraryFileOrdinal::new(ordinal)),
             binding: ModuleBindingContext::for_program(&parsed.program, source_file_kind(name)),
         };
         let modules = builder
@@ -3520,12 +3667,12 @@ mod tests {
             .expect("bind exact source");
         let binder = builder.finish(modules[0]);
         project_library_declaration_product(
-            "test-control",
+            profile_identity,
             &binder,
             &[LibraryProductSource {
-                ordinal: 0,
+                ordinal: ordinal_u32,
                 name,
-                source_sha256: "00",
+                source_sha256,
                 byte_len: u32::try_from(source.len()).expect("source length"),
                 external_module: false,
                 module: modules[0],

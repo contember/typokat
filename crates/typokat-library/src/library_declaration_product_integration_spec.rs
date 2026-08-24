@@ -14,7 +14,8 @@ use oxc_span::{GetSpan, SourceType};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use typokat_library_product::{
-    ContainerKind, DependencyKind, ProductFieldClass, ProductFieldVisitor, TypeRecipeNode,
+    ContainerKind, DependencyKind, IntrinsicMarker, IntrinsicMarkerRecipe,
+    LibraryDeclarationProduct, ProductFieldClass, ProductFieldVisitor, TypeRecipeNode,
     TypeReferenceResolution,
 };
 
@@ -278,6 +279,81 @@ fn product_receipt_matches_authenticated_edge_and_attachment_oracles() {
         );
         assert_eq!(unresolved_infer_names, 0, "{helper} leaked infer P/R");
     }
+}
+
+#[test]
+#[ignore = "RED until the WU2 intrinsic/cooked product contract is implemented"]
+fn trusted_intrinsic_aliases_have_exact_typed_marker_census() {
+    let product = build_packaged_declaration_product().expect("packaged declaration product");
+    product.validate().expect("closed product validates");
+    let expected = expected_trusted_intrinsic_markers(&product);
+    assert_eq!(product.intrinsic_marker_rows(), expected);
+}
+
+#[test]
+#[ignore = "RED until the WU2 intrinsic/cooked product contract is implemented"]
+fn trusted_intrinsic_alias_markers_are_canonically_authenticated() {
+    let product = build_packaged_declaration_product().expect("packaged declaration product");
+    product.validate().expect("closed product validates");
+    let expected = expected_trusted_intrinsic_markers(&product);
+    let canonical = product.canonical_audit_render();
+    let actual_rows = canonical
+        .lines()
+        .filter(|row| row.starts_with("intrinsic_marker|"))
+        .collect::<Vec<_>>();
+    let expected_rows = expected
+        .iter()
+        .enumerate()
+        .map(|(index, marker)| format!("intrinsic_marker|{index}|{marker:?}"))
+        .collect::<Vec<_>>();
+    assert_eq!(actual_rows, expected_rows);
+    assert_eq!(
+        product.audit_receipt().canonical_digest,
+        typokat_library_product::sha256_hex(canonical.as_bytes())
+    );
+}
+
+fn expected_trusted_intrinsic_markers(
+    product: &LibraryDeclarationProduct,
+) -> Vec<IntrinsicMarkerRecipe> {
+    [
+        ("lib.es5.d.ts", "Uppercase", IntrinsicMarker::Uppercase),
+        ("lib.es5.d.ts", "Lowercase", IntrinsicMarker::Lowercase),
+        ("lib.es5.d.ts", "Capitalize", IntrinsicMarker::Capitalize),
+        (
+            "lib.es5.d.ts",
+            "Uncapitalize",
+            IntrinsicMarker::Uncapitalize,
+        ),
+        ("lib.es5.d.ts", "NoInfer", IntrinsicMarker::NoInfer),
+        (
+            "lib.es2015.iterable.d.ts",
+            "BuiltinIteratorReturn",
+            IntrinsicMarker::BuiltinIteratorReturn,
+        ),
+    ]
+    .into_iter()
+    .map(|(source_name, alias, marker)| {
+        let source = product
+            .sources()
+            .iter()
+            .position(|source| product.strings()[source.name.index()] == source_name)
+            .unwrap_or_else(|| panic!("missing {source_name}"));
+        let declaration = product
+            .declarations()
+            .iter()
+            .position(|declaration| {
+                declaration.site.source.index() == source
+                    && product.strings()[declaration.name.index()] == alias
+            })
+            .and_then(|index| product.declaration_key_at(index))
+            .unwrap_or_else(|| panic!("missing trusted alias {source_name}:{alias}"));
+        IntrinsicMarkerRecipe {
+            declaration,
+            marker,
+        }
+    })
+    .collect()
 }
 
 #[test]

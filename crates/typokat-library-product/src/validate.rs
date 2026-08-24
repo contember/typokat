@@ -59,6 +59,20 @@ pub enum ProductValidationError {
         table: &'static str,
         row: usize,
     },
+    DuplicateIntrinsicMarkerDeclaration {
+        row: usize,
+        previous_row: usize,
+    },
+    DuplicateIntrinsicMarkerIdentity {
+        row: usize,
+        previous_row: usize,
+    },
+    InvalidIntrinsicMarker {
+        row: usize,
+    },
+    IntrinsicMarkerAliasMismatch {
+        row: usize,
+    },
     NonCanonicalSourceOrder {
         row: usize,
     },
@@ -602,6 +616,48 @@ impl LibraryDeclarationProduct {
                 });
             }
         }
+        for (row, marker) in self.intrinsic_markers.iter().enumerate() {
+            let Some(declaration) = self.declarations.get(marker.declaration.index()) else {
+                return Err(ProductValidationError::InvalidDeclaration {
+                    table: "intrinsic_markers",
+                    row,
+                });
+            };
+            let DeclarationPayload::TypeAlias { value, .. } = declaration.payload else {
+                return Err(ProductValidationError::InvalidIntrinsicMarker { row });
+            };
+            if !matches!(
+                self.types.get(value.index()).map(|recipe| &recipe.node),
+                Some(TypeRecipeNode::Keyword(
+                    crate::schema::KeywordKind::Intrinsic
+                ))
+            ) {
+                return Err(ProductValidationError::InvalidIntrinsicMarker { row });
+            }
+            if self.strings[declaration.name.index()] != intrinsic_marker_alias(marker.marker) {
+                return Err(ProductValidationError::IntrinsicMarkerAliasMismatch { row });
+            }
+            if let Some(previous_row) = self.intrinsic_markers[..row]
+                .iter()
+                .position(|existing| existing.declaration == marker.declaration)
+            {
+                return Err(
+                    ProductValidationError::DuplicateIntrinsicMarkerDeclaration {
+                        row,
+                        previous_row,
+                    },
+                );
+            }
+            if let Some(previous_row) = self.intrinsic_markers[..row]
+                .iter()
+                .position(|existing| existing.marker == marker.marker)
+            {
+                return Err(ProductValidationError::DuplicateIntrinsicMarkerIdentity {
+                    row,
+                    previous_row,
+                });
+            }
+        }
         for (group_index, group) in self.groups.iter().enumerate() {
             for declaration in &group.fragments {
                 let spaces = self.declarations[declaration.index()].spaces;
@@ -842,6 +898,17 @@ impl LibraryDeclarationProduct {
             }
         }
         Ok(())
+    }
+}
+
+fn intrinsic_marker_alias(marker: crate::schema::IntrinsicMarker) -> &'static str {
+    match marker {
+        crate::schema::IntrinsicMarker::Uppercase => "Uppercase",
+        crate::schema::IntrinsicMarker::Lowercase => "Lowercase",
+        crate::schema::IntrinsicMarker::Capitalize => "Capitalize",
+        crate::schema::IntrinsicMarker::Uncapitalize => "Uncapitalize",
+        crate::schema::IntrinsicMarker::NoInfer => "NoInfer",
+        crate::schema::IntrinsicMarker::BuiltinIteratorReturn => "BuiltinIteratorReturn",
     }
 }
 

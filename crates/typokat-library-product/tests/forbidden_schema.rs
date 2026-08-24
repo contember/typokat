@@ -1,28 +1,31 @@
 use typokat_library_product::{
     ContainerKind, ContainerRecipe, DeclarationFlags, DeclarationGroupRecipe,
     DeclarationLexicalScope, DeclarationPayload, DeclarationRecipe, DeclarationSlots,
-    DependencyKind, DependencyLinkRecipe, DependencyRecipe, DependencyTarget, LexicalStepKind,
-    LexicalStepRecipe, MemberKind, MemberRecipe, ProductAssembly, ProductBuildError,
-    ProductFieldClass, ProductFieldVisitor, ProductValidationError, RegionKind, RegionRecipe,
-    SourceClassification, SourceRecipe, SourceSite, TypeParameterRecipe, TypeRecipe,
-    TypeRecipeNode, TypeReferenceResolution, ValueAttachmentRecipe, Variance,
+    DependencyKind, DependencyLinkRecipe, DependencyRecipe, DependencyTarget, IntrinsicMarker,
+    IntrinsicMarkerRecipe, KeywordKind, LexicalStepKind, LexicalStepRecipe, MemberKind,
+    MemberRecipe, ProductAssembly, ProductBuildError, ProductFieldClass, ProductFieldVisitor,
+    ProductValidationError, RegionKind, RegionRecipe, SourceClassification, SourceRecipe,
+    SourceSite, TypeParameterRecipe, TypeRecipe, TypeRecipeNode, TypeReferenceResolution,
+    ValueAttachmentRecipe, Variance,
 };
 
 struct FieldCounter {
     fields: usize,
     owned_text: usize,
+    intrinsic_marker_fields: usize,
 }
 
 impl ProductFieldVisitor for FieldCounter {
     fn visit_field(
         &mut self,
         class: ProductFieldClass,
-        _table: &'static str,
+        table: &'static str,
         _row: usize,
         _field: &'static str,
     ) {
         self.fields += 1;
         self.owned_text += usize::from(class == ProductFieldClass::OwnedText);
+        self.intrinsic_marker_fields += usize::from(table == "intrinsic_markers");
     }
 }
 
@@ -67,6 +70,7 @@ fn ownership_walker_has_a_typed_consumer() {
     let mut counter = FieldCounter {
         fields: 0,
         owned_text: 0,
+        intrinsic_marker_fields: 0,
     };
     product.walk_fields(&mut counter);
     assert!(counter.fields > 0);
@@ -98,6 +102,178 @@ fn validation_rejects_a_missing_owned_region() {
         })
         .expect("source");
     assert!(assembly.finish("profile").is_err());
+}
+
+#[test]
+fn validation_rejects_duplicate_intrinsic_marker_declarations() {
+    let (mut assembly, marker) = intrinsic_marker_shell();
+    assembly.add_intrinsic_marker(marker);
+
+    assert_eq!(
+        assembly.finish("profile"),
+        Err(ProductBuildError::Validation(
+            ProductValidationError::DuplicateIntrinsicMarkerDeclaration {
+                row: 1,
+                previous_row: 0
+            }
+        ))
+    );
+}
+
+#[test]
+fn validation_rejects_duplicate_intrinsic_marker_identities() {
+    let (mut assembly, source, root, _name, _container) = valid_shell();
+    let first = add_intrinsic_alias_marker(
+        &mut assembly,
+        source,
+        root,
+        "Uppercase",
+        KeywordKind::Intrinsic,
+        IntrinsicMarker::Uppercase,
+    );
+    assembly.add_intrinsic_marker(first);
+    let duplicate = add_intrinsic_alias_marker(
+        &mut assembly,
+        source,
+        root,
+        "Uppercase",
+        KeywordKind::Intrinsic,
+        IntrinsicMarker::Uppercase,
+    );
+    assembly.add_intrinsic_marker(duplicate);
+
+    assert_eq!(
+        assembly.finish("profile"),
+        Err(ProductBuildError::Validation(
+            ProductValidationError::DuplicateIntrinsicMarkerIdentity {
+                row: 1,
+                previous_row: 0
+            }
+        ))
+    );
+}
+
+#[test]
+fn intrinsic_marker_table_is_typed_walked_and_canonical() {
+    let (assembly, marker) = intrinsic_marker_shell();
+    let product = assembly.finish("profile").expect("valid marker product");
+    assert_eq!(product.intrinsic_marker_rows(), &[marker]);
+    assert!(product
+        .canonical_audit_render()
+        .contains(&format!("intrinsic_marker|0|{marker:?}")));
+
+    let mut counter = FieldCounter {
+        fields: 0,
+        owned_text: 0,
+        intrinsic_marker_fields: 0,
+    };
+    product.walk_fields(&mut counter);
+    assert_eq!(counter.intrinsic_marker_fields, 2);
+}
+
+#[test]
+fn validation_rejects_marker_on_a_non_intrinsic_alias() {
+    let (assembly, _marker) =
+        intrinsic_marker_shell_with("Uppercase", KeywordKind::String, IntrinsicMarker::Uppercase);
+    assert_eq!(
+        assembly.finish("profile"),
+        Err(ProductBuildError::Validation(
+            ProductValidationError::InvalidIntrinsicMarker { row: 0 }
+        ))
+    );
+}
+
+#[test]
+fn validation_rejects_marker_on_the_wrong_alias_name() {
+    let (assembly, _marker) = intrinsic_marker_shell_with(
+        "Lowercase",
+        KeywordKind::Intrinsic,
+        IntrinsicMarker::Uppercase,
+    );
+    assert_eq!(
+        assembly.finish("profile"),
+        Err(ProductBuildError::Validation(
+            ProductValidationError::IntrinsicMarkerAliasMismatch { row: 0 }
+        ))
+    );
+}
+
+fn intrinsic_marker_shell() -> (ProductAssembly, IntrinsicMarkerRecipe) {
+    intrinsic_marker_shell_with(
+        "Uppercase",
+        KeywordKind::Intrinsic,
+        IntrinsicMarker::Uppercase,
+    )
+}
+
+fn intrinsic_marker_shell_with(
+    alias: &str,
+    keyword: KeywordKind,
+    intrinsic_marker: IntrinsicMarker,
+) -> (ProductAssembly, IntrinsicMarkerRecipe) {
+    let (mut assembly, source, root, _name, _container) = valid_shell();
+    let marker = add_intrinsic_alias_marker(
+        &mut assembly,
+        source,
+        root,
+        alias,
+        keyword,
+        intrinsic_marker,
+    );
+    assembly.add_intrinsic_marker(marker);
+    (assembly, marker)
+}
+
+fn add_intrinsic_alias_marker(
+    assembly: &mut ProductAssembly,
+    source: typokat_library_product::SourceKey,
+    root: typokat_library_product::RegionKey,
+    alias: &str,
+    keyword: KeywordKind,
+    intrinsic_marker: IntrinsicMarker,
+) -> IntrinsicMarkerRecipe {
+    let name = assembly.intern(alias).expect("alias name");
+    let value = assembly
+        .add_type_recipe(TypeRecipe {
+            site: SourceSite {
+                source,
+                start: 3,
+                end: 4,
+            },
+            node: TypeRecipeNode::Keyword(keyword),
+        })
+        .expect("intrinsic type");
+    let declaration = assembly
+        .add_declaration(DeclarationRecipe {
+            site: SourceSite {
+                source,
+                start: 1,
+                end: 5,
+            },
+            binding_site: SourceSite {
+                source,
+                start: 1,
+                end: 2,
+            },
+            region: root,
+            lexical_scope: DeclarationLexicalScope::Region(root),
+            name,
+            spaces: DeclarationSlots {
+                value: false,
+                r#type: true,
+                namespace: false,
+            },
+            flags: DeclarationFlags::default(),
+            payload: DeclarationPayload::TypeAlias {
+                type_parameters: Box::new([]),
+                value,
+            },
+        })
+        .expect("type alias");
+    IntrinsicMarkerRecipe {
+        declaration,
+        marker: intrinsic_marker,
+    }
 }
 
 fn valid_shell() -> (

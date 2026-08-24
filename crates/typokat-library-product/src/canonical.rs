@@ -54,6 +54,7 @@ impl LibraryDeclarationProduct {
         render_rows(&mut output, "group", &self.groups);
         render_rows(&mut output, "namespace", &self.namespaces);
         render_rows(&mut output, "value", &self.values);
+        render_rows(&mut output, "intrinsic_marker", &self.intrinsic_markers);
         render_rows(&mut output, "type_parameter", &self.type_parameters);
         render_rows(&mut output, "type", &self.types);
         render_rows(&mut output, "signature", &self.signatures);

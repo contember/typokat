@@ -26,6 +26,7 @@ pub struct ProductAssembly {
     groups: Vec<DeclarationGroupRecipe>,
     namespaces: Vec<NamespaceAttachmentRecipe>,
     values: Vec<ValueAttachmentRecipe>,
+    intrinsic_markers: Vec<IntrinsicMarkerRecipe>,
     type_parameters: Vec<TypeParameterRecipe>,
     types: Vec<TypeRecipe>,
     signatures: Vec<SignatureRecipe>,
@@ -175,6 +176,9 @@ impl ProductAssembly {
     pub fn add_lexical_step(&mut self, value: LexicalStepRecipe) {
         self.lexical_steps.push(value);
     }
+    pub fn add_intrinsic_marker(&mut self, value: IntrinsicMarkerRecipe) {
+        self.intrinsic_markers.push(value);
+    }
 
     pub fn finish(
         self,
@@ -204,6 +208,7 @@ impl ProductAssembly {
             groups: self.groups.into_boxed_slice(),
             namespaces: self.namespaces.into_boxed_slice(),
             values: self.values.into_boxed_slice(),
+            intrinsic_markers: self.intrinsic_markers.into_boxed_slice(),
             type_parameters: self.type_parameters.into_boxed_slice(),
             types: self.types.into_boxed_slice(),
             signatures: self.signatures.into_boxed_slice(),

@@ -31,6 +31,7 @@ impl LibraryDeclarationProduct {
             groups,
             namespaces,
             values,
+            intrinsic_markers,
             type_parameters,
             types,
             signatures,
@@ -127,6 +128,27 @@ impl LibraryDeclarationProduct {
                 "values",
                 row,
                 "declaration",
+            );
+        }
+        for (row, marker) in intrinsic_markers.iter().enumerate() {
+            let IntrinsicMarkerRecipe {
+                declaration: _declaration,
+                marker,
+            } = marker;
+            field(
+                visitor,
+                ProductFieldClass::ProductKey,
+                "intrinsic_markers",
+                row,
+                "declaration",
+            );
+            walk_intrinsic_marker(*marker);
+            field(
+                visitor,
+                ProductFieldClass::Scalar,
+                "intrinsic_markers",
+                row,
+                "marker",
             );
         }
         for (row, parameter) in type_parameters.iter().enumerate() {
@@ -1123,6 +1145,17 @@ fn walk_keyword(value: KeywordKind) {
         | KeywordKind::Object
         | KeywordKind::Intrinsic
         | KeywordKind::This => {}
+    }
+}
+
+fn walk_intrinsic_marker(value: IntrinsicMarker) {
+    match value {
+        IntrinsicMarker::Uppercase
+        | IntrinsicMarker::Lowercase
+        | IntrinsicMarker::Capitalize
+        | IntrinsicMarker::Uncapitalize
+        | IntrinsicMarker::NoInfer
+        | IntrinsicMarker::BuiltinIteratorReturn => {}
     }
 }
 

@@ -188,6 +188,22 @@ pub struct ValueAttachmentRecipe {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IntrinsicMarker {
+    Uppercase,
+    Lowercase,
+    Capitalize,
+    Uncapitalize,
+    NoInfer,
+    BuiltinIteratorReturn,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IntrinsicMarkerRecipe {
+    pub declaration: DeclarationKey,
+    pub marker: IntrinsicMarker,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Variance {
     Invariant,
     In,
@@ -477,6 +493,7 @@ pub struct LibraryDeclarationProduct {
     pub(crate) groups: Box<[DeclarationGroupRecipe]>,
     pub(crate) namespaces: Box<[NamespaceAttachmentRecipe]>,
     pub(crate) values: Box<[ValueAttachmentRecipe]>,
+    pub(crate) intrinsic_markers: Box<[IntrinsicMarkerRecipe]>,
     pub(crate) type_parameters: Box<[TypeParameterRecipe]>,
     pub(crate) types: Box<[TypeRecipe]>,
     pub(crate) signatures: Box<[SignatureRecipe]>,
@@ -578,5 +595,8 @@ impl LibraryDeclarationProduct {
     }
     pub fn value_attachment_rows(&self) -> &[ValueAttachmentRecipe] {
         &self.values
+    }
+    pub fn intrinsic_marker_rows(&self) -> &[IntrinsicMarkerRecipe] {
+        &self.intrinsic_markers
     }
 }
