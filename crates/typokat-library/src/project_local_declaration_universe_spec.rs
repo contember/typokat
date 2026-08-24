@@ -832,6 +832,54 @@ fn oracle_does_not_initialize_the_product_or_the_frozen_semantic_base() {
 }
 
 #[test]
+#[ignore = "WU3 RED: the complete-source oracle still crosses checkpoint continuations"]
+fn complete_source_oracle_uses_one_fresh_project_root() {
+    let projection =
+        complete_source_oracle(&[input("/candidate/one_root_oracle.ts", "export {};\n")])
+            .projection;
+
+    assert_eq!(
+        projection
+            .scopes
+            .iter()
+            .filter(|row| row.contains("kind=CompilationGlobal"))
+            .count(),
+        1,
+        "one fresh project binder has one compilation-global root"
+    );
+    assert_eq!(
+        projection
+            .scopes
+            .iter()
+            .filter(|row| row.contains("kind=ScriptNamespaceRoot"))
+            .count(),
+        1,
+        "one fresh project binder has one script-namespace root"
+    );
+    assert!(projection.scopes.iter().all(|row| {
+        !row.contains("scope:unanchored:CompilationGlobal")
+            && !row.contains("scope:unanchored:ScriptNamespaceRoot")
+    }));
+
+    let source = include_str!("provider.rs");
+    let start = source
+        .find("pub(super) fn complete_source_declaration_oracle_for_test")
+        .expect("oracle entry exists");
+    let body = rust_function_body(source, start);
+    assert!(body.contains("compile_project_declaration_oracle_one_root_for_test"));
+    for forbidden in [
+        "compile_binder_checkpoint",
+        "continue_library_project_binder_clean_for_test",
+        "into_continuation",
+    ] {
+        assert!(
+            !body.contains(forbidden),
+            "one-root oracle crosses a forbidden lifecycle boundary: {forbidden}"
+        );
+    }
+}
+
+#[test]
 #[ignore = "RED until PreparedProject instantiates the product into a fresh project binder"]
 fn project_local_candidate_matches_real_oracle_under_id_perturbation() {
     for inputs in project_cases() {
