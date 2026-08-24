@@ -86,6 +86,7 @@ fn library_product() -> typokat_library_product::LibraryDeclarationProduct {
             manifest: &manifest,
             source_text: source,
         }],
+        &[],
     )
     .expect("project product control")
 }

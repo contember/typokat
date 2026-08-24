@@ -27,6 +27,13 @@ pub struct LibraryProductSource<'manifest, 'ast> {
     pub source_text: &'manifest str,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CertifiedIntrinsicMarkerEvidence {
+    pub source_ordinal: u32,
+    pub binding_start: u32,
+    pub marker: product::IntrinsicMarker,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LibraryProductProjectionError {
     EmptySources,
@@ -71,6 +78,19 @@ pub enum LibraryProductProjectionError {
         start: u32,
         end: u32,
     },
+    InvalidCookedTemplateText {
+        source: u32,
+        start: u32,
+        end: u32,
+    },
+    DuplicateCertifiedIntrinsicMarker {
+        source: u32,
+        binding_start: u32,
+    },
+    MissingCertifiedIntrinsicMarker {
+        source: u32,
+        binding_start: u32,
+    },
     Product(product::ProductBuildError),
     AuthenticatedOracleMismatch {
         table: &'static str,
@@ -93,6 +113,7 @@ pub fn project_library_declaration_product(
     profile_identity: &str,
     binder: &Binder,
     sources: &[LibraryProductSource<'_, '_>],
+    certified_intrinsic_markers: &[CertifiedIntrinsicMarkerEvidence],
 ) -> Result<product::LibraryDeclarationProduct, LibraryProductProjectionError> {
     if sources.is_empty() {
         return Err(LibraryProductProjectionError::EmptySources);
@@ -100,6 +121,23 @@ pub fn project_library_declaration_product(
     for row in 1..sources.len() {
         if sources[row - 1].ordinal >= sources[row].ordinal {
             return Err(LibraryProductProjectionError::NonCanonicalSourceOrder { row });
+        }
+    }
+    let mut certified_intrinsic_markers_by_site = BTreeMap::new();
+    for evidence in certified_intrinsic_markers {
+        if certified_intrinsic_markers_by_site
+            .insert(
+                (evidence.source_ordinal, evidence.binding_start),
+                evidence.marker,
+            )
+            .is_some()
+        {
+            return Err(
+                LibraryProductProjectionError::DuplicateCertifiedIntrinsicMarker {
+                    source: evidence.source_ordinal,
+                    binding_start: evidence.binding_start,
+                },
+            );
         }
     }
     let mut assembly = product::ProductAssembly::new();
@@ -727,6 +765,16 @@ pub fn project_library_declaration_product(
                     },
                     payload,
                 })?;
+            if let Some(marker) = certified_intrinsic_markers_by_site
+                .remove(&(input.ordinal, occurrence.binding_span.start))
+            {
+                context
+                    .assembly
+                    .add_intrinsic_marker(product::IntrinsicMarkerRecipe {
+                        declaration,
+                        marker,
+                    });
+            }
             declaration_keys.insert(bound.id.0, declaration);
             declaration_facts.push(DeclarationFact {
                 key: declaration,
@@ -940,6 +988,16 @@ pub fn project_library_declaration_product(
         .cloned()
         .collect::<Vec<_>>();
     container_oracle.sort();
+    if let Some(((source, binding_start), _)) =
+        certified_intrinsic_markers_by_site.into_iter().next()
+    {
+        return Err(
+            LibraryProductProjectionError::MissingCertifiedIntrinsicMarker {
+                source,
+                binding_start,
+            },
+        );
+    }
     for pending in pending_dependencies {
         let target = match pending.target {
             PendingDependencyTarget::Group(group) => product::DependencyTarget::Group(group),
@@ -2242,7 +2300,19 @@ fn lower_type(
                 let texts = value
                     .quasis
                     .iter()
-                    .map(|item| context.assembly.intern(item.value.raw.as_str()))
+                    .map(|item| {
+                        let cooked = item.value.cooked.as_ref().ok_or(
+                            LibraryProductProjectionError::InvalidCookedTemplateText {
+                                source: context.source_ordinal,
+                                start: item.span.start,
+                                end: item.span.end,
+                            },
+                        )?;
+                        context
+                            .assembly
+                            .intern(cooked.as_str())
+                            .map_err(LibraryProductProjectionError::Product)
+                    })
                     .collect::<Result<Vec<_>, _>>()?;
                 product::TypeRecipeNode::Template {
                     texts: texts.into_boxed_slice(),
@@ -3272,6 +3342,7 @@ mod tests {
                 manifest: &manifest,
                 source_text: source,
             }],
+            &[],
         )
         .expect("project exact source");
         let heritage_targets = product
@@ -3498,7 +3569,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "RED until the WU2 intrinsic/cooked product contract is implemented"]
     fn template_recipe_authenticates_cooked_segments_not_raw_escape_spelling() {
         let escaped_source = r#"type Escaped<T> = `start\n${T}\u0041`;"#;
         let braced_source = r#"type Escaped<T> = `start\n${T}\u{41}`;"#;
@@ -3545,6 +3615,82 @@ mod tests {
         assert_ne!(
             escaped.audit_receipt().canonical_digest,
             different.audit_receipt().canonical_digest
+        );
+    }
+
+    #[test]
+    fn projection_rejects_template_quasi_without_cooked_text() {
+        let error = try_project_test_source_with_identity(
+            "template-invalid.d.ts",
+            r#"type Invalid<T> = `\unicode${T}`;"#,
+            "test-control",
+            "00",
+            0,
+            false,
+            &[],
+        )
+        .expect_err("invalid escape has no cooked text");
+        assert!(
+            matches!(
+                &error,
+                LibraryProductProjectionError::InvalidCookedTemplateText {
+                    source: 0,
+                    start: _,
+                    end: _
+                }
+            ),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn projection_rejects_duplicate_certified_intrinsic_marker_sites() {
+        let evidence = CertifiedIntrinsicMarkerEvidence {
+            source_ordinal: 0,
+            binding_start: 5,
+            marker: product::IntrinsicMarker::Uppercase,
+        };
+        let error = try_project_test_source_with_identity(
+            "duplicate-marker.d.ts",
+            "type Uppercase<S extends string> = intrinsic;",
+            "test-control",
+            "00",
+            0,
+            true,
+            &[evidence, evidence],
+        )
+        .expect_err("duplicate certified site is rejected");
+        assert_eq!(
+            error,
+            LibraryProductProjectionError::DuplicateCertifiedIntrinsicMarker {
+                source: 0,
+                binding_start: 5,
+            }
+        );
+    }
+
+    #[test]
+    fn projection_rejects_missing_certified_intrinsic_marker_sites() {
+        let error = try_project_test_source_with_identity(
+            "missing-marker.d.ts",
+            "type Uppercase<S extends string> = intrinsic;",
+            "test-control",
+            "00",
+            0,
+            true,
+            &[CertifiedIntrinsicMarkerEvidence {
+                source_ordinal: 0,
+                binding_start: 999,
+                marker: product::IntrinsicMarker::Uppercase,
+            }],
+        )
+        .expect_err("missing certified site is rejected");
+        assert_eq!(
+            error,
+            LibraryProductProjectionError::MissingCertifiedIntrinsicMarker {
+                source: 0,
+                binding_start: 999,
+            }
         );
     }
 
@@ -3644,10 +3790,33 @@ mod tests {
         source_sha256: &str,
         ordinal: usize,
     ) -> product::LibraryDeclarationProduct {
+        try_project_test_source_with_identity(
+            name,
+            source,
+            profile_identity,
+            source_sha256,
+            ordinal,
+            true,
+            &[],
+        )
+        .expect("project exact source")
+    }
+
+    fn try_project_test_source_with_identity(
+        name: &str,
+        source: &str,
+        profile_identity: &str,
+        source_sha256: &str,
+        ordinal: usize,
+        require_clean_parse: bool,
+        certified_intrinsic_markers: &[CertifiedIntrinsicMarkerEvidence],
+    ) -> Result<product::LibraryDeclarationProduct, LibraryProductProjectionError> {
         let allocator = Allocator::default();
         let parsed = Parser::new(&allocator, source, SourceType::d_ts()).parse();
         assert!(!parsed.panicked);
-        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        if require_clean_parse {
+            assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        }
         let manifest = SourceDeclarationManifest::build(&parsed.program);
         let prelude_allocator = Allocator::default();
         let prelude = Parser::new(&prelude_allocator, "", SourceType::d_ts()).parse();
@@ -3679,7 +3848,7 @@ mod tests {
                 manifest: &manifest,
                 source_text: source,
             }],
+            certified_intrinsic_markers,
         )
-        .expect("project exact source")
     }
 }

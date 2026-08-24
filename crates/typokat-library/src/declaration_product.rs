@@ -4,7 +4,9 @@ use crate::binder::declaration::SourceDeclarationManifest;
 use crate::binder::namespace::{
     source_file_kind, CompilationUnit, ModuleBindingContext, SourceUnitKey,
 };
-use crate::binder::product::{project_library_declaration_product, LibraryProductSource};
+use crate::binder::product::{
+    project_library_declaration_product, CertifiedIntrinsicMarkerEvidence, LibraryProductSource,
+};
 use crate::source::{CompilationOrigin, LibraryFileOrdinal};
 use oxc_allocator::Allocator;
 use oxc_parser::Parser;
@@ -50,16 +52,59 @@ fn build_declaration_product(
     profile: &ExactLibraryProfile,
 ) -> Result<typokat_library_product::LibraryDeclarationProduct, LibraryDeclarationProductBuildError>
 {
+    let intrinsic_markers = packaged_intrinsic_marker_evidence(profile);
     build_declaration_product_from_sources(
         profile.profile_identity(),
         profile.sources().iter().collect(),
+        &intrinsic_markers,
         false,
     )
+}
+
+fn packaged_intrinsic_marker_evidence(
+    _verified_profile: &ExactLibraryProfile,
+) -> [CertifiedIntrinsicMarkerEvidence; 6] {
+    use typokat_library_product::IntrinsicMarker;
+
+    // These byte sites are trusted only after the packaged profile verifies its source bytes.
+    [
+        CertifiedIntrinsicMarkerEvidence {
+            source_ordinal: 0,
+            binding_start: 75_505,
+            marker: IntrinsicMarker::Uppercase,
+        },
+        CertifiedIntrinsicMarkerEvidence {
+            source_ordinal: 0,
+            binding_start: 75_604,
+            marker: IntrinsicMarker::Lowercase,
+        },
+        CertifiedIntrinsicMarkerEvidence {
+            source_ordinal: 0,
+            binding_start: 75_722,
+            marker: IntrinsicMarker::Capitalize,
+        },
+        CertifiedIntrinsicMarkerEvidence {
+            source_ordinal: 0,
+            binding_start: 75_841,
+            marker: IntrinsicMarker::Uncapitalize,
+        },
+        CertifiedIntrinsicMarkerEvidence {
+            source_ordinal: 0,
+            binding_start: 75_941,
+            marker: IntrinsicMarker::NoInfer,
+        },
+        CertifiedIntrinsicMarkerEvidence {
+            source_ordinal: 20,
+            binding_start: 2_502,
+            marker: IntrinsicMarker::BuiltinIteratorReturn,
+        },
+    ]
 }
 
 fn build_declaration_product_from_sources(
     profile_identity: &str,
     mut sources: Vec<&super::profile::ExactLibrarySource>,
+    certified_intrinsic_markers: &[CertifiedIntrinsicMarkerEvidence],
     perturb_allocations: bool,
 ) -> Result<typokat_library_product::LibraryDeclarationProduct, LibraryDeclarationProductBuildError>
 {
@@ -167,8 +212,13 @@ fn build_declaration_product_from_sources(
             },
         )
         .collect::<Vec<_>>();
-    project_library_declaration_product(profile_identity, &binder, &inputs)
-        .map_err(LibraryDeclarationProductBuildError::Projection)
+    project_library_declaration_product(
+        profile_identity,
+        &binder,
+        &inputs,
+        certified_intrinsic_markers,
+    )
+    .map_err(LibraryDeclarationProductBuildError::Projection)
 }
 
 #[cfg(test)]
@@ -190,5 +240,11 @@ pub(super) fn build_packaged_declaration_product_with_order_for_test(
             sources.swap(index, (index.saturating_mul(37).saturating_add(11)) % len);
         }
     }
-    build_declaration_product_from_sources(profile.profile_identity(), sources, perturb_allocations)
+    let intrinsic_markers = packaged_intrinsic_marker_evidence(&profile);
+    build_declaration_product_from_sources(
+        profile.profile_identity(),
+        sources,
+        &intrinsic_markers,
+        perturb_allocations,
+    )
 }

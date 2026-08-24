@@ -160,10 +160,10 @@ fn product_receipt_matches_authenticated_edge_and_attachment_oracles() {
     assert_eq!(receipt.resolved_group_dependency_count, 14_235);
     assert_eq!(receipt.type_parameter_dependency_count, 2_207);
     assert_eq!(receipt.unresolved_dependency_count, 3);
-    assert_eq!(receipt.canonical_bytes, 30_688_072);
+    assert_eq!(receipt.canonical_bytes, 30_688_670);
     assert_eq!(
         receipt.canonical_digest,
-        "a3e543680440ed88755d4d43f5a5a02c071052a061705e378d29d03a313d6c82"
+        "5469ee064cef88107b00837ee57c1d32e4efb15b2e8780819209e78e3c168e43"
     );
     assert_eq!(
         receipt.dependency_edge_digest,
@@ -282,7 +282,6 @@ fn product_receipt_matches_authenticated_edge_and_attachment_oracles() {
 }
 
 #[test]
-#[ignore = "RED until the WU2 intrinsic/cooked product contract is implemented"]
 fn trusted_intrinsic_aliases_have_exact_typed_marker_census() {
     let product = build_packaged_declaration_product().expect("packaged declaration product");
     product.validate().expect("closed product validates");
@@ -291,7 +290,6 @@ fn trusted_intrinsic_aliases_have_exact_typed_marker_census() {
 }
 
 #[test]
-#[ignore = "RED until the WU2 intrinsic/cooked product contract is implemented"]
 fn trusted_intrinsic_alias_markers_are_canonically_authenticated() {
     let product = build_packaged_declaration_product().expect("packaged declaration product");
     product.validate().expect("closed product validates");
