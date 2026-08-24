@@ -435,3 +435,26 @@ numbers are invalid without `--no-smt`.
   The future std-only product crate has an intentional RED dependency/ownership/walker contract;
   full-profile one-pass, AST-drop, perturbation, edge/SCC, and determinism witnesses remain in the
   library-owned integration layer. Independent spec review returned GO after three fix rounds.
+- **2026-08-24 — WU2 implementation GO.** The immutable declaration product now owns the complete
+  AST-free full-profile declaration and lexical-scope recipes. The authenticated product digest is
+  `a3e543680440ed88755d4d43f5a5a02c071052a061705e378d29d03a313d6c82`; construction covers all 82
+  packaged files and remains free of binder and semantic identities. The product, one-root
+  lifecycle, allocation, and fresh-build witnesses landed across `82410f3` through `4d781b5`, with
+  independent reviews clearing the retained-syntax and ownership boundaries.
+- **2026-08-24 — WU3 declaration universe GO.** The candidate now consumes the immutable product
+  into one fresh project-local binder and binds the prepared Reflect witness once. All 14 normalized
+  scope, group, namespace, augmentation, source-order, project-isolation, and no-semantic-work
+  projections match the complete-source oracle. The exact normalized binder digest is
+  `10cee1d655a8e48e07d76bd27c003a7f77b1da68418e907587cf3e2cec7b9554`. Spec and implementation
+  landed as `7725f66` through `ae02145`.
+- **2026-08-24 — WU3 measured and independently reviewed.** Commit `26955ba` measures only the
+  retained product + prepared user AST -> fresh binder phase. The production-equivalent probe has
+  no `test-utils` feature or heavy normalized test projection. Under
+  `cpu-lease run -n 2 --no-smt --`, 10 warm-ups and 31 wall samples had a median of
+  `297,850,091 ns`. One DHAT sample reported 63,499 allocation calls, 16,014,223 allocated bytes,
+  4,159,067 live bytes at the snapshot, and 5,317,723 peak live bytes. Each sample bound 82 library
+  units plus one user unit, allocated 59,537 binder layered rows, reused the exact product `Arc`,
+  and performed zero semantic-base/compiler/event/query/relation/replay work. Release wall contract
+  passed `5/5`, DHAT contract `3/3`, WU3 parity `14/14`, both clippy feature modes passed with
+  `-D warnings`, and independent review returned GO after rejecting the first test-utils-contaminated
+  probe. The wall result is one current 31-sample run, not a long-term trend.
