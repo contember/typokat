@@ -35,6 +35,8 @@ const ORACLE_DIGESTS: [&str; 10] = [
     "d1dd33f7a1b5899e057c002c55e6be4e4aa7965f7efb8512d350a4e98b1370bd",
 ];
 
+const PERTURB_LOCAL_ROW_DELTA: u64 = 17;
+
 #[test]
 fn complete_source_oracle_freezes_library_lexical_scope_product_inputs() {
     let projection =
@@ -844,21 +846,27 @@ fn project_local_candidate_matches_real_oracle_under_id_perturbation() {
         let library_frontend_work = CanonicalLibraryFrontendWorkScopeForTest::start();
         let compiler_work = LibraryCompilerWorkScopeForTest::start();
         let delta_work = UserDeltaForkScopeForTest::start();
-        let local_rows = LocalRowAllocationScopeForTest::start();
         let events = UserEventReservationScopeForTest::start();
         let queries = QueryCacheWriteScopeForTest::start();
         let relations = RelationCacheWriteScopeForTest::start();
-        let ordinary = build_candidate_for_test(&provider, &inputs, false)
-            .expect("WU3 candidate constructs a declaration-only universe");
-        let perturbed = build_candidate_for_test(&provider, &inputs, true)
-            .expect("WU3 candidate survives unrelated local-id allocations");
+        let ordinary_rows = LocalRowAllocationScopeForTest::start();
+        let ordinary = build_candidate_for_test(&provider, &inputs, false);
+        let ordinary_rows = ordinary_rows.finish();
+        let ordinary = ordinary.expect("WU3 candidate constructs a declaration-only universe");
+        let perturbed_rows = LocalRowAllocationScopeForTest::start();
+        let perturbed = build_candidate_for_test(&provider, &inputs, true);
+        let perturbed_rows = perturbed_rows.finish();
+        let perturbed = perturbed.expect("WU3 candidate survives unrelated local-id allocations");
         let reversed = if inputs.len() > 1 {
             let mut reversed_inputs = inputs.clone();
             reversed_inputs.reverse();
-            Some(
-                build_candidate_for_test(&provider, &reversed_inputs, false)
-                    .expect("WU3 candidate normalizes reverse input order"),
-            )
+            let reversed_rows = LocalRowAllocationScopeForTest::start();
+            let reversed = build_candidate_for_test(&provider, &reversed_inputs, false);
+            let reversed_rows = reversed_rows.finish();
+            Some((
+                reversed.expect("WU3 candidate normalizes reverse input order"),
+                reversed_rows,
+            ))
         } else {
             None
         };
@@ -871,14 +879,22 @@ fn project_local_candidate_matches_real_oracle_under_id_perturbation() {
 
         assert!(Arc::ptr_eq(&product, &ordinary.product));
         assert!(Arc::ptr_eq(&product, &perturbed.product));
+        assert_ne!(ordinary_rows, 0);
+        assert_eq!(
+            perturbed_rows,
+            ordinary_rows
+                .checked_add(PERTURB_LOCAL_ROW_DELTA)
+                .expect("fresh-binder row receipt fits u64")
+        );
         assert_eq!(normalize_candidate(&ordinary), oracle);
         assert_eq!(normalize_candidate(&perturbed), oracle);
         assert_ne!(
             ordinary.bound.binder.checkpoint_ends(),
             perturbed.bound.binder.checkpoint_ends()
         );
-        if let Some(reversed) = &reversed {
+        if let Some((reversed, reversed_rows)) = &reversed {
             assert!(Arc::ptr_eq(&product, &reversed.product));
+            assert_eq!(*reversed_rows, ordinary_rows);
             assert_eq!(normalize_candidate(reversed), oracle);
         }
         let candidate_runs = if reversed.is_some() { 3 } else { 2 };
@@ -907,7 +923,6 @@ fn project_local_candidate_matches_real_oracle_under_id_perturbation() {
             (0, 0, 0, 0)
         );
         assert_eq!(delta_work.finish(), 0);
-        assert_eq!(local_rows.finish(), 0);
         assert_eq!(events.finish(), 0);
         assert_eq!((queries.projection, queries.evaluator), (0, 0));
         assert_eq!(relations.finish(), 0);
