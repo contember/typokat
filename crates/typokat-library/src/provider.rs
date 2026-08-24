@@ -91,6 +91,22 @@ pub(super) struct CompleteSourceDeclarationOracleForTest {
     pub(super) bound: crate::check::checker::BoundProjectBinder,
 }
 
+#[cfg(test)]
+pub(super) struct PreparedProjectDeclarationUniverseForTest {
+    pub(super) product: Arc<typokat_library_product::LibraryDeclarationProduct>,
+    pub(super) library_units: Vec<crate::binder::bind::LibraryBinderUnit>,
+    pub(super) bound: crate::check::checker::BoundProjectBinder,
+    pub(super) metrics: ProjectDeclarationUniverseMetricsForTest,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ProjectDeclarationUniverseMetricsForTest {
+    pub(super) product_consumptions: u64,
+    pub(super) bound_user_units: u64,
+    pub(super) binding_wall_us: u64,
+}
+
 impl LibraryProjectBinderContinuation {
     #[doc(hidden)]
     pub const fn library_unit_count(&self) -> usize {
@@ -180,6 +196,76 @@ impl LibraryBaseProvider {
             .clone()
     }
 
+    #[cfg(test)]
+    pub(super) fn prepare_project_declaration_universe_for_test(
+        &self,
+        inputs: &[super::base::UserDeltaProjectInputForTest<'_>],
+        perturb_local_ids: bool,
+    ) -> Result<PreparedProjectDeclarationUniverseForTest, String> {
+        let product = self
+            .declaration_product()
+            .map_err(|error| error.to_string())?;
+        let files = inputs
+            .iter()
+            .map(|input| crate::frontend::FileInput {
+                name: input.path.to_owned(),
+                source: input.source.to_owned(),
+            })
+            .collect::<Vec<_>>();
+        crate::check::checker::library_compiler::record_user_source_parses_for_test(files.len());
+        let product_for_build = Arc::clone(&product);
+        let run = crate::frontend::run_prepared_project_frontend(
+            files,
+            move |units, source_reexports, default_modules| {
+                let started = Instant::now();
+                let result = if perturb_local_ids {
+                    crate::check::checker::bind_library_product_project_programs_perturbed_for_test(
+                        &product_for_build,
+                        units,
+                        source_reexports,
+                        default_modules,
+                        17,
+                    )
+                } else {
+                    crate::check::checker::bind_library_product_project_programs(
+                        &product_for_build,
+                        units,
+                        source_reexports,
+                        default_modules,
+                    )
+                };
+                let binding_wall_us =
+                    u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+                result.map(|(library_units, bound)| {
+                    crate::check::checker::library_compiler::record_user_source_binds_for_test(
+                        units.len(),
+                    );
+                    (library_units, bound, binding_wall_us)
+                })
+            },
+        );
+        let Some(result) = run.product else {
+            if let Some(error) = run.preparation_error {
+                return Err(format!("prepared project inventory failed: {error}"));
+            }
+            return Err(format!(
+                "prepared project parse failed: {:?}",
+                run.parse_errors
+            ));
+        };
+        let (library_units, bound, binding_wall_us) = result.map_err(|error| error.to_string())?;
+        Ok(PreparedProjectDeclarationUniverseForTest {
+            product,
+            library_units,
+            bound,
+            metrics: ProjectDeclarationUniverseMetricsForTest {
+                product_consumptions: 1,
+                bound_user_units: u64::try_from(inputs.len()).unwrap_or(u64::MAX),
+                binding_wall_us,
+            },
+        })
+    }
+
     /// Continue a compiled library binder checkpoint through the project's own files.
     ///
     /// Provenance is structural, not cryptographic: `LibraryBinderCheckpoint` is opaque and
@@ -214,10 +300,19 @@ impl LibraryBaseProvider {
                 },
             )
         })?;
-        let checkpoint = super::compiler::LibraryCompiler::new()
-            .compile_binder_checkpoint(&profile)
+        let owned_sources = super::compiler::owned_library_sources(profile.sources())
             .map_err(|error| compilation_failed(error.to_string()))?;
-        let library_units = checkpoint.inspection_for_test().library_units.to_vec();
+        let injected = super::compiler::injected_library_sources(&owned_sources);
+        let auxiliary = owned_sources
+            .iter()
+            .map(
+                |(ordinal, name, source)| crate::frontend::AuxiliarySourceInput {
+                    source_ordinal: ordinal.index(),
+                    name: name.clone(),
+                    source: source.clone(),
+                },
+            )
+            .collect::<Vec<_>>();
         let compiler_inputs = inputs
             .iter()
             .map(|input| crate::frontend::FileInput {
@@ -225,12 +320,45 @@ impl LibraryBaseProvider {
                 source: input.source.to_owned(),
             })
             .collect::<Vec<_>>();
-        let bound =
-            crate::check::checker::library_compiler::continue_library_project_binder_clean_for_test(
-                checkpoint,
-                compiler_inputs,
-            )
-            .map_err(compilation_failed)?;
+        crate::check::checker::library_compiler::record_user_source_parses_for_test(inputs.len());
+        let clean_auxiliary = auxiliary.clone();
+        let run = crate::frontend::run_prepared_project_frontend(
+            compiler_inputs,
+            |units, source_reexports, _| {
+                crate::frontend::run_project_frontend_with_auxiliary_parse_gate(
+                    Vec::new(),
+                    clean_auxiliary,
+                    |_, _, library_programs, _, parse_work| {
+                        crate::check::checker::library_compiler::record_complete_source_auxiliary_parse_work_for_test(
+                            parse_work.parser_invocations,
+                            parse_work.source_reparses,
+                        );
+                        crate::check::checker::library_compiler::compile_project_declaration_oracle_one_root_for_test(
+                            &injected,
+                            library_programs,
+                            units,
+                            source_reexports,
+                        )
+                    },
+                )
+                .product
+            },
+        );
+        let Some(result) = run.product else {
+            let message = run.preparation_error.map_or_else(
+                || {
+                    format!(
+                        "prepared user project contains parse errors: {:?}",
+                        run.parse_errors
+                    )
+                },
+                |error| format!("prepared user project inventory failed: {error}"),
+            );
+            return Err(compilation_failed(message));
+        };
+        let (library_units, bound) =
+            result.map_err(|error| compilation_failed(format!("{error:?}")))?;
+        crate::check::checker::library_compiler::record_user_source_binds_for_test(inputs.len());
         Ok(CompleteSourceDeclarationOracleForTest {
             library_units,
             bound,

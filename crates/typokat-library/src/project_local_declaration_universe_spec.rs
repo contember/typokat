@@ -765,7 +765,6 @@ fn changed_raw_source_defeats_a_fixed_expected_receipt() {
 }
 
 #[test]
-#[ignore = "WU3 RED: rejected user input still binds the packaged library oracle"]
 fn malformed_user_source_is_rejected_before_binding_or_semantics() {
     let provider = LibraryBaseProvider::new();
     let source_work = UserSourceWorkScopeForTest::start();
@@ -799,7 +798,6 @@ fn malformed_user_source_is_rejected_before_binding_or_semantics() {
 }
 
 #[test]
-#[ignore = "WU3 RED: the binder-only oracle still reserves user diagnostic events"]
 fn complete_source_oracle_allocates_no_user_event_lifecycle() {
     let events = UserEventReservationScopeForTest::start();
     let receipt = complete_source_oracle(&[input("/candidate/no_event_oracle.ts", "export {};\n")]);
@@ -809,7 +807,6 @@ fn complete_source_oracle_allocates_no_user_event_lifecycle() {
 }
 
 #[test]
-#[ignore = "WU3 RED: the auxiliary parser does not calibrate its lifecycle receipt"]
 fn complete_source_oracle_calibrates_library_parse_and_bind_work() {
     let route_work = CompleteSourceRouteWorkScopeForTest::start();
     let receipt =
@@ -870,7 +867,6 @@ fn oracle_does_not_initialize_the_product_or_the_frozen_semantic_base() {
 }
 
 #[test]
-#[ignore = "WU3 RED: the complete-source oracle still crosses checkpoint continuations"]
 fn complete_source_oracle_uses_one_fresh_project_root() {
     let projection =
         complete_source_oracle(&[input("/candidate/one_root_oracle.ts", "export {};\n")])
@@ -918,7 +914,6 @@ fn complete_source_oracle_uses_one_fresh_project_root() {
 }
 
 #[test]
-#[ignore = "RED until PreparedProject instantiates the product into a fresh project binder"]
 fn project_local_candidate_matches_real_oracle_under_id_perturbation() {
     for inputs in project_cases() {
         let oracle = complete_source_oracle(&inputs).projection;
@@ -965,6 +960,17 @@ fn project_local_candidate_matches_real_oracle_under_id_perturbation() {
 
         assert!(Arc::ptr_eq(&product, &ordinary.product));
         assert!(Arc::ptr_eq(&product, &perturbed.product));
+        assert_eq!(ordinary.metrics.product_consumptions, 1);
+        assert_eq!(perturbed.metrics.product_consumptions, 1);
+        assert_eq!(
+            ordinary.metrics.bound_user_units,
+            u64::try_from(inputs.len()).expect("project input count fits u64")
+        );
+        assert_eq!(
+            perturbed.metrics.bound_user_units,
+            u64::try_from(inputs.len()).expect("project input count fits u64")
+        );
+        let _authenticated_binding_wall_us = ordinary.metrics.binding_wall_us;
         assert_ne!(ordinary_rows, 0);
         assert_eq!(
             perturbed_rows,
@@ -972,8 +978,8 @@ fn project_local_candidate_matches_real_oracle_under_id_perturbation() {
                 .checked_add(PERTURB_LOCAL_ROW_DELTA)
                 .expect("fresh-binder row receipt fits u64")
         );
-        assert_eq!(normalize_candidate(&ordinary), oracle);
-        assert_eq!(normalize_candidate(&perturbed), oracle);
+        assert_projection_eq(&normalize_candidate(&ordinary), &oracle);
+        assert_projection_eq(&normalize_candidate(&perturbed), &oracle);
         assert_ne!(
             ordinary.bound.binder.checkpoint_ends(),
             perturbed.bound.binder.checkpoint_ends()
@@ -981,7 +987,7 @@ fn project_local_candidate_matches_real_oracle_under_id_perturbation() {
         if let Some((reversed, reversed_rows)) = &reversed {
             assert!(Arc::ptr_eq(&product, &reversed.product));
             assert_eq!(*reversed_rows, ordinary_rows);
-            assert_eq!(normalize_candidate(reversed), oracle);
+            assert_projection_eq(&normalize_candidate(reversed), &oracle);
         }
         let candidate_runs = if reversed.is_some() { 3 } else { 2 };
         assert_eq!(
@@ -1031,7 +1037,6 @@ fn project_local_candidate_matches_real_oracle_under_id_perturbation() {
 }
 
 #[test]
-#[ignore = "RED until project-local declaration universes are isolated per construction"]
 fn candidate_batch_order_does_not_leak_augmentations_or_identities() {
     let cases = project_cases();
     let a = &cases[2];
@@ -1061,7 +1066,6 @@ fn candidate_batch_order_does_not_leak_augmentations_or_identities() {
 }
 
 #[test]
-#[ignore = "RED until malformed prepared projects are rejected before binder construction"]
 fn candidate_rejects_malformed_input_without_semantic_work() {
     let provider = LibraryBaseProvider::new();
     let _product = provider
@@ -1094,18 +1098,69 @@ struct CandidateReceipt {
     product: Arc<typokat_library_product::LibraryDeclarationProduct>,
     library_units: Vec<crate::binder::bind::LibraryBinderUnit>,
     bound: crate::check::checker::BoundProjectBinder,
+    metrics: super::provider::ProjectDeclarationUniverseMetricsForTest,
 }
 
 fn build_candidate_for_test(
-    _provider: &LibraryBaseProvider,
-    _inputs: &[UserDeltaProjectInputForTest<'_>],
-    _perturb_local_ids: bool,
-) -> Result<CandidateReceipt, &'static str> {
-    Err("project-local declaration universe is not implemented")
+    provider: &LibraryBaseProvider,
+    inputs: &[UserDeltaProjectInputForTest<'_>],
+    perturb_local_ids: bool,
+) -> Result<CandidateReceipt, String> {
+    let prepared =
+        provider.prepare_project_declaration_universe_for_test(inputs, perturb_local_ids)?;
+    Ok(CandidateReceipt {
+        product: prepared.product,
+        library_units: prepared.library_units,
+        bound: prepared.bound,
+        metrics: prepared.metrics,
+    })
 }
 
 fn normalize_candidate(candidate: &CandidateReceipt) -> DeclarationProjection {
     normalize_parts(&candidate.library_units, &candidate.bound)
+}
+
+fn assert_projection_eq(actual: &DeclarationProjection, expected: &DeclarationProjection) {
+    if actual == expected {
+        return;
+    }
+    for (kind, actual_rows, expected_rows) in [
+        ("scope", &actual.scopes, &expected.scopes),
+        ("declaration", &actual.declarations, &expected.declarations),
+        ("group", &actual.groups, &expected.groups),
+        ("namespace", &actual.namespaces, &expected.namespaces),
+        ("attachment", &actual.attachments, &expected.attachments),
+        (
+            "augmentation",
+            &actual.augmentations,
+            &expected.augmentations,
+        ),
+        (
+            "global_contributor",
+            &actual.global_contributors,
+            &expected.global_contributors,
+        ),
+        ("module", &actual.modules, &expected.modules),
+    ] {
+        if actual_rows == expected_rows {
+            continue;
+        }
+        let first = actual_rows
+            .iter()
+            .zip(expected_rows)
+            .position(|(actual, expected)| actual != expected)
+            .unwrap_or_else(|| actual_rows.len().min(expected_rows.len()));
+        panic!(
+            "{kind} projection mismatch: actual_count={}, expected_count={}, actual_digest={}, expected_digest={}, first_index={first}, actual={:?}, expected={:?}",
+            actual_rows.len(),
+            expected_rows.len(),
+            actual.digest(),
+            expected.digest(),
+            actual_rows.get(first),
+            expected_rows.get(first),
+        );
+    }
+    unreachable!("projection inequality has a differing row class");
 }
 
 fn assert_candidate_implementation_boundary() {
@@ -1113,11 +1168,7 @@ fn assert_candidate_implementation_boundary() {
     let start = source
         .find("pub(super) fn prepare_project_declaration_universe_for_test")
         .expect("candidate provider entry exists");
-    let end = source[start..]
-        .find("\n    pub(")
-        .map(|offset| start + offset)
-        .unwrap_or(source.len());
-    let body = &source[start..end];
+    let body = rust_function_body(source, start);
     for forbidden in [
         "complete_source_declaration_oracle_for_test",
         "LibraryCompiler",

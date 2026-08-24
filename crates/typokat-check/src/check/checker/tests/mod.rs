@@ -15,6 +15,7 @@ mod keyof_indexed_access;
 mod member_assign;
 mod modifiers;
 mod narrowing;
+mod product_project_structure;
 mod publication;
 mod statements;
 mod tuple;

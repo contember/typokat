@@ -689,6 +689,13 @@ pub struct AdmittedSourceReexports {
 
 impl AdmittedSourceReexports {
     #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            declarations: Vec::new(),
+        }
+    }
+
+    #[must_use]
     pub fn declarations(&self) -> &[AdmittedSourceReexportDeclaration] {
         &self.declarations
     }
@@ -861,6 +868,95 @@ pub struct ParseOnlyProjectRun {
     pub parse_errors: Vec<Vec<String>>,
 }
 
+/// One clean parsed project whose AST never escapes the frontend-owned callback.
+pub struct PreparedProjectRun<Product> {
+    pub inputs: Vec<FileInput>,
+    pub parse_errors: Vec<Vec<String>>,
+    pub preparation_error: Option<ProjectInventoryError>,
+    pub product: Option<Product>,
+}
+
+/// Parse every user source once, reject the whole batch, then expose the prepared programs.
+pub fn run_prepared_project_frontend<Product>(
+    inputs: Vec<FileInput>,
+    consume: impl for<'ast> FnOnce(
+        &[ProjectProgram<'ast>],
+        &AdmittedSourceReexports,
+        &DefaultModuleCandidates,
+    ) -> Product,
+) -> PreparedProjectRun<Product> {
+    let allocators = (0..inputs.len())
+        .map(|_| Allocator::default())
+        .collect::<Vec<_>>();
+    let parsed: Vec<_> = inputs
+        .iter()
+        .zip(&allocators)
+        .map(|(input, allocator)| Parser::new(allocator, &input.source, SourceType::ts()).parse())
+        .collect::<Vec<_>>();
+    let parse_errors = parsed.iter().map(parse_errors).collect::<Vec<_>>();
+    let rejected = parsed
+        .iter()
+        .any(|parsed| parsed.panicked || !parsed.diagnostics.is_empty());
+    let (preparation_error, product) = if rejected {
+        (None, None)
+    } else {
+        let programs = parsed
+            .iter()
+            .map(|parsed| &parsed.program)
+            .collect::<Vec<_>>();
+        match account_project_modules(
+            &inputs,
+            &programs,
+            &ProjectResolutionMode::ExplicitFileList,
+            SourceReexportAccounting::PreparedProject,
+            DefaultCandidateAccounting::CollectCandidate,
+        ) {
+            Ok(mut plan) => match certified_default_module_candidates(&inputs, &plan) {
+                Ok(default_modules) => match candidate_original_order(&inputs, &default_modules) {
+                    Ok(order) => match activate_default_module_inventory(
+                        &inputs,
+                        &plan.source_reexports,
+                        &default_modules,
+                        &mut plan.inventory,
+                    ) {
+                        Ok(()) => match finalize_admitted_source_reexports_in_order(
+                            &inputs,
+                            &plan.paths,
+                            &plan.source_reexports,
+                            order,
+                        ) {
+                            Ok(finalized) => {
+                                let units = project_programs_from_accounted_imports_in_order(
+                                    &inputs,
+                                    &programs,
+                                    plan.paths,
+                                    plan.raw_imports,
+                                    &finalized.order,
+                                );
+                                let admitted = AdmittedSourceReexports {
+                                    declarations: finalized.admitted,
+                                };
+                                (None, Some(consume(&units, &admitted, &default_modules)))
+                            }
+                            Err(error) => (Some(error), None),
+                        },
+                        Err(error) => (Some(error), None),
+                    },
+                    Err(error) => (Some(error), None),
+                },
+                Err(error) => (Some(error), None),
+            },
+            Err(error) => (Some(error), None),
+        }
+    };
+    PreparedProjectRun {
+        inputs,
+        parse_errors,
+        preparation_error,
+        product,
+    }
+}
+
 /// Parse a project without resolving imports or exposing recovered ASTs.
 pub fn run_project_parse_only(inputs: Vec<FileInput>) -> ParseOnlyProjectRun {
     let allocators = (0..inputs.len())
@@ -912,7 +1008,7 @@ pub fn run_project_frontend_with_auxiliary<Product>(
     run_project_frontend_with_auxiliary_control(
         inputs,
         auxiliary,
-        |_, interner, auxiliary_units, project_units| {
+        |_, interner, auxiliary_units, project_units, _| {
             consume(interner, auxiliary_units, project_units)
         },
     )
@@ -931,7 +1027,7 @@ pub fn run_clean_project_frontend_with_auxiliary<Product>(
     run_project_frontend_with_auxiliary_control(
         inputs,
         auxiliary,
-        |user_parse_rejected, interner, auxiliary_units, project_units| {
+        |user_parse_rejected, interner, auxiliary_units, project_units, _| {
             if user_parse_rejected {
                 None
             } else {
@@ -939,6 +1035,22 @@ pub fn run_clean_project_frontend_with_auxiliary<Product>(
             }
         },
     )
+}
+
+/// Parse auxiliary sources and expose rejected user input only as a gate bit.
+#[cfg(any(test, feature = "test-utils"))]
+pub fn run_project_frontend_with_auxiliary_parse_gate<Product>(
+    inputs: Vec<FileInput>,
+    auxiliary: Vec<AuxiliarySourceInput>,
+    consume: impl for<'ast> FnOnce(
+        bool,
+        &mut Interner,
+        &[AuxiliaryProgram<'ast>],
+        &[ProjectProgram<'ast>],
+        AuxiliaryParseWork,
+    ) -> Product,
+) -> ProjectFrontendRun<Product> {
+    run_project_frontend_with_auxiliary_control(inputs, auxiliary, consume)
 }
 
 /// Parse user sources first and load auxiliary sources only for a clean project.
@@ -1343,27 +1455,40 @@ fn run_project_frontend_with_auxiliary_control<Product>(
         &mut Interner,
         &[AuxiliaryProgram<'ast>],
         &[ProjectProgram<'ast>],
+        AuxiliaryParseWork,
     ) -> Product,
 ) -> ProjectFrontendRun<Product> {
-    let source_count = inputs.len() + auxiliary.len();
-    let allocators: Vec<Allocator> = (0..source_count).map(|_| Allocator::default()).collect();
+    let input_allocators = (0..inputs.len())
+        .map(|_| Allocator::default())
+        .collect::<Vec<_>>();
     let parsed: Vec<_> = inputs
         .iter()
-        .map(|input| (input.source.as_str(), SourceType::ts()))
-        .chain(auxiliary.iter().map(|input| {
-            let source_type = if source_file_kind(&input.name).is_declaration() {
-                SourceType::d_ts()
-            } else {
-                SourceType::ts()
-            };
-            (input.source.as_str(), source_type)
-        }))
-        .zip(&allocators)
-        .map(|((source, source_type), allocator)| {
-            Parser::new(allocator, source, source_type).parse()
-        })
+        .zip(&input_allocators)
+        .map(|(input, allocator)| Parser::new(allocator, &input.source, SourceType::ts()).parse())
         .collect();
-    let (parsed, auxiliary_parsed) = parsed.split_at(inputs.len());
+    let auxiliary_allocators = (0..auxiliary.len())
+        .map(|_| Allocator::default())
+        .collect::<Vec<_>>();
+    #[cfg(any(test, feature = "test-utils"))]
+    let mut auxiliary_parse_invocations = BTreeMap::new();
+    let auxiliary_parsed = auxiliary
+        .iter()
+        .zip(&auxiliary_allocators)
+        .map(|(input, allocator)| {
+            #[cfg(any(test, feature = "test-utils"))]
+            {
+                parse_auxiliary_source(allocator, input, &mut auxiliary_parse_invocations)
+            }
+            #[cfg(not(any(test, feature = "test-utils")))]
+            {
+                parse_auxiliary_source(allocator, input)
+            }
+        })
+        .collect::<Vec<_>>();
+    #[cfg(any(test, feature = "test-utils"))]
+    let auxiliary_parse_work = auxiliary_parse_work(&auxiliary_parse_invocations);
+    #[cfg(not(any(test, feature = "test-utils")))]
+    let auxiliary_parse_work = AuxiliaryParseWork::default();
 
     let parse_errors = parsed.iter().map(parse_errors).collect::<Vec<_>>();
     let user_parse_rejected = parsed
@@ -1377,7 +1502,7 @@ fn run_project_frontend_with_auxiliary_control<Product>(
     let project_units = resolved_project_programs(&inputs, &programs);
     let auxiliary_units: Vec<AuxiliaryProgram<'_>> = auxiliary
         .iter()
-        .zip(auxiliary_parsed)
+        .zip(&auxiliary_parsed)
         .map(|(input, parsed)| AuxiliaryProgram {
             source_ordinal: input.source_ordinal,
             name: &input.name,
@@ -1408,6 +1533,7 @@ fn run_project_frontend_with_auxiliary_control<Product>(
         &mut interner,
         &auxiliary_units,
         &project_units,
+        auxiliary_parse_work,
     );
     ProjectFrontendRun {
         inputs,
@@ -1759,6 +1885,7 @@ struct AdmittedSourceReexportProduct {
 enum SourceReexportAccounting {
     FrozenUnsupported,
     AdmitBundler,
+    PreparedProject,
     #[cfg(any(test, feature = "test-utils"))]
     CollectEvidence,
 }
@@ -1767,16 +1894,19 @@ impl SourceReexportAccounting {
     fn collects_evidence(self) -> bool {
         #[cfg(any(test, feature = "test-utils"))]
         {
-            matches!(self, Self::AdmitBundler | Self::CollectEvidence)
+            matches!(
+                self,
+                Self::AdmitBundler | Self::PreparedProject | Self::CollectEvidence
+            )
         }
         #[cfg(not(any(test, feature = "test-utils")))]
         {
-            matches!(self, Self::AdmitBundler)
+            matches!(self, Self::AdmitBundler | Self::PreparedProject)
         }
     }
 
     fn admits_product(self) -> bool {
-        matches!(self, Self::AdmitBundler)
+        matches!(self, Self::AdmitBundler | Self::PreparedProject)
     }
 }
 
@@ -4606,6 +4736,15 @@ fn finalize_admitted_source_reexports(
     source_reexports: &PendingSourceReexports,
 ) -> Result<FinalizedSourceReexports, ProjectInventoryError> {
     let order = dependency_order_with_reexports(raw_imports, &source_reexports.dependency_edges);
+    finalize_admitted_source_reexports_in_order(inputs, paths, source_reexports, order)
+}
+
+fn finalize_admitted_source_reexports_in_order(
+    inputs: &[FileInput],
+    paths: &[PathBuf],
+    source_reexports: &PendingSourceReexports,
+    order: Vec<usize>,
+) -> Result<FinalizedSourceReexports, ProjectInventoryError> {
     let source_keys = stable_source_keys(paths);
     let mut ordered_index = vec![0usize; inputs.len()];
     for (position, original) in order.iter().copied().enumerate() {
@@ -5544,7 +5683,7 @@ fn resolve_local_import(importer_path: &Path, specifier: &str) -> Option<PathBuf
     }
     let base = importer_path.parent()?;
     let mut path = normalize_path(&base.join(specifier));
-    if path.extension().is_none() {
+    if path.extension().is_none() || path.extension().is_some_and(|extension| extension == "js") {
         path.set_extension("ts");
     }
     Some(path)

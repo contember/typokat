@@ -24,6 +24,131 @@ pub fn compile_complete_combined_profile_for_test(
     })
 }
 
+/// Bind the packaged library and prepared user programs in one fresh project binder.
+#[cfg(any(test, feature = "test-utils"))]
+pub fn compile_project_declaration_oracle_one_root_for_test<'ast>(
+    sources: &[InjectedLibrarySource<'_>],
+    library_programs: &[crate::frontend::AuxiliaryProgram<'ast>],
+    units: &[crate::frontend::ProjectProgram<'ast>],
+    source_reexports: &crate::frontend::AdmittedSourceReexports,
+) -> Result<(Vec<LibraryBinderUnit>, super::BoundProjectBinder), InjectedProfileError> {
+    let canonical = canonical_inputs(sources)?;
+    if canonical.len() != library_programs.len() {
+        return Err(InjectedProfileError::CanonicalProjection(
+            "one-root oracle changed the library source count".to_owned(),
+        ));
+    }
+
+    let mut parser_export_claims = Vec::new();
+    for ((input, source), program) in canonical.iter().zip(sources).zip(library_programs) {
+        if input.file_ordinal.index() != program.source_ordinal || source.name != program.name {
+            return Err(InjectedProfileError::CanonicalProjection(
+                "one-root oracle changed library source identity".to_owned(),
+            ));
+        }
+        if program.parser_panicked {
+            return Err(InjectedProfileError::Parse {
+                file_ordinal: input.file_ordinal,
+                messages: if program.parser_diagnostics.is_empty() {
+                    vec!["parser panicked without a diagnostic".to_owned()]
+                } else {
+                    program
+                        .parser_diagnostics
+                        .iter()
+                        .map(|diagnostic| diagnostic.rendered.clone())
+                        .collect()
+                },
+            });
+        }
+        for diagnostic in &program.parser_diagnostics {
+            let [span] = diagnostic.labels.as_slice() else {
+                return Err(InjectedProfileError::Parse {
+                    file_ordinal: input.file_ordinal,
+                    messages: program
+                        .parser_diagnostics
+                        .iter()
+                        .map(|diagnostic| diagnostic.rendered.clone())
+                        .collect(),
+                });
+            };
+            if diagnostic.scope.as_deref() != Some("TS")
+                || diagnostic.number.as_deref() != Some("1319")
+            {
+                return Err(InjectedProfileError::Parse {
+                    file_ordinal: input.file_ordinal,
+                    messages: program
+                        .parser_diagnostics
+                        .iter()
+                        .map(|diagnostic| diagnostic.rendered.clone())
+                        .collect(),
+                });
+            }
+            parser_export_claims.push(ParserExportClaim {
+                file_ordinal: input.file_ordinal,
+                span: *span,
+            });
+        }
+    }
+
+    let manifests = library_programs
+        .iter()
+        .map(|program| SourceDeclarationManifest::build(program.program))
+        .collect::<Vec<_>>();
+    let prelude_allocator = Allocator::default();
+    let prelude = Parser::new(&prelude_allocator, "", SourceType::d_ts()).parse();
+    let prelude_manifest = SourceDeclarationManifest::build(&prelude.program);
+    let mut builder =
+        ProjectBinderBuilder::new_with_declaration_manifest(&prelude.program, &prelude_manifest);
+    let library_units = canonical
+        .iter()
+        .zip(library_programs)
+        .map(|(input, program)| {
+            (
+                program.program,
+                CompilationUnit {
+                    source: input.source_key,
+                    origin: input.origin,
+                    binding: ModuleBindingContext::for_program(program.program, input.kind),
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    let authenticated_units = library_units
+        .iter()
+        .zip(&manifests)
+        .map(|((program, unit), manifest)| (*program, manifest, *unit))
+        .collect::<Vec<_>>();
+    let module_scopes = builder
+        .try_add_library_modules_with_declaration_manifests(&authenticated_units)
+        .map_err(|error| InjectedProfileError::Binder(error.to_string()))?;
+    let library_units = canonical
+        .iter()
+        .zip(module_scopes.iter().copied())
+        .map(|(input, module)| LibraryBinderUnit {
+            ordinal: input.file_ordinal,
+            source: input.source_key,
+            module,
+        })
+        .collect::<Vec<_>>();
+    builder.begin_one_root_project_for_test();
+    let source_offset =
+        u32::try_from(canonical.len()).map_err(|_| InjectedProfileError::SourceKeyOverflow)?;
+    let bound = super::super::bind_one_root_project_programs_for_test(
+        builder,
+        units,
+        source_reexports,
+        source_offset,
+    )
+    .map_err(InjectedProfileError::Binder)?;
+    validate_parser_export_claims(
+        &bound.binder,
+        parser_export_claims,
+        canonical[0].file_ordinal,
+    )?;
+    record_complete_source_bind_for_test(canonical.len(), units.len());
+    Ok((library_units, bound))
+}
+
 /// Compile the packaged library and one resolved user project in one semantic publication.
 pub fn compile_complete_source_project_programs<'ast>(
     sources: &[InjectedLibrarySource<'_>],
@@ -307,7 +432,7 @@ fn complete_source_project_frontend<'source, 'ast>(
         &mut external_effects,
         super::AuthoritativeProjectBinderFinish::Continuation,
     )
-    .map_err(InjectedProfileError::Binder)?;
+    .map_err(|error| InjectedProfileError::Binder(error.to_string()))?;
     validate_parser_export_claims(
         &bound.binder,
         parser_export_claims,

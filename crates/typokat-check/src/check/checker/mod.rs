@@ -1413,6 +1413,53 @@ pub struct BoundProjectBinder {
     pub normalized: ProjectBindingProductForTest,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProjectDeclarationStructuralError {
+    CannotFindModule {
+        module: String,
+        span: Span,
+    },
+    NoExportedMember {
+        module: String,
+        member: String,
+        span: Span,
+    },
+    NoDefaultExport {
+        module: String,
+        span: Span,
+    },
+    CannotFindName {
+        name: String,
+        span: Span,
+    },
+    DuplicateIdentifier {
+        name: String,
+        span: Span,
+    },
+    MissingSourceReexportAdmission {
+        module_ordinal: ModuleOrdinal,
+        owner_start: u32,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LibraryProductProjectBindingError {
+    InvalidProduct(crate::binder::namespace::LibraryProductInstantiationError),
+    Structural(ProjectDeclarationStructuralError),
+    Binding(String),
+}
+
+impl std::fmt::Display for LibraryProductProjectBindingError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "library product project binding failed: {self:?}"
+        )
+    }
+}
+
+impl std::error::Error for LibraryProductProjectBindingError {}
+
 impl std::fmt::Debug for BoundProjectBinder {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -2446,7 +2493,14 @@ where
                     .map(Vec::as_slice),
                 &lexical_events,
                 &mut external_effects,
-            )?;
+                ExternalDiagnosticDisposition::Emit,
+            )
+            .map_err(|error| match error {
+                ProjectBindingCoreError::Reporting(error) => error,
+                ProjectBindingCoreError::Structural(_) | ProjectBindingCoreError::Binding(_) => {
+                    "emitting project import collection returned a structural error"
+                }
+            })?;
             let (scope, placeholders) = builder.add_module_with_declaration_manifest(
                 unit.program,
                 manifest,
@@ -2471,8 +2525,15 @@ where
                     dependency_exports: &exports,
                     source_reexports,
                     module_index: unit_index,
+                    diagnostic_disposition: ExternalDiagnosticDisposition::Emit,
                 },
-            )?;
+            )
+            .map_err(|error| match error {
+                ProjectBindingCoreError::Reporting(error) => error,
+                ProjectBindingCoreError::Structural(_) | ProjectBindingCoreError::Binding(_) => {
+                    "emitting project export collection returned a structural error"
+                }
+            })?;
             if let Some(default_export) = default_module
                 .and_then(|plan| plan.exports_by_owner.get(unit_index))
                 .copied()
@@ -4190,7 +4251,8 @@ pub(crate) fn bind_library_checkpoint_project_programs(
         &lexical_events,
         &mut external_effects,
         AuthoritativeProjectBinderFinish::Continuation,
-    )?;
+    )
+    .map_err(|error| error.to_string())?;
     let mut declaration_fragment_batch =
         decls::inventory::CanonicalFragmentAuthenticationBatch::default();
     for ((module, _unit), manifest) in bound
@@ -4223,6 +4285,140 @@ pub(crate) fn bind_library_checkpoint_project_programs(
 }
 
 #[cfg(any(test, feature = "test-utils"))]
+pub(in crate::check::checker) fn bind_one_root_project_programs_for_test<'ast>(
+    builder: ProjectBinderBuilder<'ast>,
+    units: &[ProjectProgram<'ast>],
+    source_reexports: &AdmittedSourceReexports,
+    source_offset: u32,
+) -> Result<BoundProjectBinder, String> {
+    let manifests = units
+        .iter()
+        .map(|unit| SourceDeclarationManifest::build(unit.program))
+        .collect::<Vec<_>>();
+    let lexical_events = LexicalReservations::<UserRecordTicket>::default();
+    let mut external_effects = BTreeMap::<UserRecordTicket, CandidateEffects>::new();
+    let source_reexport_plan = build_validated_source_reexport_plan(source_reexports, units)
+        .map_err(|error| error.message().to_owned())?;
+    bind_authoritative_project_core_with_source_reexports(
+        builder,
+        units,
+        &manifests,
+        Some(&source_reexport_plan),
+        source_offset,
+        &lexical_events,
+        &mut external_effects,
+        AuthoritativeProjectBinderFinish::DeclarationOracle,
+    )
+    .map_err(|error| error.to_string())
+}
+
+/// Bind one prepared project into a fresh binder instantiated from the immutable library product.
+pub fn bind_library_product_project_programs(
+    product: &typokat_library_product::LibraryDeclarationProduct,
+    units: &[ProjectProgram<'_>],
+    source_reexports: &AdmittedSourceReexports,
+    default_modules: &DefaultModuleCandidates,
+) -> Result<
+    (
+        Vec<crate::binder::bind::LibraryBinderUnit>,
+        BoundProjectBinder,
+    ),
+    LibraryProductProjectBindingError,
+> {
+    let instantiated = ProjectBinderBuilder::from_library_declaration_product(product)
+        .map_err(LibraryProductProjectBindingError::InvalidProduct)?;
+    bind_library_product_project_programs_with_builder(
+        product,
+        units,
+        source_reexports,
+        default_modules,
+        instantiated,
+    )
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn bind_library_product_project_programs_perturbed_for_test(
+    product: &typokat_library_product::LibraryDeclarationProduct,
+    units: &[ProjectProgram<'_>],
+    source_reexports: &AdmittedSourceReexports,
+    default_modules: &DefaultModuleCandidates,
+    rows: usize,
+) -> Result<
+    (
+        Vec<crate::binder::bind::LibraryBinderUnit>,
+        BoundProjectBinder,
+    ),
+    LibraryProductProjectBindingError,
+> {
+    let instantiated =
+        ProjectBinderBuilder::from_library_declaration_product_perturbed_for_test(product, rows)
+            .map_err(LibraryProductProjectBindingError::InvalidProduct)?;
+    bind_library_product_project_programs_with_builder(
+        product,
+        units,
+        source_reexports,
+        default_modules,
+        instantiated,
+    )
+}
+
+fn bind_library_product_project_programs_with_builder<'ast>(
+    product: &typokat_library_product::LibraryDeclarationProduct,
+    units: &[ProjectProgram<'ast>],
+    source_reexports: &AdmittedSourceReexports,
+    default_modules: &DefaultModuleCandidates,
+    (builder, library_units): (
+        ProjectBinderBuilder<'ast>,
+        Vec<crate::binder::bind::LibraryBinderUnit>,
+    ),
+) -> Result<
+    (
+        Vec<crate::binder::bind::LibraryBinderUnit>,
+        BoundProjectBinder,
+    ),
+    LibraryProductProjectBindingError,
+> {
+    let manifests = units
+        .iter()
+        .map(|unit| SourceDeclarationManifest::build(unit.program))
+        .collect::<Vec<_>>();
+    let source_offset = u32::try_from(product.source_count()).map_err(|_| {
+        LibraryProductProjectBindingError::Binding(
+            "library product source count exceeds u32".to_owned(),
+        )
+    })?;
+    let lexical_events = LexicalReservations::<UserRecordTicket>::default();
+    let mut external_effects = BTreeMap::<UserRecordTicket, CandidateEffects>::new();
+    let source_reexport_plan = build_validated_source_reexport_plan(source_reexports, units)
+        .map_err(|error| LibraryProductProjectBindingError::Binding(error.message().to_owned()))?;
+    let default_module_plan = build_validated_default_module_plan(default_modules, units)
+        .map_err(|error| LibraryProductProjectBindingError::Binding(error.message().to_owned()))?;
+    let bound = bind_authoritative_project_core_with_module_admission(
+        builder,
+        units,
+        &manifests,
+        ProjectModuleAdmission {
+            source_reexports: Some(&source_reexport_plan),
+            default_module: Some(&default_module_plan),
+        },
+        source_offset,
+        &lexical_events,
+        &mut external_effects,
+        AuthoritativeProjectBinderFinish::Product,
+    )
+    .map_err(|error| match error {
+        ProjectBindingCoreError::Structural(error) => {
+            LibraryProductProjectBindingError::Structural(error)
+        }
+        ProjectBindingCoreError::Reporting(error) => match error {},
+        ProjectBindingCoreError::Binding(error) => {
+            LibraryProductProjectBindingError::Binding(error)
+        }
+    })?;
+    Ok((library_units, bound))
+}
+
+#[cfg(any(test, feature = "test-utils"))]
 #[allow(clippy::too_many_arguments)] // The manifest batch stays paired with the source batch.
 fn bind_fresh_project_programs(
     prelude: &Program<'_>,
@@ -4248,7 +4444,8 @@ fn bind_fresh_project_programs(
         lexical_events,
         external_effects,
         AuthoritativeProjectBinderFinish::Fresh,
-    )?;
+    )
+    .map_err(|error| error.to_string())?;
     #[cfg(any(test, feature = "test-utils"))]
     PROJECT_BINDING_FRESH_PRODUCTS
         .with(|products| products.borrow_mut().push(bound.normalized.clone()));
@@ -4259,7 +4456,34 @@ fn bind_fresh_project_programs(
 enum AuthoritativeProjectBinderFinish {
     #[cfg(any(test, feature = "test-utils"))]
     Fresh,
+    #[cfg(any(test, feature = "test-utils"))]
+    DeclarationOracle,
+    Product,
     Continuation,
+}
+
+#[derive(Clone, Copy)]
+enum ExternalDiagnosticDisposition {
+    Emit,
+    RejectTyped,
+}
+
+enum ProjectBindingCoreError<ReportingError> {
+    Reporting(ReportingError),
+    Structural(ProjectDeclarationStructuralError),
+    Binding(String),
+}
+
+impl<ReportingError: std::fmt::Display> std::fmt::Display
+    for ProjectBindingCoreError<ReportingError>
+{
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Reporting(error) => write!(formatter, "project reporting owner failed: {error}"),
+            Self::Structural(error) => write!(formatter, "project structure is invalid: {error:?}"),
+            Self::Binding(error) => formatter.write_str(error),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -4276,7 +4500,7 @@ fn bind_authoritative_project_core<'ast, Ticket>(
     lexical_events: &LexicalReservations<Ticket>,
     external_effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
     finish: AuthoritativeProjectBinderFinish,
-) -> Result<BoundProjectBinder, String>
+) -> Result<BoundProjectBinder, ProjectBindingCoreError<Ticket::Error>>
 where
     Ticket: UserReportingOwner,
     Ticket::Error: std::fmt::Display,
@@ -4303,7 +4527,7 @@ fn bind_authoritative_project_core_with_source_reexports<'ast, Ticket>(
     lexical_events: &LexicalReservations<Ticket>,
     external_effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
     finish: AuthoritativeProjectBinderFinish,
-) -> Result<BoundProjectBinder, String>
+) -> Result<BoundProjectBinder, ProjectBindingCoreError<Ticket::Error>>
 where
     Ticket: UserReportingOwner,
     Ticket::Error: std::fmt::Display,
@@ -4333,7 +4557,7 @@ fn bind_authoritative_project_core_with_module_admission<'ast, Ticket>(
     lexical_events: &LexicalReservations<Ticket>,
     external_effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
     finish: AuthoritativeProjectBinderFinish,
-) -> Result<BoundProjectBinder, String>
+) -> Result<BoundProjectBinder, ProjectBindingCoreError<Ticket::Error>>
 where
     Ticket: UserReportingOwner,
     Ticket::Error: std::fmt::Display,
@@ -4344,7 +4568,9 @@ where
             .zip(manifests)
             .any(|(unit, manifest)| !manifest.belongs_to(unit.program))
     {
-        return Err("project declaration manifests do not match source programs".to_owned());
+        return Err(ProjectBindingCoreError::Binding(
+            "project declaration manifests do not match source programs".to_owned(),
+        ));
     }
     let ProjectModuleAdmission {
         source_reexports,
@@ -4359,11 +4585,11 @@ where
                 .saturating_add(u64::try_from(units.len()).unwrap_or(u64::MAX)),
         );
     }
-    let shifted_unit = |unit: &ProjectProgram<'_>| -> Result<CompilationUnit, String> {
+    let shifted_unit = |unit: &ProjectProgram<'_>| -> Result<CompilationUnit, ProjectBindingCoreError<Ticket::Error>> {
         let source = SourceUnitKey(
             source_offset
                 .checked_add(unit.compilation_unit.source.0)
-                .ok_or_else(|| "project source key suffix exceeds u32".to_owned())?,
+                .ok_or_else(|| ProjectBindingCoreError::Binding("project source key suffix exceeds u32".to_owned()))?,
         );
         Ok(CompilationUnit {
             source,
@@ -4380,6 +4606,15 @@ where
     let mut module_scopes = Vec::with_capacity(units.len());
     let mut module_placeholders = Vec::with_capacity(units.len());
     let mut exports: Vec<ExportSurface> = Vec::with_capacity(units.len());
+    let reject_structural_diagnostics = matches!(finish, AuthoritativeProjectBinderFinish::Product);
+    #[cfg(any(test, feature = "test-utils"))]
+    let reject_structural_diagnostics = reject_structural_diagnostics
+        || matches!(finish, AuthoritativeProjectBinderFinish::DeclarationOracle);
+    let diagnostic_disposition = if reject_structural_diagnostics {
+        ExternalDiagnosticDisposition::RejectTyped
+    } else {
+        ExternalDiagnosticDisposition::Emit
+    };
     for (unit_index, unit) in units.iter().enumerate() {
         let imports = imported_symbols(
             unit,
@@ -4389,8 +4624,8 @@ where
                 .map(Vec::as_slice),
             lexical_events,
             external_effects,
-        )
-        .map_err(|error| format!("project import reporting owner failed: {error}"))?;
+            diagnostic_disposition,
+        )?;
         let compilation = shifted_unit(unit)?;
         let (scope, placeholders) = builder.add_module_with_declaration_manifest(
             unit.program,
@@ -4404,7 +4639,7 @@ where
             .flatten()
         {
             bind_validated_default_export(&mut builder, scope, unit.program, default_export)
-                .map_err(str::to_owned)?;
+                .map_err(|error| ProjectBindingCoreError::Binding(error.to_owned()))?;
         }
         let mut surface = collect_exports(
             &builder,
@@ -4417,9 +4652,9 @@ where
                 dependency_exports: &exports,
                 source_reexports,
                 module_index: unit_index,
+                diagnostic_disposition,
             },
-        )
-        .map_err(|error| format!("project export reporting owner failed: {error}"))?;
+        )?;
         if let Some(default_export) = default_module
             .and_then(|plan| plan.exports_by_owner.get(unit_index))
             .copied()
@@ -4427,7 +4662,7 @@ where
         {
             surface.default = Some(
                 collect_default_export(&builder, scope, unit.program, default_export)
-                    .map_err(str::to_owned)?,
+                    .map_err(|error| ProjectBindingCoreError::Binding(error.to_owned()))?,
             );
         }
         module_scopes.push(scope);
@@ -4440,9 +4675,16 @@ where
         AuthoritativeProjectBinderFinish::Fresh => {
             builder.finish(final_module.unwrap_or(ScopeId(0)))
         }
+        #[cfg(any(test, feature = "test-utils"))]
+        AuthoritativeProjectBinderFinish::DeclarationOracle => {
+            builder.finish(final_module.unwrap_or(ScopeId(0)))
+        }
+        AuthoritativeProjectBinderFinish::Product => {
+            builder.finish(final_module.unwrap_or(ScopeId(0)))
+        }
         AuthoritativeProjectBinderFinish::Continuation => builder
             .finish_frozen_library_continuation(final_module)
-            .map_err(str::to_owned)?,
+            .map_err(|error| ProjectBindingCoreError::Binding(error.to_owned()))?,
     };
     let mut project_sources = units
         .iter()
@@ -4450,7 +4692,9 @@ where
         .map(|(unit, module)| {
             let CompilationOrigin::User(original_module_ordinal) = unit.compilation_unit.origin
             else {
-                return Err("project binding received a non-user compilation origin".to_owned());
+                return Err(ProjectBindingCoreError::Binding(
+                    "project binding received a non-user compilation origin".to_owned(),
+                ));
             };
             Ok(ProjectSourceBindingRow {
                 normalized_path: unit.normalized_path.clone(),
@@ -4462,7 +4706,7 @@ where
                 module,
             })
         })
-        .collect::<Result<Vec<_>, String>>()?;
+        .collect::<Result<Vec<_>, ProjectBindingCoreError<Ticket::Error>>>()?;
     project_sources.sort_by(|left, right| left.normalized_path.cmp(&right.normalized_path));
     #[cfg(any(test, feature = "test-utils"))]
     let normalized =
@@ -4935,12 +5179,21 @@ fn imported_symbols<Ticket: UserReportingOwner>(
     default_imports: Option<&[ValidatedDefaultImport<'_>]>,
     reservations: &LexicalReservations<Ticket>,
     effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
-) -> Result<Vec<ImportedSymbol>, Ticket::Error> {
+    diagnostic_disposition: ExternalDiagnosticDisposition,
+) -> Result<Vec<ImportedSymbol>, ProjectBindingCoreError<Ticket::Error>>
+where
+    Ticket::Error: std::fmt::Display,
+{
     let mut imports = Vec::new();
     for import in &unit.imports {
         match &import.source {
             ProjectImportSource::Missing(module) => {
-                enqueue_external_diagnostic(
+                handle_external_diagnostic(
+                    diagnostic_disposition,
+                    ProjectDeclarationStructuralError::CannotFindModule {
+                        module: module.clone(),
+                        span: import.span,
+                    },
                     reservations,
                     effects,
                     unit.module_ordinal,
@@ -4976,7 +5229,13 @@ fn imported_symbols<Ticket: UserReportingOwner>(
                         ));
                     }
                     None => {
-                        enqueue_external_diagnostic(
+                        handle_external_diagnostic(
+                            diagnostic_disposition,
+                            ProjectDeclarationStructuralError::NoExportedMember {
+                                module: import.module.clone(),
+                                member: import.imported.clone(),
+                                span: import.span,
+                            },
                             reservations,
                             effects,
                             unit.module_ordinal,
@@ -4996,7 +5255,12 @@ fn imported_symbols<Ticket: UserReportingOwner>(
     for import in default_imports.into_iter().flatten() {
         match import.declaration.source() {
             DefaultImportCandidateSource::Missing => {
-                enqueue_external_diagnostic(
+                handle_external_diagnostic(
+                    diagnostic_disposition,
+                    ProjectDeclarationStructuralError::CannotFindModule {
+                        module: import.declaration.module_specifier().to_owned(),
+                        span: import.declaration.source_span(),
+                    },
                     reservations,
                     effects,
                     unit.module_ordinal,
@@ -5035,7 +5299,12 @@ fn imported_symbols<Ticket: UserReportingOwner>(
                         ));
                     }
                     None => {
-                        enqueue_external_diagnostic(
+                        handle_external_diagnostic(
+                            diagnostic_disposition,
+                            ProjectDeclarationStructuralError::NoDefaultExport {
+                                module: import.declaration.module_specifier().to_owned(),
+                                span: import.specifier.local_span(),
+                            },
                             reservations,
                             effects,
                             unit.module_ordinal,
@@ -5087,7 +5356,10 @@ fn collect_exports<Ticket: UserReportingOwner>(
     reservations: &LexicalReservations<Ticket>,
     effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
     projection: SourceReexportProjectionContext<'_, '_>,
-) -> Result<ExportSurface, Ticket::Error> {
+) -> Result<ExportSurface, ProjectBindingCoreError<Ticket::Error>>
+where
+    Ticket::Error: std::fmt::Display,
+{
     let mut surface = ExportSurface::default();
     let mut groups = BTreeMap::new();
     let mut context = ExportCollectionContext {
@@ -5098,6 +5370,7 @@ fn collect_exports<Ticket: UserReportingOwner>(
         module_ordinal,
         reservations,
         effects,
+        diagnostic_disposition: projection.diagnostic_disposition,
     };
     for stmt in &program.body {
         let Statement::ExportNamedDeclaration(export) = stmt else {
@@ -5108,6 +5381,17 @@ fn collect_exports<Ticket: UserReportingOwner>(
                 .source_reexports
                 .and_then(|plan| plan.declaration(projection.module_index, export.span.start))
             else {
+                if matches!(
+                    projection.diagnostic_disposition,
+                    ExternalDiagnosticDisposition::RejectTyped
+                ) {
+                    return Err(ProjectBindingCoreError::Structural(
+                        ProjectDeclarationStructuralError::MissingSourceReexportAdmission {
+                            module_ordinal,
+                            owner_start: export.span.start,
+                        },
+                    ));
+                }
                 continue;
             };
             collect_source_reexport(&mut context, validated, projection.dependency_exports)?;
@@ -5231,13 +5515,17 @@ struct SourceReexportProjectionContext<'a, 'e> {
     dependency_exports: &'a [ExportSurface],
     source_reexports: Option<&'a ValidatedSourceReexportPlan<'e>>,
     module_index: usize,
+    diagnostic_disposition: ExternalDiagnosticDisposition,
 }
 
 fn collect_declaration_export<Ticket: UserReportingOwner>(
     context: &mut ExportCollectionContext<'_, Ticket>,
     decl: &Declaration<'_>,
     owner_start: u32,
-) -> Result<(), Ticket::Error> {
+) -> Result<(), ProjectBindingCoreError<Ticket::Error>>
+where
+    Ticket::Error: std::fmt::Display,
+{
     match decl {
         Declaration::VariableDeclaration(var) => {
             for declarator in &var.declarations {
@@ -5392,6 +5680,7 @@ struct ExportCollectionContext<'a, Ticket: UserReportingOwner> {
     module_ordinal: ModuleOrdinal,
     reservations: &'a LexicalReservations<Ticket>,
     effects: &'a mut BTreeMap<UserRecordTicket, CandidateEffects>,
+    diagnostic_disposition: ExternalDiagnosticDisposition,
 }
 
 fn collect_list_export<Ticket: UserReportingOwner>(
@@ -5399,7 +5688,10 @@ fn collect_list_export<Ticket: UserReportingOwner>(
     specifier: &ExportSpecifier<'_>,
     outer_type_only: bool,
     owner_start: u32,
-) -> Result<(), Ticket::Error> {
+) -> Result<(), ProjectBindingCoreError<Ticket::Error>>
+where
+    Ticket::Error: std::fmt::Display,
+{
     let Some(local) = module_export_name(&specifier.local) else {
         return Ok(());
     };
@@ -5420,7 +5712,12 @@ fn collect_list_export<Ticket: UserReportingOwner>(
     // Existence is judged against the real symbol; a value-only local is still a
     // valid `export type { x }` target (the error surfaces on the importer, below).
     if value.is_none() && ty.is_none() && !local_value_barrier && !local_type_barrier {
-        enqueue_external_diagnostic(
+        handle_external_diagnostic(
+            context.diagnostic_disposition,
+            ProjectDeclarationStructuralError::CannotFindName {
+                name: local.to_owned(),
+                span: Span::from_oxc(specifier.local.span()),
+            },
             context.reservations,
             context.effects,
             context.module_ordinal,
@@ -5468,11 +5765,19 @@ fn collect_source_reexport<Ticket: UserReportingOwner>(
     context: &mut ExportCollectionContext<'_, Ticket>,
     validated: &ValidatedSourceReexportDeclaration<'_>,
     dependency_exports: &[ExportSurface],
-) -> Result<(), Ticket::Error> {
+) -> Result<(), ProjectBindingCoreError<Ticket::Error>>
+where
+    Ticket::Error: std::fmt::Display,
+{
     let declaration = validated.declaration;
     let target = match declaration.source() {
         AdmittedSourceReexportSource::Missing => {
-            enqueue_external_diagnostic(
+            handle_external_diagnostic(
+                context.diagnostic_disposition,
+                ProjectDeclarationStructuralError::CannotFindModule {
+                    module: declaration.module_specifier().to_owned(),
+                    span: declaration.source_span(),
+                },
                 context.reservations,
                 context.effects,
                 context.module_ordinal,
@@ -5513,7 +5818,13 @@ fn collect_source_reexport<Ticket: UserReportingOwner>(
             }
             None => {
                 if target.is_some() {
-                    enqueue_external_diagnostic(
+                    handle_external_diagnostic(
+                        context.diagnostic_disposition,
+                        ProjectDeclarationStructuralError::NoExportedMember {
+                            module: declaration.module_specifier().to_owned(),
+                            member: member.imported().to_owned(),
+                            span: member.span(),
+                        },
                         context.reservations,
                         context.effects,
                         context.module_ordinal,
@@ -5554,7 +5865,10 @@ fn insert_collected_export<Ticket: UserReportingOwner>(
     span: Span,
     owner_start: u32,
     source_reexport: bool,
-) -> Result<(), Ticket::Error> {
+) -> Result<(), ProjectBindingCoreError<Ticket::Error>>
+where
+    Ticket::Error: std::fmt::Display,
+{
     let current = CollectedExportSite { span, owner_start };
     let Some(group) = context.groups.get(name) else {
         context.surface.insert(name.to_owned(), slots);
@@ -5588,7 +5902,12 @@ fn insert_collected_export<Ticket: UserReportingOwner>(
         group.sites.clone()
     };
     for prior in prior_sites {
-        enqueue_external_diagnostic(
+        handle_external_diagnostic(
+            context.diagnostic_disposition,
+            ProjectDeclarationStructuralError::DuplicateIdentifier {
+                name: name.to_owned(),
+                span: prior.span,
+            },
             context.reservations,
             context.effects,
             context.module_ordinal,
@@ -5596,7 +5915,12 @@ fn insert_collected_export<Ticket: UserReportingOwner>(
             Diagnostic::duplicate_identifier(prior.span, name),
         )?;
     }
-    enqueue_external_diagnostic(
+    handle_external_diagnostic(
+        context.diagnostic_disposition,
+        ProjectDeclarationStructuralError::DuplicateIdentifier {
+            name: name.to_owned(),
+            span,
+        },
         context.reservations,
         context.effects,
         context.module_ordinal,
@@ -5632,6 +5956,31 @@ fn enqueue_external_diagnostic<Ticket: UserReportingOwner>(
         .or_insert_with(|| CandidateEffects::new(owner))
         .diagnostic(diagnostic);
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_external_diagnostic<Ticket: UserReportingOwner>(
+    disposition: ExternalDiagnosticDisposition,
+    structural: ProjectDeclarationStructuralError,
+    reservations: &LexicalReservations<Ticket>,
+    effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
+    module_ordinal: ModuleOrdinal,
+    owner_start: u32,
+    diagnostic: Diagnostic,
+) -> Result<(), ProjectBindingCoreError<Ticket::Error>> {
+    match disposition {
+        ExternalDiagnosticDisposition::Emit => enqueue_external_diagnostic(
+            reservations,
+            effects,
+            module_ordinal,
+            owner_start,
+            diagnostic,
+        )
+        .map_err(ProjectBindingCoreError::Reporting),
+        ExternalDiagnosticDisposition::RejectTyped => {
+            Err(ProjectBindingCoreError::Structural(structural))
+        }
+    }
 }
 
 fn enqueue_local_ambient_export_alias_diagnostics<Ticket: UserReportingOwner>(

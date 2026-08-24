@@ -1534,6 +1534,7 @@ enum BuilderUseMode {
     Pristine,
     #[cfg(any(test, feature = "test-utils"))]
     Project,
+    Product,
     Library,
     Continuation,
 }
@@ -1542,6 +1543,117 @@ impl<'ast> ProjectBinderBuilder<'ast> {
     pub fn new_empty_library_prelude(prelude: &'ast Program<'ast>) -> Self {
         let manifest = SourceDeclarationManifest::empty_for_program(prelude);
         Self::new_with_declaration_manifest(prelude, &manifest)
+    }
+
+    /// Instantiate the immutable declaration product into one fresh writable project binder.
+    pub fn from_library_declaration_product(
+        product: &typokat_library_product::LibraryDeclarationProduct,
+    ) -> Result<
+        (Self, Vec<LibraryBinderUnit>),
+        crate::binder::namespace::LibraryProductInstantiationError,
+    > {
+        Self::from_library_declaration_product_inner(product, 0)
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn from_library_declaration_product_perturbed_for_test(
+        product: &typokat_library_product::LibraryDeclarationProduct,
+        rows: usize,
+    ) -> Result<
+        (Self, Vec<LibraryBinderUnit>),
+        crate::binder::namespace::LibraryProductInstantiationError,
+    > {
+        Self::from_library_declaration_product_inner(product, rows)
+    }
+
+    fn from_library_declaration_product_inner(
+        product: &typokat_library_product::LibraryDeclarationProduct,
+        perturb_local_ids: usize,
+    ) -> Result<
+        (Self, Vec<LibraryBinderUnit>),
+        crate::binder::namespace::LibraryProductInstantiationError,
+    > {
+        let mut state = BindState {
+            graph: ScopeGraph::new(),
+            symbols: SymbolTable::new(),
+            declarations: DeclarationTable::default(),
+            type_groups: TypeGroupTable::default(),
+            namespaces: NamespaceTable::default(),
+            module_sources: LayeredMap::default(),
+            library_module_ordinals: FxHashMap::default(),
+            type_group_library_ordinals: FxHashMap::default(),
+            fn_scopes: FxHashMap::default(),
+            fn_decl_ids: FxHashMap::default(),
+            default_function_values: FxHashMap::default(),
+            block_scopes: FxHashMap::default(),
+            global_overlay_scopes: FxHashMap::default(),
+            placement_syntax: FxHashMap::default(),
+            symbol_declaration_orders: FxHashMap::default(),
+            current_module: ScopeId(0),
+            next_value_storage: 0,
+            next_source_key: SourceUnitKey(1),
+            continuation_publication: None,
+            frozen_prefix_writes: Vec::new(),
+        };
+        let prelude_module = state.graph.push(Scope::new(ScopeKind::Module, None));
+        state.current_module = prelude_module;
+        state.record_module_source(prelude_module, SourceUnitKey::PRELUDE);
+        let compilation_global = state.graph.push(Scope::new(
+            ScopeKind::CompilationGlobal,
+            Some(prelude_module),
+        ));
+        let script_namespace_root = state.graph.push(Scope::new(
+            ScopeKind::ScriptNamespaceRoot,
+            Some(compilation_global),
+        ));
+        for index in 0..perturb_local_ids {
+            state
+                .symbols
+                .push(Symbol::new(format!("__product_perturbation_{index}")));
+            state.fresh_value_storage();
+        }
+        let facts = crate::binder::namespace::instantiate_library_declaration_product(
+            &mut state,
+            product,
+            compilation_global,
+            script_namespace_root,
+        )?;
+        for unit in &facts.units {
+            state.record_module_source(unit.module, unit.source);
+            state
+                .type_group_library_ordinals
+                .insert(unit.module, unit.ordinal);
+        }
+        state.current_module = facts.final_module;
+        state.fn_scopes = facts.fn_scopes;
+        state.fn_decl_ids = facts.fn_decl_ids;
+        let next_source = u32::try_from(product.source_count())
+            .unwrap_or(u32::MAX)
+            .saturating_add(1);
+        state.next_source_key = SourceUnitKey(next_source);
+        Ok((
+            Self {
+                state,
+                prelude_module,
+                compilation_global,
+                delta_compilation_global: None,
+                script_namespace_root,
+                prelude_type_group_count: 0,
+                use_mode: BuilderUseMode::Product,
+                empty_prelude: true,
+                continuation_publication_plans: FxHashMap::default(),
+                pending_namespace_modules: Vec::new(),
+                library_root_projection: None,
+            },
+            facts.units,
+        ))
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn begin_one_root_project_for_test(&mut self) {
+        assert_eq!(self.use_mode, BuilderUseMode::Library);
+        self.state.library_module_ordinals.clear();
+        self.use_mode = BuilderUseMode::Product;
     }
 
     #[cfg(any(test, feature = "test-utils"))]
@@ -1667,6 +1779,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             BuilderUseMode::Pristine | BuilderUseMode::Project => {
                 self.use_mode = BuilderUseMode::Project;
             }
+            BuilderUseMode::Product => {}
             BuilderUseMode::Library => {
                 panic!("project modules cannot follow the one-shot library batch")
             }
@@ -1674,7 +1787,10 @@ impl<'ast> ProjectBinderBuilder<'ast> {
         }
         let mut roots = Vec::new();
         for (program, unit) in units {
-            if self.use_mode == BuilderUseMode::Continuation {
+            if matches!(
+                self.use_mode,
+                BuilderUseMode::Product | BuilderUseMode::Continuation
+            ) {
                 let binding_sites =
                     source_global_binding_census_with_provenance(program, unit.binding)
                         .binding_sites
@@ -1820,6 +1936,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             BuilderUseMode::Pristine | BuilderUseMode::Project => {
                 self.use_mode = BuilderUseMode::Project;
             }
+            BuilderUseMode::Product => {}
             BuilderUseMode::Library => {
                 panic!("project modules cannot follow the one-shot library batch")
             }
@@ -1842,7 +1959,10 @@ impl<'ast> ProjectBinderBuilder<'ast> {
         for import in imports {
             placeholders.push(declare_import(&mut self.state, module, import));
         }
-        if self.use_mode == BuilderUseMode::Continuation {
+        if matches!(
+            self.use_mode,
+            BuilderUseMode::Product | BuilderUseMode::Continuation
+        ) {
             let mut publication = self
                 .continuation_publication_plans
                 .remove(&unit.source)
@@ -2022,8 +2142,10 @@ impl<'ast> ProjectBinderBuilder<'ast> {
         match self.use_mode {
             BuilderUseMode::Pristine => self.use_mode = BuilderUseMode::Library,
             #[cfg(any(test, feature = "test-utils"))]
-            BuilderUseMode::Project => return Err(LibraryBinderError::RequiresPristineBuilder),
-            BuilderUseMode::Library | BuilderUseMode::Continuation => {
+            BuilderUseMode::Project => {
+                return Err(LibraryBinderError::RequiresPristineBuilder);
+            }
+            BuilderUseMode::Product | BuilderUseMode::Library | BuilderUseMode::Continuation => {
                 return Err(LibraryBinderError::AlreadyAdded);
             }
         }

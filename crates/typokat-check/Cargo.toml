@@ -19,6 +19,7 @@ typokat-binder.workspace = true
 typokat-core.workspace = true
 typokat-diagnostics.workspace = true
 typokat-frontend.workspace = true
+typokat-library-product.workspace = true
 typokat-relate.workspace = true
 typokat-types.workspace = true
 

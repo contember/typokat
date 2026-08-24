@@ -10,6 +10,7 @@ mod layered;
 mod lookup;
 mod metadata;
 mod models_ids;
+mod product;
 mod values;
 mod walking;
 
@@ -25,6 +26,8 @@ pub(super) use metadata::{
 #[allow(unused_imports)]
 pub(crate) use models_ids::NameId;
 pub use models_ids::*;
+pub(in crate::binder) use product::instantiate_library_declaration_product;
+pub use product::LibraryProductInstantiationError;
 #[allow(unused_imports)]
 pub(crate) use values::NamespaceValueAttachmentPlan;
 pub(super) use values::{
