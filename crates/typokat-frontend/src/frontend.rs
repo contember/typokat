@@ -876,6 +876,11 @@ pub struct PreparedProjectRun<Product> {
     pub product: Option<Product>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PreparedProjectParseWork {
+    pub parser_invocations: u64,
+}
+
 /// Parse every user source once, reject the whole batch, then expose the prepared programs.
 pub fn run_prepared_project_frontend<Product>(
     inputs: Vec<FileInput>,
@@ -885,13 +890,35 @@ pub fn run_prepared_project_frontend<Product>(
         &DefaultModuleCandidates,
     ) -> Product,
 ) -> PreparedProjectRun<Product> {
+    run_prepared_project_frontend_with_parse_work(
+        inputs,
+        |units, source_reexports, default_modules, _| {
+            consume(units, source_reexports, default_modules)
+        },
+    )
+}
+
+/// Parse a prepared project and expose the parser-entry receipt to its AST owner.
+pub fn run_prepared_project_frontend_with_parse_work<Product>(
+    inputs: Vec<FileInput>,
+    consume: impl for<'ast> FnOnce(
+        &[ProjectProgram<'ast>],
+        &AdmittedSourceReexports,
+        &DefaultModuleCandidates,
+        PreparedProjectParseWork,
+    ) -> Product,
+) -> PreparedProjectRun<Product> {
     let allocators = (0..inputs.len())
         .map(|_| Allocator::default())
         .collect::<Vec<_>>();
+    let mut parse_work = PreparedProjectParseWork::default();
     let parsed: Vec<_> = inputs
         .iter()
         .zip(&allocators)
-        .map(|(input, allocator)| Parser::new(allocator, &input.source, SourceType::ts()).parse())
+        .map(|(input, allocator)| {
+            parse_work.parser_invocations = parse_work.parser_invocations.saturating_add(1);
+            Parser::new(allocator, &input.source, SourceType::ts()).parse()
+        })
         .collect::<Vec<_>>();
     let parse_errors = parsed.iter().map(parse_errors).collect::<Vec<_>>();
     let rejected = parsed
@@ -936,7 +963,10 @@ pub fn run_prepared_project_frontend<Product>(
                                 let admitted = AdmittedSourceReexports {
                                     declarations: finalized.admitted,
                                 };
-                                (None, Some(consume(&units, &admitted, &default_modules)))
+                                (
+                                    None,
+                                    Some(consume(&units, &admitted, &default_modules, parse_work)),
+                                )
                             }
                             Err(error) => (Some(error), None),
                         },

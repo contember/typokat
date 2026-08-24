@@ -33,12 +33,16 @@ pub struct OwnedBaseCrossFileWitness {
     pub consumer_value_storage: ValueStorageId,
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 thread_local! {
     static USER_SOURCE_PARSE_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static USER_SOURCE_BIND_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static USER_SOURCE_CHECK_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     pub(super) static USER_DELTA_FORKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+thread_local! {
     static PRIVATE_REPLAY_PRODUCTION_CONTROL:
         std::cell::RefCell<Option<PrivateReplayProductionControlForTest>> =
         const { std::cell::RefCell::new(None) };
@@ -166,10 +170,10 @@ pub(in crate::check::checker) fn record_private_replay_trace_for_test(
     });
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 pub struct UserDeltaForkScopeForTest(u64);
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 impl UserDeltaForkScopeForTest {
     pub fn start() -> Self {
         Self(USER_DELTA_FORKS.get())
@@ -180,7 +184,7 @@ impl UserDeltaForkScopeForTest {
     }
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UserSourceWorkForTest {
     pub parses: u64,
@@ -188,7 +192,7 @@ pub struct UserSourceWorkForTest {
     pub checks: u64,
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 fn user_source_work_for_test() -> UserSourceWorkForTest {
     UserSourceWorkForTest {
         parses: USER_SOURCE_PARSE_CALLS.get(),
@@ -197,7 +201,7 @@ fn user_source_work_for_test() -> UserSourceWorkForTest {
     }
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 pub fn record_user_source_parses_for_test(count: usize) {
     USER_SOURCE_PARSE_CALLS.set(
         USER_SOURCE_PARSE_CALLS
@@ -206,7 +210,7 @@ pub fn record_user_source_parses_for_test(count: usize) {
     );
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 pub fn record_user_source_binds_for_test(count: usize) {
     USER_SOURCE_BIND_CALLS.set(
         USER_SOURCE_BIND_CALLS
@@ -215,7 +219,7 @@ pub fn record_user_source_binds_for_test(count: usize) {
     );
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 pub fn record_user_source_checks_for_test(count: usize) {
     USER_SOURCE_CHECK_CALLS.set(
         USER_SOURCE_CHECK_CALLS
@@ -224,10 +228,10 @@ pub fn record_user_source_checks_for_test(count: usize) {
     );
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 pub struct UserSourceWorkScopeForTest(UserSourceWorkForTest);
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 impl UserSourceWorkScopeForTest {
     pub fn start() -> Self {
         Self(user_source_work_for_test())

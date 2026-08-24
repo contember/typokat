@@ -5,6 +5,8 @@ mod declaration_product;
 pub mod profile;
 #[cfg(feature = "project-binder-probe")]
 pub mod project_binder_probe;
+#[cfg(any(test, feature = "project-binder-probe"))]
+mod project_binder_projection;
 mod provider;
 pub mod records;
 
@@ -17,9 +19,9 @@ pub(crate) use typokat_frontend::frontend;
 pub(crate) use typokat_core::test_support;
 #[cfg(test)]
 pub(crate) use typokat_diagnostics::diagnostics;
-#[cfg(test)]
+#[cfg(any(test, feature = "project-binder-probe"))]
 pub(crate) use typokat_relate::relate;
-#[cfg(test)]
+#[cfg(any(test, feature = "project-binder-probe"))]
 pub(crate) use typokat_types::types;
 
 pub use crate::source::LibraryFileOrdinal;

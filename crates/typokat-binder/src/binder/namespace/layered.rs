@@ -170,6 +170,10 @@ impl NamespaceTable {
         self.fragments.get(id.index())
     }
 
+    pub fn deferred_module(&self, id: DeferredModuleId) -> Option<&DeferredAmbientModule> {
+        self.deferred_modules.get(id.index())
+    }
+
     pub fn member(&self, id: NamespaceMemberId) -> Option<&NamespaceMember> {
         self.members.get(id.index())
     }

@@ -8,7 +8,7 @@ use crate::types::store::TypeId;
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 thread_local! {
     static RELATION_CACHE_WRITES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
@@ -84,7 +84,7 @@ pub fn finish_relation_cache_depth_measure() -> RelationCacheDepthMeasure {
     RELATION_CACHE_DEPTH.with(|measure| measure.borrow().clone())
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 fn record_relation_cache_writes_for_test(count: usize) {
     RELATION_CACHE_WRITES.set(
         RELATION_CACHE_WRITES
@@ -93,10 +93,10 @@ fn record_relation_cache_writes_for_test(count: usize) {
     );
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 pub struct RelationCacheWriteScopeForTest(u64);
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 impl RelationCacheWriteScopeForTest {
     pub fn start() -> Self {
         Self(RELATION_CACHE_WRITES.get())
@@ -209,7 +209,7 @@ impl RelationCache {
 
     #[inline]
     pub fn insert(&mut self, key: RelationKey, verdict: bool) {
-        #[cfg(any(test, feature = "test-utils"))]
+        #[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
         record_relation_cache_writes_for_test(1);
         self.entries.insert(key, verdict);
     }
@@ -217,7 +217,7 @@ impl RelationCache {
     /// Promote a completed query's local decisions into this durable cache.
     /// Exhausted or otherwise tainted queries drop their local cache instead.
     pub(crate) fn promote(&mut self, pending: RelationCache) {
-        #[cfg(any(test, feature = "test-utils"))]
+        #[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
         record_relation_cache_writes_for_test(pending.entries.len());
         debug_assert!(
             pending.base.is_none(),

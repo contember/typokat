@@ -51,6 +51,7 @@ fn phase_counters_json(counters: ProjectBinderPhaseCountersV1) -> Value {
         "bound_library_units": counters.bound_library_units,
         "bound_user_units": counters.bound_user_units,
         "typed_binding_products": counters.typed_binding_products,
+        "heavy_binding_projections": counters.heavy_binding_projections,
         "user_parses": counters.user_parses,
         "user_binds": counters.user_binds,
         "user_checks": counters.user_checks,
@@ -119,6 +120,7 @@ fn assert_binary_uses_typed_receipts() {
     assert!(binary.contains("phase_receipt().counters()"));
     assert!(binary.contains("finish_result()"));
     assert!(!binary.contains("ProjectBinderPhaseReceiptV1 {"));
+    assert!(!binary.contains("const PRODUCT_DIGEST"));
     #[cfg(feature = "jemalloc-wall")]
     assert_markers_in_order(
         rust_function_body(binary, "fn run_wall"),
@@ -185,6 +187,7 @@ fn assert_exact_phase_work(work: &Value, invocations: u64) {
     assert_eq!(work["bound_library_units"], invocations * 82);
     assert_eq!(work["bound_user_units"], invocations);
     assert_eq!(work["typed_binding_products"], invocations);
+    assert_eq!(work["heavy_binding_projections"], 0);
     assert_eq!(work["user_parses"], 0);
     assert_eq!(work["user_binds"], invocations);
     assert_eq!(work["user_checks"], 0);
@@ -215,6 +218,33 @@ fn assert_exact_phase_work(work: &Value, invocations: u64) {
     }
 }
 
+#[test]
+fn probe_feature_excludes_heavy_test_normalization() {
+    let library_manifest = include_str!("../../typokat-library/Cargo.toml");
+    let feature = library_manifest
+        .split_once("project-binder-probe = [")
+        .and_then(|(_, tail)| tail.split_once(']'))
+        .map(|(feature, _)| feature)
+        .expect("probe feature declaration");
+    assert!(feature.contains("typokat-check/measurement-counters"));
+    assert!(!feature.contains("test-utils"));
+
+    let checker = include_str!("../../typokat-check/src/check/checker/mod.rs");
+    let normalized = checker
+        .find("    pub normalized: ProjectBindingProductForTest,")
+        .expect("heavy normalized product field");
+    let field_cfg = checker[..normalized]
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .expect("normalized product cfg");
+    assert_eq!(field_cfg, "    #[cfg(any(test, feature = \"test-utils\"))]");
+
+    let probe = include_str!("../../typokat-library/src/project_binder_probe.rs");
+    assert!(!probe.contains(".normalized"));
+    assert!(!probe.contains("ProjectBindingProductForTest"));
+}
+
 #[cfg(feature = "dhat-heap")]
 fn heap_stat(receipt: &Value, field: &str) -> u64 {
     receipt["heap"][field]
@@ -224,7 +254,6 @@ fn heap_stat(receipt: &Value, field: &str) -> u64 {
 
 #[cfg(feature = "jemalloc-wall")]
 #[test]
-#[ignore = "WU3 RED: the typed library seam is not implemented"]
 fn cli_receipt_uses_the_opaque_library_phase_receipt() {
     let typed = typed_one_sample(ProbeSetupControl::None);
     let cli = successful_receipt(&["wall", "--warmups", "0", "--samples", "1"]);
@@ -245,7 +274,6 @@ fn cli_receipt_uses_the_opaque_library_phase_receipt() {
 
 #[cfg(feature = "jemalloc-wall")]
 #[test]
-#[ignore = "WU3 RED: the release wall probe is not implemented"]
 fn wall_probe_emits_authenticated_production_receipt() {
     let receipt = successful_receipt(&["wall"]);
     assert_common_receipt(&receipt, "wall");
@@ -272,7 +300,6 @@ fn wall_probe_emits_authenticated_production_receipt() {
 
 #[cfg(feature = "jemalloc-wall")]
 #[test]
-#[ignore = "WU3 RED: repeated wall samples do not yet prove fresh binder construction"]
 fn every_wall_sample_constructs_one_fresh_binder() {
     let receipt = successful_receipt(&["wall", "--warmups", "0", "--samples", "2"]);
     assert_common_receipt(&receipt, "wall");
@@ -289,9 +316,24 @@ fn every_wall_sample_constructs_one_fresh_binder() {
     );
 }
 
+#[cfg(feature = "jemalloc-wall")]
+#[test]
+fn wall_cli_rejects_unknown_duplicate_missing_and_zero_arguments() {
+    for arguments in [
+        &["wall", "--unknown"] as &[&str],
+        &["wall", "--warmups", "1", "--warmups", "2"],
+        &["wall", "--samples"],
+        &["wall", "--samples", "0"],
+    ] {
+        assert!(
+            !invoke_probe(arguments).status.success(),
+            "accepted {arguments:?}"
+        );
+    }
+}
+
 #[cfg(feature = "dhat-heap")]
 #[test]
-#[ignore = "WU3 RED: the release DHAT phase-boundary controls are not implemented"]
 fn heap_probe_excludes_setup_and_includes_measured_control_allocation() {
     let typed_baseline = typed_one_sample(ProbeSetupControl::None);
     let typed_setup = typed_one_sample(ProbeSetupControl::RetainedOneMiB);
@@ -365,4 +407,25 @@ fn heap_probe_excludes_setup_and_includes_measured_control_allocation() {
     assert!(
         heap_stat(&baseline, "peak_live_bytes") >= heap_stat(&baseline, "live_bytes_at_snapshot")
     );
+}
+
+#[cfg(feature = "dhat-heap")]
+#[test]
+fn heap_cli_rejects_unknown_duplicate_and_missing_arguments() {
+    for arguments in [
+        &["heap", "--unknown"] as &[&str],
+        &["heap", "--control"],
+        &[
+            "heap",
+            "--control",
+            "none",
+            "--control",
+            "phase-retained-1m",
+        ],
+    ] {
+        assert!(
+            !invoke_probe(arguments).status.success(),
+            "accepted {arguments:?}"
+        );
+    }
 }

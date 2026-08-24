@@ -12,11 +12,11 @@ the returned binder alive until after the wall clock or heap snapshot is read. T
 serializes the opaque `ProjectBinderPhaseReceiptV1` returned by `typokat-library`; it does not
 assemble lifecycle counters itself.
 
-Run the ignored contract in the same release profile used for measurement:
+Run the contract in the same release profile used for measurement:
 
 ```sh
 cpu-lease run -n 2 --no-smt -- cargo test --release \
-  -p typokat-project-binder-probe --test contract -- --ignored --nocapture
+  -p typokat-project-binder-probe --test contract -- --nocapture
 ```
 
 Run the DHAT phase-boundary contract separately because it uses a mutually exclusive allocator
@@ -28,7 +28,7 @@ cpu-lease run -n 2 --no-smt -- cargo test --release \
   --no-default-features --features dhat-heap \
   --test contract \
   heap_probe_excludes_setup_and_includes_measured_control_allocation \
-  -- --ignored --exact --nocapture
+  -- --exact --nocapture
 ```
 
 Run wall samples with the production CLI allocator. Ten warm-ups and 31 samples are the defaults:

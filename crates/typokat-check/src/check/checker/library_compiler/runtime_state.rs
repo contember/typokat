@@ -106,7 +106,7 @@ impl OwnedLibraryRuntimeState {
     }
 
     fn fork_user_delta(&self) -> Result<Self, &'static str> {
-        #[cfg(any(test, feature = "test-utils"))]
+        #[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
         USER_DELTA_FORKS.set(USER_DELTA_FORKS.get().saturating_add(1));
         Ok(Self {
             interner: self.interner.fork_delta()?,

@@ -15,17 +15,17 @@ use oxc_ast_visit::{walk, Visit};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 thread_local! {
     static SOURCE_DECLARATION_MANIFEST_BUILDS_FOR_TEST: std::cell::Cell<u64> = const {
         std::cell::Cell::new(0)
     };
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 pub struct SourceDeclarationManifestBuildScopeForTest(u64);
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 impl SourceDeclarationManifestBuildScopeForTest {
     pub fn start() -> Self {
         Self(SOURCE_DECLARATION_MANIFEST_BUILDS_FOR_TEST.get())
@@ -214,7 +214,7 @@ impl<'ast> SourceDeclarationManifest<'ast> {
     }
 
     pub fn build(program: &'ast Program<'ast>) -> Self {
-        #[cfg(any(test, feature = "test-utils"))]
+        #[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
         SOURCE_DECLARATION_MANIFEST_BUILDS_FOR_TEST.set(
             SOURCE_DECLARATION_MANIFEST_BUILDS_FOR_TEST
                 .get()

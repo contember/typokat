@@ -53,7 +53,7 @@ pub(super) fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRo
                 },
             )
     };
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
     CANONICAL_FRONTEND_FULL_PRODUCTS.set(CANONICAL_FRONTEND_FULL_PRODUCTS.get().saturating_add(1));
     #[cfg(any(test, feature = "test-utils"))]
     let independent_event_owner_sites = if replay_index_plan == ReplayIndexPlan::None {

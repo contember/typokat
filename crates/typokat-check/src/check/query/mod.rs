@@ -370,6 +370,10 @@ thread_local! {
     static PUBLICATION_UNIQUE_EDGES: std::cell::RefCell<FxHashSet<(TypeId, TypeId)>> =
         std::cell::RefCell::new(FxHashSet::default());
     static QUERY_SOURCE_COLD_ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
+thread_local! {
     static PROJECTION_CACHE_WRITES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static EVALUATOR_CACHE_WRITES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
@@ -458,17 +462,17 @@ fn record_relation_driver_expand(demand: RelationDemand) {
     });
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct QueryCacheWritesForTest {
     pub projection: u64,
     pub evaluator: u64,
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 pub struct QueryCacheWriteScopeForTest(QueryCacheWritesForTest);
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 impl QueryCacheWriteScopeForTest {
     pub fn start() -> Self {
         Self(QueryCacheWritesForTest {
@@ -509,7 +513,7 @@ fn commit_query_cache_entries(
     pending_projection: FxHashMap<TypeId, TypeId>,
     pending_evaluator: FxHashMap<TypeId, TypeId>,
 ) {
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
     {
         PROJECTION_CACHE_WRITES.set(
             PROJECTION_CACHE_WRITES

@@ -171,6 +171,6 @@ pub use replay_control::*;
 pub use runtime_model::*;
 #[cfg(any(test, feature = "test-utils"))]
 pub use runtime_state::*;
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 pub use runtime_witness::*;
 use terminal_validation::*;

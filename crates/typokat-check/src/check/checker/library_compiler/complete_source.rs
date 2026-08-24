@@ -830,7 +830,7 @@ fn with_canonical_frontend<'source, Output>(
     .map_err(|error| InjectedProfileError::Binder(error.to_string()))?;
     #[cfg(any(test, feature = "test-utils"))]
     let bind_elapsed = bind_started.elapsed();
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
     {
         CANONICAL_FRONTEND_ENTRIES.set(CANONICAL_FRONTEND_ENTRIES.get().saturating_add(1));
         CANONICAL_FRONTEND_PARSE_UNITS.set(

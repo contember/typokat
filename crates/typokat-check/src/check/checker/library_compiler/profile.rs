@@ -688,7 +688,7 @@ pub(super) fn certify_library_values(roots: &LibraryRootProjection) -> Certified
     CertifiedLibraryValues { symbol }
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 thread_local! {
     pub(super) static CANONICAL_FRONTEND_ENTRIES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     pub(super) static CANONICAL_FRONTEND_PARSE_UNITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -698,7 +698,7 @@ thread_local! {
     pub(super) static CANONICAL_FRONTEND_CHECKPOINT_PRODUCTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CanonicalLibraryFrontendWorkForTest {
     pub entries: u64,
@@ -709,7 +709,7 @@ pub struct CanonicalLibraryFrontendWorkForTest {
     pub checkpoint_products_consumed: u64,
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 fn canonical_library_frontend_work_for_test() -> CanonicalLibraryFrontendWorkForTest {
     CanonicalLibraryFrontendWorkForTest {
         entries: CANONICAL_FRONTEND_ENTRIES.get(),
@@ -721,10 +721,10 @@ fn canonical_library_frontend_work_for_test() -> CanonicalLibraryFrontendWorkFor
     }
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 pub struct CanonicalLibraryFrontendWorkScopeForTest(CanonicalLibraryFrontendWorkForTest);
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 impl CanonicalLibraryFrontendWorkScopeForTest {
     pub fn start() -> Self {
         Self(canonical_library_frontend_work_for_test())

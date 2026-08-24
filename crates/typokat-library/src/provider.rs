@@ -6,6 +6,47 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
+#[cfg(feature = "project-binder-probe")]
+thread_local! {
+    static PROBE_DECLARATION_PRODUCT_INITIALIZATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static PROBE_SEMANTIC_BASE_INITIALIZATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(feature = "project-binder-probe")]
+#[derive(Clone, Copy)]
+pub(crate) struct ProjectBinderInitializationWorkForProbe {
+    pub(crate) declaration_products: u64,
+    pub(crate) semantic_bases: u64,
+}
+
+#[cfg(feature = "project-binder-probe")]
+pub(crate) struct ProjectBinderInitializationScopeForProbe(ProjectBinderInitializationWorkForProbe);
+
+#[cfg(feature = "project-binder-probe")]
+impl ProjectBinderInitializationScopeForProbe {
+    pub(crate) fn start() -> Self {
+        Self(project_binder_initialization_work_for_probe())
+    }
+
+    pub(crate) fn finish(self) -> ProjectBinderInitializationWorkForProbe {
+        let end = project_binder_initialization_work_for_probe();
+        ProjectBinderInitializationWorkForProbe {
+            declaration_products: end
+                .declaration_products
+                .saturating_sub(self.0.declaration_products),
+            semantic_bases: end.semantic_bases.saturating_sub(self.0.semantic_bases),
+        }
+    }
+}
+
+#[cfg(feature = "project-binder-probe")]
+fn project_binder_initialization_work_for_probe() -> ProjectBinderInitializationWorkForProbe {
+    ProjectBinderInitializationWorkForProbe {
+        declaration_products: PROBE_DECLARATION_PRODUCT_INITIALIZATIONS.get(),
+        semantic_bases: PROBE_SEMANTIC_BASE_INITIALIZATIONS.get(),
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LibraryInitStage {
     ProfileLoad,
@@ -191,6 +232,12 @@ impl LibraryBaseProvider {
     > {
         self.declaration_product
             .get_or_init(|| {
+                #[cfg(feature = "project-binder-probe")]
+                PROBE_DECLARATION_PRODUCT_INITIALIZATIONS.set(
+                    PROBE_DECLARATION_PRODUCT_INITIALIZATIONS
+                        .get()
+                        .saturating_add(1),
+                );
                 super::declaration_product::build_packaged_declaration_product().map_err(Arc::new)
             })
             .clone()
@@ -443,6 +490,9 @@ impl LibraryBaseProvider {
     }
 
     fn initialize(&self) -> Result<Arc<InitializedLibrary>, Arc<LibraryInitError>> {
+        #[cfg(feature = "project-binder-probe")]
+        PROBE_SEMANTIC_BASE_INITIALIZATIONS
+            .set(PROBE_SEMANTIC_BASE_INITIALIZATIONS.get().saturating_add(1));
         self.attempts.fetch_add(1, Ordering::Relaxed);
         let compile = Instant::now();
         let compiled = FrozenLibraryBase::compile_packaged_profile().map_err(Arc::new)?;

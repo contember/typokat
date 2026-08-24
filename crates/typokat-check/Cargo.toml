@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 
 [features]
+measurement-counters = [
+    "typokat-binder/measurement-counters",
+    "typokat-relate/measurement-counters",
+    "typokat-types/measurement-counters",
+]
 test-utils = []
 
 [dependencies]

@@ -11,7 +11,7 @@ use crate::source::LibraryFileOrdinal;
 use sha2::{Digest, Sha256};
 use std::fmt;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "project-binder-probe"))]
 thread_local! {
     static COMPILER_INVOCATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static COMPILER_SOURCE_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -20,7 +20,7 @@ thread_local! {
     static COMPILER_CHECK_UNITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "project-binder-probe"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct LibraryCompilerWorkForTest {
     pub(crate) compiles: u64,
@@ -29,7 +29,7 @@ pub(crate) struct LibraryCompilerWorkForTest {
     pub(crate) checks: u64,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "project-binder-probe"))]
 fn compiler_work_for_test() -> LibraryCompilerWorkForTest {
     LibraryCompilerWorkForTest {
         compiles: COMPILER_INVOCATIONS.get(),
@@ -39,10 +39,10 @@ fn compiler_work_for_test() -> LibraryCompilerWorkForTest {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "project-binder-probe"))]
 pub(crate) struct LibraryCompilerWorkScopeForTest(LibraryCompilerWorkForTest);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "project-binder-probe"))]
 impl LibraryCompilerWorkScopeForTest {
     pub(crate) fn start() -> Self {
         Self(compiler_work_for_test())
@@ -185,7 +185,7 @@ impl LibraryCompiler {
         &self,
         profile: &ExactLibraryProfile,
     ) -> Result<LibraryBinderCheckpoint, LibraryCompilerError> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "project-binder-probe"))]
         {
             COMPILER_INVOCATIONS.set(COMPILER_INVOCATIONS.get().saturating_add(1));
             COMPILER_SOURCE_BYTES.set(COMPILER_SOURCE_BYTES.get().saturating_add(
@@ -201,7 +201,7 @@ impl LibraryCompiler {
                 .map_err(|error| LibraryCompilerError::Compilation {
                 message: format!("{error:?}"),
             })?;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "project-binder-probe"))]
         {
             let unit_count = u64::try_from(injected.len()).unwrap_or(u64::MAX);
             COMPILER_PARSE_UNITS.set(COMPILER_PARSE_UNITS.get().saturating_add(unit_count));
@@ -215,7 +215,7 @@ impl LibraryCompiler {
         profile_identity: &str,
         sources: &[ExactLibrarySource],
     ) -> Result<CompiledLibrary, LibraryCompilerError> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "project-binder-probe"))]
         {
             COMPILER_INVOCATIONS.set(COMPILER_INVOCATIONS.get().saturating_add(1));
             let source_bytes = sources.iter().fold(0u64, |total, source| {
@@ -230,7 +230,7 @@ impl LibraryCompiler {
                 message: format!("{error:?}"),
             }
         })?;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "project-binder-probe"))]
         record_phase_counts(&run.phase_counts);
         let runtime = freeze_library_runtime_product(runtime).map_err(|message| {
             LibraryCompilerError::RuntimeProduct {
@@ -280,7 +280,7 @@ pub(crate) fn compile_owned_library_runtime(
     ),
     LibraryCompilerError,
 > {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "project-binder-probe"))]
     {
         COMPILER_INVOCATIONS.set(COMPILER_INVOCATIONS.get().saturating_add(1));
         let source_bytes = profile.sources().iter().fold(0u64, |total, source| {
@@ -294,7 +294,7 @@ pub(crate) fn compile_owned_library_runtime(
         .map_err(|error| LibraryCompilerError::Compilation {
         message: format!("{error:?}"),
     })?;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "project-binder-probe"))]
     record_phase_counts(&run.phase_counts);
     #[cfg(not(test))]
     let _ = run;
@@ -333,7 +333,7 @@ pub(super) fn injected_library_sources(
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "project-binder-probe"))]
 fn record_phase_counts(counts: &crate::check::checker::library_compiler::LibraryPhaseCounts) {
     COMPILER_PARSE_UNITS.set(
         COMPILER_PARSE_UNITS

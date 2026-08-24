@@ -4,7 +4,7 @@ pub fn compile_library_binder_checkpoint(
     sources: &[InjectedLibrarySource<'_>],
 ) -> Result<LibraryBinderCheckpoint, InjectedProfileError> {
     with_canonical_library_frontend(sources, |frontend| {
-        #[cfg(any(test, feature = "test-utils"))]
+        #[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
         CANONICAL_FRONTEND_CHECKPOINT_PRODUCTS.set(
             CANONICAL_FRONTEND_CHECKPOINT_PRODUCTS
                 .get()

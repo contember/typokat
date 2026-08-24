@@ -1,6 +1,6 @@
 use super::super::{
     bind_library_product_project_programs, LibraryProductProjectBindingError,
-    ProjectDeclarationStructuralError,
+    ProjectBindingMeasurementScope, ProjectDeclarationStructuralError,
 };
 use crate::binder::bind::ProjectBinderBuilder;
 use crate::binder::declaration::SourceDeclarationManifest;
@@ -130,4 +130,14 @@ fn product_project_accepts_an_authenticated_source_reexport() {
         ),
     ])
     .expect("authenticated source re-export binds without placeholders");
+}
+
+#[test]
+fn test_utils_authenticates_the_heavy_binding_projection_counter() {
+    let measurement = ProjectBindingMeasurementScope::start();
+    bind(&[("/project/one.ts", "export interface One {}")]).expect("product project binds");
+    let measurement = measurement.finish();
+    assert_eq!(measurement.entries, 1);
+    assert_eq!(measurement.typed_products, 1);
+    assert_eq!(measurement.heavy_binding_projections, 1);
 }

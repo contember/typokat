@@ -7,20 +7,20 @@ use crate::diagnostics::IncompleteSurface;
 use crate::source::ModuleOrdinal;
 use std::collections::BTreeMap;
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 thread_local! {
     static USER_EVENT_RESERVATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 fn record_user_event_reservation_for_test() {
     USER_EVENT_RESERVATIONS.set(USER_EVENT_RESERVATIONS.get().saturating_add(1));
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 pub struct UserEventReservationScopeForTest(u64);
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 impl UserEventReservationScopeForTest {
     pub fn start() -> Self {
         Self(USER_EVENT_RESERVATIONS.get())
@@ -277,9 +277,10 @@ impl EventStore {
         module_ordinal: ModuleOrdinal,
         source_start: u32,
     ) -> ReservedEvent {
+        #[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
+        record_user_event_reservation_for_test();
         #[cfg(any(test, feature = "test-utils"))]
         {
-            record_user_event_reservation_for_test();
             record_reserved_event();
             record_reserved_record_position();
         }
@@ -312,9 +313,10 @@ impl EventStore {
             return Err(EventStoreError::RecordCapacity(event));
         }
         // Secondary record positions are semantic reservations too.
+        #[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
+        record_user_event_reservation_for_test();
         #[cfg(any(test, feature = "test-utils"))]
         {
-            record_user_event_reservation_for_test();
             record_reserved_record_position();
         }
         let ticket = UserRecordTicket {

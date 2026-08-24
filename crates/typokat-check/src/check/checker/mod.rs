@@ -1470,6 +1470,47 @@ impl std::fmt::Debug for BoundProjectBinder {
     }
 }
 
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProjectBindingMeasurementCounters {
+    pub entries: u64,
+    pub bound_units: u64,
+    pub typed_products: u64,
+    pub heavy_binding_projections: u64,
+}
+
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
+pub struct ProjectBindingMeasurementScope(ProjectBindingMeasurementCounters);
+
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
+impl ProjectBindingMeasurementScope {
+    pub fn start() -> Self {
+        Self(project_binding_measurement_counters())
+    }
+
+    pub fn finish(self) -> ProjectBindingMeasurementCounters {
+        let end = project_binding_measurement_counters();
+        ProjectBindingMeasurementCounters {
+            entries: end.entries.saturating_sub(self.0.entries),
+            bound_units: end.bound_units.saturating_sub(self.0.bound_units),
+            typed_products: end.typed_products.saturating_sub(self.0.typed_products),
+            heavy_binding_projections: end
+                .heavy_binding_projections
+                .saturating_sub(self.0.heavy_binding_projections),
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
+fn project_binding_measurement_counters() -> ProjectBindingMeasurementCounters {
+    ProjectBindingMeasurementCounters {
+        entries: PROJECT_BINDING_ENTRIES.get(),
+        bound_units: PROJECT_BINDING_BOUND_UNITS.get(),
+        typed_products: PROJECT_BINDING_PRODUCTS.get(),
+        heavy_binding_projections: PROJECT_BINDING_HEAVY_PROJECTIONS.get(),
+    }
+}
+
 #[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProjectBindingProductForTest {
@@ -1478,13 +1519,18 @@ pub struct ProjectBindingProductForTest {
     pub normalized_namespace_shape: Vec<String>,
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 thread_local! {
     static PROJECT_BINDING_ENTRIES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-    static PROJECT_BINDING_FRESH_SEEDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-    static PROJECT_BINDING_CHECKPOINT_SEEDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static PROJECT_BINDING_BOUND_UNITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static PROJECT_BINDING_PRODUCTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static PROJECT_BINDING_HEAVY_PROJECTIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+thread_local! {
+    static PROJECT_BINDING_FRESH_SEEDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static PROJECT_BINDING_CHECKPOINT_SEEDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static PROJECT_BINDING_ORDINARY_CONSUMERS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static PROJECT_BINDING_CONTINUATION_CONSUMERS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static PROJECT_BINDING_FRESH_PRODUCTS: std::cell::RefCell<Vec<ProjectBindingProductForTest>> =
@@ -1501,6 +1547,7 @@ pub struct AuthoritativeProjectBindingWorkForTest {
     pub authenticated_checkpoint_seed_entries: u64,
     pub bound_units: u64,
     pub typed_products_produced: u64,
+    pub heavy_binding_projections: u64,
     pub ordinary_check_products_consumed: u64,
     pub continuation_route_products_consumed: u64,
     pub fresh_project_products: Vec<ProjectBindingProductForTest>,
@@ -1539,6 +1586,9 @@ impl AuthoritativeProjectBindingWorkScopeForTest {
             typed_products_produced: end
                 .typed_products_produced
                 .saturating_sub(self.start.typed_products_produced),
+            heavy_binding_projections: end
+                .heavy_binding_projections
+                .saturating_sub(self.start.heavy_binding_projections),
             ordinary_check_products_consumed: end
                 .ordinary_check_products_consumed
                 .saturating_sub(self.start.ordinary_check_products_consumed),
@@ -1561,6 +1611,7 @@ fn project_binding_work_for_test() -> AuthoritativeProjectBindingWorkForTest {
         authenticated_checkpoint_seed_entries: PROJECT_BINDING_CHECKPOINT_SEEDS.get(),
         bound_units: PROJECT_BINDING_BOUND_UNITS.get(),
         typed_products_produced: PROJECT_BINDING_PRODUCTS.get(),
+        heavy_binding_projections: PROJECT_BINDING_HEAVY_PROJECTIONS.get(),
         ordinary_check_products_consumed: PROJECT_BINDING_ORDINARY_CONSUMERS.get(),
         continuation_route_products_consumed: PROJECT_BINDING_CONTINUATION_CONSUMERS.get(),
         fresh_project_products: Vec::new(),
@@ -1606,6 +1657,11 @@ pub fn merge_project_binding_thread_receipt_for_test(
         PROJECT_BINDING_PRODUCTS
             .get()
             .saturating_add(receipt.typed_products_produced),
+    );
+    PROJECT_BINDING_HEAVY_PROJECTIONS.set(
+        PROJECT_BINDING_HEAVY_PROJECTIONS
+            .get()
+            .saturating_add(receipt.heavy_binding_projections),
     );
     PROJECT_BINDING_ORDINARY_CONSUMERS.set(
         PROJECT_BINDING_ORDINARY_CONSUMERS
@@ -4576,7 +4632,7 @@ where
         source_reexports,
         default_module,
     } = admission;
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
     {
         PROJECT_BINDING_ENTRIES.set(PROJECT_BINDING_ENTRIES.get().saturating_add(1));
         PROJECT_BINDING_BOUND_UNITS.set(
@@ -4709,9 +4765,12 @@ where
         .collect::<Result<Vec<_>, ProjectBindingCoreError<Ticket::Error>>>()?;
     project_sources.sort_by(|left, right| left.normalized_path.cmp(&right.normalized_path));
     #[cfg(any(test, feature = "test-utils"))]
-    let normalized =
-        normalized_project_binding_product(&binder, units, &module_scopes, &module_placeholders);
-    #[cfg(any(test, feature = "test-utils"))]
+    let normalized = {
+        PROJECT_BINDING_HEAVY_PROJECTIONS
+            .set(PROJECT_BINDING_HEAVY_PROJECTIONS.get().saturating_add(1));
+        normalized_project_binding_product(&binder, units, &module_scopes, &module_placeholders)
+    };
+    #[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
     PROJECT_BINDING_PRODUCTS.set(PROJECT_BINDING_PRODUCTS.get().saturating_add(1));
     Ok(BoundProjectBinder {
         binder,

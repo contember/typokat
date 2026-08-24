@@ -35,20 +35,20 @@ thread_local! {
     static BASE_WORK_LEDGER: RefCell<Option<BaseWorkLedgerForTest>> = const { RefCell::new(None) };
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 thread_local! {
     static LOCAL_ROW_ALLOCATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 fn record_local_row_allocation_for_test() {
     LOCAL_ROW_ALLOCATIONS.set(LOCAL_ROW_ALLOCATIONS.get().saturating_add(1));
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 pub struct LocalRowAllocationScopeForTest(u64);
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 impl LocalRowAllocationScopeForTest {
     pub fn start() -> Self {
         Self(LOCAL_ROW_ALLOCATIONS.get())
@@ -444,7 +444,7 @@ impl<T> LayeredVec<T> {
     pub fn push_local(&mut self, value: T) -> usize {
         let index = self.len();
         self.local.push(value);
-        #[cfg(any(test, feature = "test-utils"))]
+        #[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
         record_local_row_allocation_for_test();
         index
     }
@@ -684,7 +684,7 @@ impl<K: Eq + Hash, V> LayeredMap<K, V> {
             return Err("layered map cannot replace a sealed entry");
         }
         let previous = self.local.insert(key, value);
-        #[cfg(any(test, feature = "test-utils"))]
+        #[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
         if previous.is_none() {
             record_local_row_allocation_for_test();
         }
@@ -703,7 +703,7 @@ impl<K: Eq + Hash, V> LayeredMap<K, V> {
             return Some(sealed);
         }
         let previous = self.local.insert(key, value);
-        #[cfg(any(test, feature = "test-utils"))]
+        #[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
         if previous.is_none() {
             record_local_row_allocation_for_test();
         }
@@ -760,7 +760,7 @@ impl<K: Eq + Hash, V> LayeredMap<K, V> {
             std::collections::hash_map::Entry::Occupied(entry) => Ok(entry.into_mut()),
             std::collections::hash_map::Entry::Vacant(entry) => {
                 let value = entry.insert(default());
-                #[cfg(any(test, feature = "test-utils"))]
+                #[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
                 record_local_row_allocation_for_test();
                 Ok(value)
             }
@@ -1004,7 +1004,7 @@ impl<T: Eq + Hash> LayeredSet<T> {
             return Err("layered set cannot replace a sealed entry");
         }
         let inserted = self.local.insert(value);
-        #[cfg(any(test, feature = "test-utils"))]
+        #[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
         if inserted {
             record_local_row_allocation_for_test();
         }

@@ -7,11 +7,7 @@ edition.workspace = true
 project-binder-probe = [
     "dep:typokat-relate",
     "dep:typokat-types",
-    "typokat-binder/test-utils",
-    "typokat-check/test-utils",
-    "typokat-frontend/test-utils",
-    "typokat-relate/test-utils",
-    "typokat-types/test-utils",
+    "typokat-check/measurement-counters",
 ]
 
 [dependencies]
