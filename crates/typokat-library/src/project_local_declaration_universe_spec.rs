@@ -997,6 +997,62 @@ fn project_local_candidate_matches_real_oracle_under_id_perturbation() {
 }
 
 #[test]
+fn packaged_product_map_tracks_a_live_array_reopen_after_legacy_id_perturbation() {
+    let provider = LibraryBaseProvider::new();
+    let candidate = build_candidate_for_test(
+        &provider,
+        &[input(
+            "/candidate/live_array_reopen.ts",
+            "interface Array<T> { wu4PackagedValue?: T }\n",
+        )],
+        true,
+    )
+    .expect("packaged product survives a live Array reopen");
+    let map = candidate
+        .bound
+        .library_product_map_for_test()
+        .expect("product map");
+    let (group_index, recipe) = candidate
+        .product
+        .groups()
+        .iter()
+        .enumerate()
+        .find(|(_, group)| {
+            candidate.product.strings()[group.name.index()] == "Array"
+                && candidate.product.containers()[group.container.index()].kind
+                    == typokat_library_product::ContainerKind::CompilationGlobal
+        })
+        .expect("global Array product group");
+    let key = candidate
+        .product
+        .group_key_at(group_index)
+        .expect("Array product key");
+    let binding = map.group(key).expect("mapped Array group");
+    let symbol = candidate
+        .bound
+        .binder
+        .symbols
+        .get(binding.symbol())
+        .expect("final Array symbol");
+    assert_eq!(symbol.ty, binding.ty());
+    assert_eq!(symbol.value, binding.value());
+    assert_eq!(symbol.ns, binding.namespace());
+    let ty = binding.ty().expect("Array type group");
+    assert!(
+        candidate
+            .bound
+            .binder
+            .type_groups
+            .get(ty)
+            .expect("final Array type group")
+            .fragments
+            .len()
+            > recipe.fragments.len(),
+        "final mapped Array group includes the live user fragment"
+    );
+}
+
+#[test]
 fn candidate_batch_order_does_not_leak_augmentations_or_identities() {
     let cases = project_cases();
     let a = &cases[2];

@@ -188,6 +188,19 @@ impl LibraryDeclarationProduct {
             value_attachment_digest: digest_rows(&self.values),
         }
     }
+
+    /// Canonical dependency SCCs over immutable product group keys.
+    pub fn dependency_sccs(&self) -> Vec<Vec<crate::GroupKey>> {
+        dependency_scc_indices(self)
+            .into_iter()
+            .map(|component| {
+                component
+                    .into_iter()
+                    .map(|index| crate::GroupKey::new(index).expect("validated group index"))
+                    .collect()
+            })
+            .collect()
+    }
 }
 
 fn render_rows<T: std::fmt::Debug>(output: &mut String, table: &str, rows: &[T]) {
@@ -205,6 +218,15 @@ fn digest_rows<T: std::fmt::Debug>(rows: &[T]) -> String {
 }
 
 fn dependency_scc_rows(product: &LibraryDeclarationProduct) -> String {
+    let components = dependency_scc_indices(product);
+    let mut output = String::new();
+    for component in components {
+        let _ = writeln!(output, "{component:?}");
+    }
+    output
+}
+
+fn dependency_scc_indices(product: &LibraryDeclarationProduct) -> Vec<Vec<usize>> {
     let mut edges = vec![Vec::new(); product.groups.len()];
     for dependency in &product.dependencies {
         if let DependencyTarget::Group(target) = dependency.target {
@@ -238,11 +260,7 @@ fn dependency_scc_rows(product: &LibraryDeclarationProduct) -> String {
         components.push(component);
     }
     components.sort();
-    let mut output = String::new();
-    for component in components {
-        let _ = writeln!(output, "{component:?}");
-    }
-    output
+    components
 }
 
 fn finish_order(node: usize, edges: &[Vec<usize>], visited: &mut [bool], order: &mut Vec<usize>) {

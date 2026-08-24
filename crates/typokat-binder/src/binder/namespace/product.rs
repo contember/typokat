@@ -44,6 +44,174 @@ pub struct LibraryProductInstantiationFacts {
     pub final_module: ScopeId,
     pub fn_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
     pub fn_decl_ids: FxHashMap<(ScopeId, u32), crate::binder::declaration::ValueStorageId>,
+    pub map: LibraryProductBinderMap,
+}
+
+/// Project-local translation from immutable product keys to this binder's identities.
+pub struct LibraryProductBinderMap {
+    sources: Box<[LibraryProductSourceBinding]>,
+    containers: Box<[ScopeId]>,
+    regions: Box<[LibraryProductRegionBinding]>,
+    callable_scopes: Box<[ScopeId]>,
+    declarations: Box<[LibraryProductDeclarationBinding]>,
+    groups: Box<[LibraryProductGroupBinding]>,
+    group_locations: Box<[LibraryProductGroupLocation]>,
+}
+
+struct LibraryProductGroupLocation {
+    scope: ScopeId,
+    name: Box<str>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LibraryProductSourceBinding {
+    source: crate::binder::namespace::SourceUnitKey,
+    module: ScopeId,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LibraryProductRegionBinding {
+    syntax_scope: ScopeId,
+    lexical_scope: ScopeId,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LibraryProductDeclarationBinding {
+    declaration: crate::binder::declaration::DeclId,
+    value: Option<crate::binder::declaration::ValueStorageId>,
+    namespace_fragment: Option<crate::binder::namespace::NamespaceFragmentId>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LibraryProductGroupBinding {
+    symbol: crate::binder::symbol::SymbolId,
+    ty: Option<crate::binder::declaration::TypeGroupId>,
+    value: Option<crate::binder::declaration::ValueStorageId>,
+    namespace: Option<crate::binder::namespace::NamespaceId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LibraryProductBinderMapError {
+    MissingGroup(usize),
+}
+
+impl std::fmt::Display for LibraryProductBinderMapError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "library product binder map finalization failed: {self:?}"
+        )
+    }
+}
+
+impl std::error::Error for LibraryProductBinderMapError {}
+
+impl LibraryProductBinderMap {
+    pub fn source(&self, key: product::SourceKey) -> Option<LibraryProductSourceBinding> {
+        self.sources.get(key.index()).copied()
+    }
+
+    pub fn container(&self, key: product::ContainerKey) -> Option<ScopeId> {
+        self.containers.get(key.index()).copied()
+    }
+
+    pub fn region(&self, key: product::RegionKey) -> Option<LibraryProductRegionBinding> {
+        self.regions.get(key.index()).copied()
+    }
+
+    pub fn callable_scope(&self, key: product::CallableScopeKey) -> Option<ScopeId> {
+        self.callable_scopes.get(key.index()).copied()
+    }
+
+    pub fn declaration(
+        &self,
+        key: product::DeclarationKey,
+    ) -> Option<LibraryProductDeclarationBinding> {
+        self.declarations.get(key.index()).copied()
+    }
+
+    pub fn group(&self, key: product::GroupKey) -> Option<LibraryProductGroupBinding> {
+        self.groups.get(key.index()).copied()
+    }
+
+    pub(crate) fn finalize(
+        &mut self,
+        binder: &crate::binder::bind::Binder,
+    ) -> Result<(), LibraryProductBinderMapError> {
+        for (index, (group, location)) in self
+            .groups
+            .iter_mut()
+            .zip(&self.group_locations)
+            .enumerate()
+        {
+            let final_symbol = binder
+                .graph
+                .get(location.scope)
+                .and_then(|scope| scope.lookup_local(&location.name))
+                .ok_or(LibraryProductBinderMapError::MissingGroup(index))?;
+            let symbol = binder
+                .symbols
+                .get(final_symbol)
+                .ok_or(LibraryProductBinderMapError::MissingGroup(index))?;
+            group.symbol = final_symbol;
+            group.ty = symbol.ty;
+            group.value = symbol.value;
+            group.namespace = symbol.ns;
+        }
+        Ok(())
+    }
+}
+
+impl LibraryProductSourceBinding {
+    pub fn source(self) -> crate::binder::namespace::SourceUnitKey {
+        self.source
+    }
+
+    pub fn module(self) -> ScopeId {
+        self.module
+    }
+}
+
+impl LibraryProductRegionBinding {
+    pub fn syntax_scope(self) -> ScopeId {
+        self.syntax_scope
+    }
+
+    pub fn lexical_scope(self) -> ScopeId {
+        self.lexical_scope
+    }
+}
+
+impl LibraryProductDeclarationBinding {
+    pub fn declaration(self) -> crate::binder::declaration::DeclId {
+        self.declaration
+    }
+
+    pub fn value(self) -> Option<crate::binder::declaration::ValueStorageId> {
+        self.value
+    }
+
+    pub fn namespace_fragment(self) -> Option<crate::binder::namespace::NamespaceFragmentId> {
+        self.namespace_fragment
+    }
+}
+
+impl LibraryProductGroupBinding {
+    pub fn symbol(self) -> crate::binder::symbol::SymbolId {
+        self.symbol
+    }
+
+    pub fn ty(self) -> Option<crate::binder::declaration::TypeGroupId> {
+        self.ty
+    }
+
+    pub fn value(self) -> Option<crate::binder::declaration::ValueStorageId> {
+        self.value
+    }
+
+    pub fn namespace(self) -> Option<crate::binder::namespace::NamespaceId> {
+        self.namespace
+    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -71,14 +239,12 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
         let module = state
             .graph
             .push(Scope::new(ScopeKind::Module, Some(script_namespace_root)));
-        let source_key = SourceUnitKey(
-            u32::try_from(source_index)
-                .map_err(|_| LibraryProductInstantiationError::MissingSource(source_index))?
-                .checked_add(1)
+        let source_key =
+            state
+                .fresh_source_key()
                 .ok_or(LibraryProductInstantiationError::MissingSource(
                     source_index,
-                ))?,
-        );
+                ))?;
         let ordinal =
             LibraryFileOrdinal::new(usize::try_from(source.ordinal).map_err(|_| {
                 LibraryProductInstantiationError::MissingSource(source_modules.len())
@@ -325,7 +491,7 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
 
     let mut declaration_values = vec![None; declaration_ids.len()];
     for (index, declaration) in declaration_product.declarations().iter().enumerate() {
-        if !declaration.spaces.value {
+        if !declaration.spaces.value || declaration.kind() == product::DeclarationKind::Namespace {
             continue;
         }
         let storage = state.fresh_value_storage();
@@ -339,6 +505,7 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
     }
 
     let mut group_symbols = Vec::with_capacity(declaration_product.groups().len());
+    let mut group_locations = Vec::with_capacity(declaration_product.groups().len());
     let mut symbol_by_container_name = BTreeMap::new();
     for (group_index, group) in declaration_product.groups().iter().enumerate() {
         let name = string(group.name)?;
@@ -470,6 +637,44 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
             symbol_id
         };
         group_symbols.push(symbol_id);
+        let first_key = group
+            .fragments
+            .first()
+            .ok_or(LibraryProductInstantiationError::MissingGroup(group_index))?;
+        let first = declaration_product
+            .declarations()
+            .get(first_key.index())
+            .ok_or(LibraryProductInstantiationError::MissingGroup(group_index))?;
+        let final_scope = match first.lexical_scope {
+            product::DeclarationLexicalScope::Callable(callable) => {
+                *callable_scopes.get(callable.index()).ok_or(
+                    LibraryProductInstantiationError::MissingRegion(callable.index()),
+                )?
+            }
+            product::DeclarationLexicalScope::Region(region)
+                if declaration_product
+                    .regions()
+                    .get(region.index())
+                    .is_some_and(|region| region.kind == product::RegionKind::Namespace) =>
+            {
+                container_scope
+            }
+            product::DeclarationLexicalScope::Region(region) if !group.slots.r#type => {
+                lexical_region_scopes
+                    .get(region.index())
+                    .copied()
+                    .flatten()
+                    .ok_or(LibraryProductInstantiationError::MissingRegion(
+                        region.index(),
+                    ))?
+            }
+            product::DeclarationLexicalScope::None
+            | product::DeclarationLexicalScope::Region(_) => container_scope,
+        };
+        group_locations.push(LibraryProductGroupLocation {
+            scope: final_scope,
+            name: name.into(),
+        });
     }
 
     let mut namespace_group_by_declaration = BTreeMap::new();
@@ -514,6 +719,7 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
                 let symbol = *group_symbols
                     .get(group_index)
                     .ok_or(LibraryProductInstantiationError::MissingGroup(group_index))?;
+                let name = string(declaration.name)?.to_owned();
                 let id = NamespaceId(u32::try_from(state.namespaces.namespaces.len()).map_err(
                     |_| {
                         LibraryProductInstantiationError::MissingNamespaceContainer(container_index)
@@ -522,7 +728,7 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
                 state.namespaces.namespaces.push_local(Namespace {
                     id,
                     owner,
-                    name: string(declaration.name)?.to_owned(),
+                    name: name.clone(),
                     public_scope,
                     symbol,
                     fragments: Vec::new(),
@@ -532,6 +738,13 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
                     .aggregate_instance_states
                     .push_local(NamespaceInstanceState::NonInstantiated);
                 state.namespaces.standalone_value_storages.push_local(None);
+                state
+                    .namespaces
+                    .namespace_keys
+                    .insert_local(NamespaceKey { owner, name }, id)
+                    .map_err(|_| {
+                        LibraryProductInstantiationError::MissingNamespaceContainer(container_index)
+                    })?;
                 state
                     .symbols
                     .get_mut(symbol)
@@ -788,6 +1001,7 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
             .and_then(|scope| scope.lookup_local(string(declaration.name).ok()?))
             .ok_or(LibraryProductInstantiationError::MissingGroup(group_index))?;
         merge_symbol_slots(state, source_symbol, target_symbol, group_index)?;
+        group_symbols[group_index] = target_symbol;
     }
     for (declaration_index, declaration) in declaration_product.declarations().iter().enumerate() {
         if matches!(
@@ -872,6 +1086,51 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
         final_module,
         fn_scopes,
         fn_decl_ids,
+        map: LibraryProductBinderMap {
+            sources: source_keys
+                .into_iter()
+                .zip(source_modules)
+                .map(|(source, module)| LibraryProductSourceBinding { source, module })
+                .collect(),
+            containers: container_scopes
+                .into_iter()
+                .collect::<Option<Vec<_>>>()
+                .ok_or(LibraryProductInstantiationError::MissingContainer(0))?
+                .into_boxed_slice(),
+            regions: syntax_region_scopes
+                .into_iter()
+                .zip(lexical_region_scopes)
+                .map(|(syntax_scope, lexical_scope)| {
+                    Some(LibraryProductRegionBinding {
+                        syntax_scope: syntax_scope?,
+                        lexical_scope: lexical_scope?,
+                    })
+                })
+                .collect::<Option<Vec<_>>>()
+                .ok_or(LibraryProductInstantiationError::MissingRegion(0))?
+                .into_boxed_slice(),
+            callable_scopes: callable_scopes.into_boxed_slice(),
+            declarations: declaration_ids
+                .into_iter()
+                .enumerate()
+                .map(|(index, declaration)| LibraryProductDeclarationBinding {
+                    declaration,
+                    value: declaration_values[index],
+                    namespace_fragment: namespace_fragments_by_declaration.get(&index).copied(),
+                })
+                .collect(),
+            groups: group_symbols
+                .into_iter()
+                .enumerate()
+                .map(|(index, symbol)| LibraryProductGroupBinding {
+                    symbol,
+                    ty: group_type_ids[index],
+                    value: None,
+                    namespace: None,
+                })
+                .collect(),
+            group_locations: group_locations.into_boxed_slice(),
+        },
     })
 }
 

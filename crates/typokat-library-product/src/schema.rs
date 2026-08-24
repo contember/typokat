@@ -486,6 +486,36 @@ pub struct LibraryDeclarationProduct {
 }
 
 impl LibraryDeclarationProduct {
+    pub fn source_key_at(&self, index: usize) -> Option<SourceKey> {
+        (index < self.sources.len())
+            .then(|| SourceKey::new(index))
+            .flatten()
+    }
+    pub fn container_key_at(&self, index: usize) -> Option<ContainerKey> {
+        (index < self.containers.len())
+            .then(|| ContainerKey::new(index))
+            .flatten()
+    }
+    pub fn region_key_at(&self, index: usize) -> Option<RegionKey> {
+        (index < self.regions.len())
+            .then(|| RegionKey::new(index))
+            .flatten()
+    }
+    pub fn callable_scope_key_at(&self, index: usize) -> Option<CallableScopeKey> {
+        (index < self.callable_scopes.len())
+            .then(|| CallableScopeKey::new(index))
+            .flatten()
+    }
+    pub fn declaration_key_at(&self, index: usize) -> Option<DeclarationKey> {
+        (index < self.declarations.len())
+            .then(|| DeclarationKey::new(index))
+            .flatten()
+    }
+    pub fn group_key_at(&self, index: usize) -> Option<GroupKey> {
+        (index < self.groups.len())
+            .then(|| GroupKey::new(index))
+            .flatten()
+    }
     pub fn profile_identity(&self) -> &str {
         &self.strings[self.profile.index()]
     }
@@ -533,6 +563,12 @@ impl LibraryDeclarationProduct {
     }
     pub fn members(&self) -> &[MemberRecipe] {
         &self.members
+    }
+    pub fn signatures(&self) -> &[SignatureRecipe] {
+        &self.signatures
+    }
+    pub fn lexical_steps(&self) -> &[LexicalStepRecipe] {
+        &self.lexical_steps
     }
     pub fn dependency_rows(&self) -> &[DependencyRecipe] {
         &self.dependencies

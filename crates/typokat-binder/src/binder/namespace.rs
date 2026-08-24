@@ -27,7 +27,11 @@ pub(super) use metadata::{
 pub(crate) use models_ids::NameId;
 pub use models_ids::*;
 pub(in crate::binder) use product::instantiate_library_declaration_product;
-pub use product::LibraryProductInstantiationError;
+pub use product::{
+    LibraryProductBinderMap, LibraryProductBinderMapError, LibraryProductDeclarationBinding,
+    LibraryProductGroupBinding, LibraryProductInstantiationError, LibraryProductRegionBinding,
+    LibraryProductSourceBinding,
+};
 #[allow(unused_imports)]
 pub(crate) use values::NamespaceValueAttachmentPlan;
 pub(super) use values::{

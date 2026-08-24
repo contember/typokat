@@ -85,6 +85,8 @@ mod library_identities;
 pub(crate) mod library_reporting;
 mod namespace_values;
 mod narrowing;
+#[cfg(test)]
+pub(in crate::check) mod project_local_semantics;
 pub mod replay_index;
 pub mod reporting_record;
 mod statements;
@@ -1406,11 +1408,21 @@ pub struct ProjectSourceBindingRow {
 
 pub struct BoundProjectBinder {
     pub binder: Binder,
+    library_product_map: Option<crate::binder::namespace::LibraryProductBinderMap>,
     pub module_scopes: Vec<ScopeId>,
     pub module_placeholders: Vec<Vec<ImportPlaceholder>>,
     pub project_sources: Vec<ProjectSourceBindingRow>,
     #[cfg(any(test, feature = "test-utils"))]
     pub normalized: ProjectBindingProductForTest,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl BoundProjectBinder {
+    pub fn library_product_map_for_test(
+        &self,
+    ) -> Option<&crate::binder::namespace::LibraryProductBinderMap> {
+        self.library_product_map.as_ref()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1465,6 +1477,10 @@ impl std::fmt::Debug for BoundProjectBinder {
         formatter
             .debug_struct("BoundProjectBinder")
             .field("module_count", &self.module_scopes.len())
+            .field(
+                "has_library_product_map",
+                &self.library_product_map.is_some(),
+            )
             .field("project_sources", &self.project_sources)
             .finish_non_exhaustive()
     }
@@ -4384,7 +4400,6 @@ pub fn bind_library_product_project_programs(
     let instantiated = ProjectBinderBuilder::from_library_declaration_product(product)
         .map_err(LibraryProductProjectBindingError::InvalidProduct)?;
     bind_library_product_project_programs_with_builder(
-        product,
         units,
         source_reexports,
         default_modules,
@@ -4410,7 +4425,33 @@ pub fn bind_library_product_project_programs_perturbed_for_test(
         ProjectBinderBuilder::from_library_declaration_product_perturbed_for_test(product, rows)
             .map_err(LibraryProductProjectBindingError::InvalidProduct)?;
     bind_library_product_project_programs_with_builder(
-        product,
+        units,
+        source_reexports,
+        default_modules,
+        instantiated,
+    )
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn bind_library_product_project_programs_fully_perturbed_for_test(
+    product: &typokat_library_product::LibraryDeclarationProduct,
+    units: &[ProjectProgram<'_>],
+    source_reexports: &AdmittedSourceReexports,
+    default_modules: &DefaultModuleCandidates,
+    rows: usize,
+) -> Result<
+    (
+        Vec<crate::binder::bind::LibraryBinderUnit>,
+        BoundProjectBinder,
+    ),
+    LibraryProductProjectBindingError,
+> {
+    let instantiated =
+        ProjectBinderBuilder::from_library_declaration_product_fully_perturbed_for_test(
+            product, rows,
+        )
+        .map_err(LibraryProductProjectBindingError::InvalidProduct)?;
+    bind_library_product_project_programs_with_builder(
         units,
         source_reexports,
         default_modules,
@@ -4419,7 +4460,6 @@ pub fn bind_library_product_project_programs_perturbed_for_test(
 }
 
 fn bind_library_product_project_programs_with_builder<'ast>(
-    product: &typokat_library_product::LibraryDeclarationProduct,
     units: &[ProjectProgram<'ast>],
     source_reexports: &AdmittedSourceReexports,
     default_modules: &DefaultModuleCandidates,
@@ -4438,11 +4478,7 @@ fn bind_library_product_project_programs_with_builder<'ast>(
         .iter()
         .map(|unit| SourceDeclarationManifest::build(unit.program))
         .collect::<Vec<_>>();
-    let source_offset = u32::try_from(product.source_count()).map_err(|_| {
-        LibraryProductProjectBindingError::Binding(
-            "library product source count exceeds u32".to_owned(),
-        )
-    })?;
+    let source_offset = builder.project_source_offset();
     let lexical_events = LexicalReservations::<UserRecordTicket>::default();
     let mut external_effects = BTreeMap::<UserRecordTicket, CandidateEffects>::new();
     let source_reexport_plan = build_validated_source_reexport_plan(source_reexports, units)
@@ -4726,21 +4762,27 @@ where
         exports.push(surface);
     }
     let final_module = module_scopes.last().copied();
-    let binder = match finish {
+    let (binder, library_product_map) = match finish {
         #[cfg(any(test, feature = "test-utils"))]
         AuthoritativeProjectBinderFinish::Fresh => {
-            builder.finish(final_module.unwrap_or(ScopeId(0)))
+            (builder.finish(final_module.unwrap_or(ScopeId(0))), None)
         }
         #[cfg(any(test, feature = "test-utils"))]
         AuthoritativeProjectBinderFinish::DeclarationOracle => {
-            builder.finish(final_module.unwrap_or(ScopeId(0)))
+            (builder.finish(final_module.unwrap_or(ScopeId(0))), None)
         }
         AuthoritativeProjectBinderFinish::Product => {
-            builder.finish(final_module.unwrap_or(ScopeId(0)))
+            let (binder, map) = builder
+                .finish_library_product_project(final_module.unwrap_or(ScopeId(0)))
+                .map_err(|error| ProjectBindingCoreError::Binding(error.to_string()))?;
+            (binder, Some(map))
         }
-        AuthoritativeProjectBinderFinish::Continuation => builder
-            .finish_frozen_library_continuation(final_module)
-            .map_err(|error| ProjectBindingCoreError::Binding(error.to_owned()))?,
+        AuthoritativeProjectBinderFinish::Continuation => (
+            builder
+                .finish_frozen_library_continuation(final_module)
+                .map_err(|error| ProjectBindingCoreError::Binding(error.to_owned()))?,
+            None,
+        ),
     };
     let mut project_sources = units
         .iter()
@@ -4774,6 +4816,7 @@ where
     PROJECT_BINDING_PRODUCTS.set(PROJECT_BINDING_PRODUCTS.get().saturating_add(1));
     Ok(BoundProjectBinder {
         binder,
+        library_product_map,
         module_scopes,
         module_placeholders,
         project_sources,

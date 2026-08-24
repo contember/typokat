@@ -553,6 +553,7 @@ impl LibraryBinderCheckpoint {
                 empty_prelude: true,
                 continuation_publication_plans: FxHashMap::default(),
                 pending_namespace_modules: Vec::new(),
+                library_product_map: None,
             },
             library_units,
         )
@@ -1294,6 +1295,12 @@ impl BindState {
         }
     }
 
+    pub(in crate::binder) fn fresh_source_key(&mut self) -> Option<SourceUnitKey> {
+        let source = self.next_source_key;
+        self.next_source_key = SourceUnitKey(source.0.checked_add(1)?);
+        Some(source)
+    }
+
     fn record_source_declarations(&mut self, manifest: &SourceDeclarationManifest<'_>) {
         for occurrence in manifest.declarations() {
             let site = DeclarationSite {
@@ -1512,6 +1519,7 @@ pub struct ProjectBinderBuilder<'ast> {
     /// drain this, so a project cannot reach a `Binder` without exactly one classification pass.
     pending_namespace_modules: Vec<PendingNamespaceModule<'ast>>,
     library_root_projection: Option<LibraryRootProjection>,
+    library_product_map: Option<crate::binder::namespace::LibraryProductBinderMap>,
 }
 
 /// One collected module awaiting the project-wide classification pass.
@@ -1552,7 +1560,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
         (Self, Vec<LibraryBinderUnit>),
         crate::binder::namespace::LibraryProductInstantiationError,
     > {
-        Self::from_library_declaration_product_inner(product, 0)
+        Self::from_library_declaration_product_inner(product, 0, false)
     }
 
     #[cfg(any(test, feature = "test-utils"))]
@@ -1563,12 +1571,24 @@ impl<'ast> ProjectBinderBuilder<'ast> {
         (Self, Vec<LibraryBinderUnit>),
         crate::binder::namespace::LibraryProductInstantiationError,
     > {
-        Self::from_library_declaration_product_inner(product, rows)
+        Self::from_library_declaration_product_inner(product, rows, false)
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn from_library_declaration_product_fully_perturbed_for_test(
+        product: &typokat_library_product::LibraryDeclarationProduct,
+        rows: usize,
+    ) -> Result<
+        (Self, Vec<LibraryBinderUnit>),
+        crate::binder::namespace::LibraryProductInstantiationError,
+    > {
+        Self::from_library_declaration_product_inner(product, rows, true)
     }
 
     fn from_library_declaration_product_inner(
         product: &typokat_library_product::LibraryDeclarationProduct,
         perturb_local_ids: usize,
+        fully_perturb_local_ids: bool,
     ) -> Result<
         (Self, Vec<LibraryBinderUnit>),
         crate::binder::namespace::LibraryProductInstantiationError,
@@ -1595,6 +1615,16 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             continuation_publication: None,
             frozen_prefix_writes: Vec::new(),
         };
+        #[cfg(any(test, feature = "test-utils"))]
+        let perturbation_scopes = (0..if fully_perturb_local_ids {
+            perturb_local_ids
+        } else {
+            0
+        })
+            .map(|_| state.graph.push(Scope::new(ScopeKind::Block, None)))
+            .collect::<Vec<_>>();
+        #[cfg(not(any(test, feature = "test-utils")))]
+        debug_assert_eq!((perturb_local_ids, fully_perturb_local_ids), (0, false));
         let prelude_module = state.graph.push(Scope::new(ScopeKind::Module, None));
         state.current_module = prelude_module;
         state.record_module_source(prelude_module, SourceUnitKey::PRELUDE);
@@ -1606,11 +1636,67 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             ScopeKind::ScriptNamespaceRoot,
             Some(compilation_global),
         ));
-        for index in 0..perturb_local_ids {
+        #[cfg(any(test, feature = "test-utils"))]
+        if !fully_perturb_local_ids {
+            for index in 0..perturb_local_ids {
+                state
+                    .symbols
+                    .push(Symbol::new(format!("__product_perturbation_{index}")));
+                state.fresh_value_storage();
+            }
+        }
+        #[cfg(any(test, feature = "test-utils"))]
+        for (index, local_scope) in perturbation_scopes.iter().copied().enumerate() {
             state
+                .fresh_source_key()
+                .expect("test source identity perturbation fits u32");
+            let symbol = state
                 .symbols
                 .push(Symbol::new(format!("__product_perturbation_{index}")));
-            state.fresh_value_storage();
+            let storage = state.fresh_value_storage();
+            let offset = u32::try_from(index).unwrap_or(u32::MAX);
+            let site = DeclarationSite {
+                module: prelude_module,
+                scope: Some(local_scope),
+                declaration_span: Span::new(offset, offset),
+                binding_span: Span::new(offset, offset),
+            };
+            let declaration = state.declarations.push(DeclarationKind::TypeAlias, site);
+            state
+                .declarations
+                .get_mut(declaration)
+                .expect("perturbation declaration exists")
+                .value_storage = Some(storage);
+            let group = state
+                .type_groups
+                .append_fragment(
+                    None,
+                    "__product_perturbation",
+                    TypeGroupFragment {
+                        declaration,
+                        source: SourceUnitKey::PRELUDE,
+                        scope: local_scope,
+                        site,
+                        kind: TypeFragmentKind::TypeAlias,
+                    },
+                )
+                .group;
+            state
+                .declarations
+                .get_mut(declaration)
+                .expect("perturbation declaration exists")
+                .type_group = Some(group);
+            let (namespace, _) = state.namespaces.perturb_product_identity_rows_for_test(
+                local_scope,
+                symbol,
+                declaration,
+                index,
+            );
+            state
+                .declarations
+                .get_mut(declaration)
+                .expect("perturbation declaration exists")
+                .namespace = Some(namespace);
         }
         let facts = crate::binder::namespace::instantiate_library_declaration_product(
             &mut state,
@@ -1627,10 +1713,6 @@ impl<'ast> ProjectBinderBuilder<'ast> {
         state.current_module = facts.final_module;
         state.fn_scopes = facts.fn_scopes;
         state.fn_decl_ids = facts.fn_decl_ids;
-        let next_source = u32::try_from(product.source_count())
-            .unwrap_or(u32::MAX)
-            .saturating_add(1);
-        state.next_source_key = SourceUnitKey(next_source);
         Ok((
             Self {
                 state,
@@ -1644,9 +1726,14 @@ impl<'ast> ProjectBinderBuilder<'ast> {
                 continuation_publication_plans: FxHashMap::default(),
                 pending_namespace_modules: Vec::new(),
                 library_root_projection: None,
+                library_product_map: Some(facts.map),
             },
             facts.units,
         ))
+    }
+
+    pub fn project_source_offset(&self) -> u32 {
+        self.state.next_source_key.0.saturating_sub(1)
     }
 
     #[cfg(any(test, feature = "test-utils"))]
@@ -1767,6 +1854,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             continuation_publication_plans: FxHashMap::default(),
             pending_namespace_modules: Vec::new(),
             library_root_projection: None,
+            library_product_map: None,
         }
     }
 
@@ -2280,6 +2368,22 @@ impl<'ast> ProjectBinderBuilder<'ast> {
         }
     }
 
+    pub fn finish_library_product_project(
+        mut self,
+        module: ScopeId,
+    ) -> Result<
+        (Binder, crate::binder::namespace::LibraryProductBinderMap),
+        crate::binder::namespace::LibraryProductBinderMapError,
+    > {
+        let mut map = self
+            .library_product_map
+            .take()
+            .expect("library product builder owns its exact identity map");
+        let binder = self.finish(module);
+        map.finalize(&binder)?;
+        Ok((binder, map))
+    }
+
     /// Resume one AST-free library binder for a single user suffix.
     pub fn resume_frozen_library(binder: Binder) -> (Self, SourceUnitKey) {
         let next_source = binder.next_source_key;
@@ -2350,6 +2454,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
                 continuation_publication_plans: FxHashMap::default(),
                 pending_namespace_modules: Vec::new(),
                 library_root_projection,
+                library_product_map: None,
             },
             next_source,
         )

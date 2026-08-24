@@ -133,6 +133,53 @@ pub(super) fn rebuild_canonical_suffix<T, LibraryKey: Ord, UserKey: Ord>(
 }
 
 impl NamespaceTable {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(crate) fn perturb_product_identity_rows_for_test(
+        &mut self,
+        scope: ScopeId,
+        symbol: SymbolId,
+        declaration: DeclId,
+        index: usize,
+    ) -> (NamespaceId, NamespaceFragmentId) {
+        let namespace = NamespaceId(
+            u32::try_from(self.namespaces.len()).expect("namespace perturbation id fits u32"),
+        );
+        let fragment = NamespaceFragmentId(
+            u32::try_from(self.fragments.len()).expect("namespace fragment id fits u32"),
+        );
+        self.namespaces.push_local(Namespace {
+            id: namespace,
+            owner: NamespaceOwner::CompilationGlobal,
+            name: format!("__product_namespace_perturbation_{index}"),
+            public_scope: scope,
+            symbol,
+            fragments: vec![fragment],
+        });
+        self.aggregate_instance_states
+            .push_local(NamespaceInstanceState::NonInstantiated);
+        self.standalone_value_storages.push_local(None);
+        self.fragments.push_local(NamespaceFragment {
+            id: fragment,
+            namespace,
+            declaration,
+            source: super::SourceUnitKey::PRELUDE,
+            origin: CompilationOrigin::Library(crate::source::LibraryFileOrdinal::new(index)),
+            source_start: u32::try_from(index).unwrap_or(u32::MAX),
+            module: scope,
+            private_scope: scope,
+            lexical_parent: scope,
+            public_scope: scope,
+            ambient: true,
+            publication: NamespacePublication::Private,
+            instance_state: NamespaceInstanceState::NonInstantiated,
+            members: Vec::new(),
+        });
+        let _ = self
+            .fragments_by_declaration
+            .insert_local(declaration, fragment);
+        (namespace, fragment)
+    }
+
     /// Store `name` once and hand back its id. A name the table already holds costs a hash
     /// lookup and nothing else — no allocation, no second copy of the text.
     pub(super) fn intern_name(&mut self, name: &str) -> NameId {
@@ -254,6 +301,26 @@ impl NamespaceTable {
             .get(key)
             .and_then(|index| self.merges.get(*index))
             .map(|record| record.classification.disposition)
+    }
+
+    pub fn merge_identity_for_declaration(
+        &self,
+        declaration: DeclId,
+    ) -> Option<(DeclarationOwner, &str)> {
+        let key = self.merge_keys_by_declaration.get(&declaration)?;
+        Some((key.owner, self.name_text(key.name).as_ref()))
+    }
+
+    pub fn merged_declarations_for_declaration(
+        &self,
+        declaration: DeclId,
+    ) -> Option<&[MergeParticipant]> {
+        let key = self.merge_keys_by_declaration.get(&declaration)?;
+        let record = self
+            .merge_indices
+            .get(key)
+            .and_then(|index| self.merges.get(*index))?;
+        Some(record.declarations.as_slice())
     }
 
     pub fn declaration_owner_for_scope(&self, scope: ScopeId) -> DeclarationOwner {
