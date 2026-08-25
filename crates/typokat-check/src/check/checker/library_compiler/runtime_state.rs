@@ -137,6 +137,14 @@ pub struct CompleteSourceReplayGraphForTest {
 
 impl OwnedLibraryRuntimeState {
     #[cfg(any(test, feature = "test-utils"))]
+    pub fn final_global_contributors_for_test(
+        &self,
+    ) -> Result<FinalGlobalContributorInventory, &'static str> {
+        collect_final_global_object_contributors(&self.binder)
+            .map_err(|_| "complete-source final global contributor inventory is invalid")
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn complete_source_replay_graph_for_test(
         &self,
     ) -> Result<CompleteSourceReplayGraphForTest, &'static str> {

@@ -240,22 +240,62 @@ These conditions may not be relaxed after candidate results are visible.
 - **Problem.** An eager project-local binder fixes ownership, but eagerly compiling the complete
   semantic library for every project would discard the repeated-work advantage. A demand-driven
   implementation must remain atomic across recursive groups and diagnostic dependencies.
-- **Verify first.** Freeze semantic demand roots and dependency SCCs for WU0, the complete packaged
-  library census, and representative official-suite frames. Measure which owners the current
-  complete-source route constructs and which user queries actually consume.
+- **Verify first.** Derive admitted product groups, resolved product dependency edges, publication
+  SCCs, explicit demand roots, visit order, and the exact materialized-owner closure independently
+  from the immutable declaration product plus the final project-local binder map. The legacy
+  complete-source route is only a temporary test-only black-box shadow for normalized observable
+  output; its replay owners, root consumers, statement owners, general SCC graph, and raw record
+  ledger are not candidate authority.
 - **Scope.** Add the project-local terminal state machine and symbolic-to-local lowering. Reserve an
   entire dependency SCC before resolving it; allocate type parameters, classes, values, bridges,
   and global-object products in deterministic project-local order. Cache only final Ready or typed
   Unavailable results. Route user checking, library validation roots, evaluator/projection,
   substitution, relation, flow, and diagnostics through the same coordinator. Provide a test-only
-  `force_all` control that is never reachable from the ordinary session path.
+  `force_all` control that is never reachable from the ordinary session path. The candidate entry
+  lives in the dedicated checker-owned `project_local/` tree and receives only the immutable
+  declaration product, prepared project-local binder/program inputs, and request controls. The
+  library provider and complete-source shadow are outside that capability boundary.
 - **Acceptance / witness.** Demand and source order do not affect normalized results or stable source
-  ownership. Repeated demand is ID-stable inside one session. Recursive SCCs become atomically Ready
-  or Unavailable. No resolving value enters a durable cache. Ordinary cases perform strictly less
-  semantic owner work than `force_all`; the exact counts are reported, not inferred from timing.
-  `force_all` matches the complete-source library census and semantic probes. Known-broken controls
-  catch an omitted edge, premature terminal, provisional cache write, and stale global-object
-  product.
+  ownership. Product-native group, edge, SCC, demand, terminal, cache, and exact materialized-owner
+  traces match their independent product/binder projection. A passive scope outside the returned
+  append-only audit records ordinary and `force_all` owner publication, cache writes, cache hits,
+  fault activation, receipt construction, and publisher lifecycle with monotonic stamps. Its scope
+  only reads rows appended after its captured cursor. Raw owner rows are authoritative: validation
+  never sorts or deduplicates them and rejects a duplicate phase/group pair. Repeated demand is
+  ID-stable inside one session, and every candidate call receives unique project and publisher
+  identities. Cache writes and hits carry their publisher identity.
+  The implementation registers `Weak<SessionCore>` and `Weak<DurableCache>` rows from the actual
+  owners; scope finish upgrades those exact weak references and requires both to be dead after the
+  call. Drop appends its lifecycle event but never deletes the registry's weak row. The spec patch
+  defines only the read-only liveness receipt. It does not fabricate mirror
+  counters or pretend that the future weak hooks already exist; the lifecycle E2E remains RED until
+  the implementation lands them.
+  Recursive SCCs become atomically Ready or Unavailable. The unavailable fixture has an independent
+  exact eight-root typed terminal census; every root proves a nonempty discarded provisional write
+  set and an empty published set. No resolving or provisional unavailable value enters a durable
+  cache. Ordinary cases perform strictly less passively observed product-owner work than test-only
+  `force_all`; debug counts must match that receipt. The black-box shadow compares only user
+  diagnostics, incompletes and check results, semantic probes, final global contributors, the live
+  user EventStore ledger, and `force_all` library diagnostics/incompletes normalized by source
+  path/span/content with legacy library event and record ordinals removed. Known-broken controls
+  catch an omitted independently projected product edge, premature SCC terminal from a real
+  nontrivial product SCC, resolving cache
+  write, escaped provisional unavailable write, stale global-object product, and an ordinary call
+  to `force_all`, with an exact typed validator error and a stamped pre-receipt seam witness for each.
+  Requests carry only the fault identity; the checker-owned fault gate defines its canonical seam.
+  The provisional-write fault runs only on `unavailable`, stale-global only on `global-this`, and a
+  missing activation returns `FaultNotReached`. The boundary enumerates an exact set of relative
+  paths, rejects every unexpected directory, file, or symlink, parses every admitted file as Rust,
+  and applies a positive AST allowlist to modules, imports, paths, attributes, and macros. It rejects
+  unsafe or foreign code, alternate source inclusion, thread/process/filesystem/network access, and
+  any dependency from `typokat-check` to `typokat-library`. External checker/product types cross only
+  the audited neutral `project_local_pass_port` adapter. Audit append hooks are private and may appear
+  only in the actual session, terminal, cache, fault, and global-owner files.
+  Supplementary external work scopes and provider metrics require zero profile load, library parse/bind,
+  publication, replay, frozen-base, evidence, compiler, or source-reparse work on every candidate
+  call, while the same scopes observe direct legacy calls. The source/capability boundary is the
+  authority; it does not rely on a dynamic provider guard. The shadow route is deleted with the old
+  lifecycle in WU7.
 - **Touch points.** Checker type-group/class/value publication, query coordination, library semantic
   lowering, bridges/global object, event ownership, evaluator/relation/flow caches, and focused
   specs.
@@ -458,3 +498,27 @@ numbers are invalid without `--no-smt`.
   passed `5/5`, DHAT contract `3/3`, WU3 parity `14/14`, both clippy feature modes passed with
   `-D warnings`, and independent review returned GO after rejecting the first test-utils-contaminated
   probe. The wall result is one current 31-sample run, not a long-term trend.
+- **2026-08-25 — WU4 oracle correction.** The immutable product intentionally does not encode the
+  legacy replay owner's type/value space, replay root consumers, statement owners, event ordinals,
+  or the raw library record ledger. WU4 therefore uses product groups, dependencies and publication
+  SCCs as its structural authority. The complete-source lifecycle remains a temporary test-only
+  black-box shadow for normalized observable outputs and is deleted in WU7; it cannot certify the
+  candidate scheduler graph. In particular, the product SCC containing `ConcatArray` is a
+  singleton; the historical `Array` / `ArrayConstructor` / `ConcatArray` cycle belonged to the
+  legacy replay slice. Candidate atomic-cycle controls therefore use independently declared
+  product-native cyclic evidence rather than preserving that replay-only partition.
+- **2026-08-25 — WU4 passive acceptance correction.** Candidate traces are debug evidence, not
+  authority for their own work. The revised RED contract wraps every candidate call with legacy-work
+  and provider scopes, independently observes owner publication and session/cache lifecycle, freezes
+  the exact eight-root unavailable rollback census, requires typed fault errors at pre-receipt seams,
+  and proves unique A/B/A project and publisher sessions with zero retained cache after every call.
+- **2026-08-25 — WU4 capability-boundary correction.** The candidate API moved from the library
+  provider into a recursively audited checker-owned `project_local/` tree. The provider now only
+  prepares the immutable product and live frontend callback inputs. The audit is append-only and
+  read-only to tests, owner work remains raw with duplicate rejection, faults carry only their
+  identity and activate at checker-owned canonical seams, and lifecycle proof is reserved for
+  implementation-owned `Weak<SessionCore>` / `Weak<DurableCache>` hooks rather than mirror state.
+- **2026-08-25 — WU4 AST-boundary correction.** The candidate tree now has an exact relative-path
+  inventory and a positive Rust AST capability allowlist. Grouped or aliased imports, inline or
+  undeclared modules, path attributes, opaque inclusion macros, unsafe/foreign code, and external
+  checker paths outside `project_local_pass_port` fail the ordinary boundary test.

@@ -43,6 +43,7 @@ rayon = "1.12.0"
 rustc-hash = "2.1.2"
 sha2 = "0.10.9"
 smallvec = "1.15.2"
+syn = { version = "2.0.106", features = ["full", "visit"] }
 tikv-jemallocator = "0.7.0"
 toml = "0.8.23"
 rustix = { version = "1.1.4", features = ["fs"] }

@@ -71,11 +71,13 @@ pub struct TypeProbe {
 }
 
 #[cfg(any(test, feature = "test-utils"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SignatureProbe {
-    pub parameter_types: Vec<String>,
-    pub return_type: String,
-}
+pub use crate::check::checker::project_local::project_local_pass_port::{
+    NormalizedCallableMemberProbeForTest, NormalizedCheckResultForTest,
+    NormalizedCheckerRecordForTest, NormalizedDiagnosticForTest, NormalizedIncompleteForTest,
+    NormalizedLibraryRecordForTest, NormalizedModuleTypeProbeForTest,
+    NormalizedSemanticProbesForTest, NormalizedSpanForTest, NormalizedTypeProbeForTest,
+    NormalizedUserEventRecordForTest, NormalizedValueProbeForTest, SignatureProbe,
+};
 
 #[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -100,104 +102,6 @@ pub struct ValueProbe {
     pub signatures: Vec<SignatureProbe>,
     pub member_names: Vec<String>,
     pub callable_members: Vec<CallableMemberProbe>,
-}
-
-#[cfg(any(test, feature = "test-utils"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NormalizedSpanForTest {
-    pub start: u32,
-    pub end: u32,
-}
-
-#[cfg(any(test, feature = "test-utils"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NormalizedDiagnosticForTest {
-    pub span: NormalizedSpanForTest,
-    pub code: String,
-    pub severity: String,
-    pub message: String,
-    pub elaboration: Vec<String>,
-}
-
-#[cfg(any(test, feature = "test-utils"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NormalizedIncompleteForTest {
-    pub span: NormalizedSpanForTest,
-    pub id: String,
-    pub context: String,
-}
-
-#[cfg(any(test, feature = "test-utils"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum NormalizedCheckerRecordForTest {
-    Diagnostic(NormalizedDiagnosticForTest),
-    Incomplete(NormalizedIncompleteForTest),
-}
-
-#[cfg(any(test, feature = "test-utils"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NormalizedUserEventRecordForTest {
-    pub source_ordinal: LibraryFileOrdinal,
-    pub module_ordinal: ModuleOrdinal,
-    pub source_start: u32,
-    pub event_ordinal: usize,
-    pub record_ordinal: usize,
-    pub record: NormalizedCheckerRecordForTest,
-}
-
-#[cfg(any(test, feature = "test-utils"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NormalizedCheckResultForTest {
-    pub source_ordinal: LibraryFileOrdinal,
-    pub module_ordinal: ModuleOrdinal,
-    pub unit_slot: UnitSlot,
-    pub diagnostics: Vec<NormalizedDiagnosticForTest>,
-    pub incomplete: Vec<NormalizedIncompleteForTest>,
-}
-
-#[cfg(any(test, feature = "test-utils"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NormalizedTypeProbeForTest {
-    pub name: String,
-    pub declaration_count: usize,
-    pub member_names: Vec<String>,
-}
-
-#[cfg(any(test, feature = "test-utils"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NormalizedModuleTypeProbeForTest {
-    pub source_ordinal: LibraryFileOrdinal,
-    pub probe: NormalizedTypeProbeForTest,
-}
-
-#[cfg(any(test, feature = "test-utils"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NormalizedCallableMemberProbeForTest {
-    pub name: String,
-    pub source_ordinal: LibraryFileOrdinal,
-    pub reservation_source_ordinal: LibraryFileOrdinal,
-    pub source_start: u32,
-    pub call_signature_count: usize,
-    pub signatures: Vec<SignatureProbe>,
-}
-
-#[cfg(any(test, feature = "test-utils"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NormalizedValueProbeForTest {
-    pub name: String,
-    pub declaration_count: usize,
-    pub call_signature_count: usize,
-    pub signatures: Vec<SignatureProbe>,
-    pub member_names: Vec<String>,
-    pub callable_members: Vec<NormalizedCallableMemberProbeForTest>,
-}
-
-#[cfg(any(test, feature = "test-utils"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NormalizedSemanticProbesForTest {
-    pub global_types: Vec<NormalizedTypeProbeForTest>,
-    pub module_types: Vec<NormalizedModuleTypeProbeForTest>,
-    pub global_values: Vec<NormalizedValueProbeForTest>,
 }
 
 #[derive(Debug)]
@@ -488,6 +392,18 @@ impl InjectedProfileRun {
                     record: normalize_checker_record(record),
                 },
             )
+            .collect()
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn normalized_library_records_for_test(&self) -> Vec<NormalizedLibraryRecordForTest> {
+        self.library_records
+            .iter()
+            .map(|(key, record)| NormalizedLibraryRecordForTest {
+                source_ordinal: key.file_ordinal,
+                owner_start: key.source_start,
+                record: normalize_checker_record(record),
+            })
             .collect()
     }
 

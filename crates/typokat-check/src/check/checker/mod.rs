@@ -85,6 +85,8 @@ mod library_identities;
 pub(crate) mod library_reporting;
 mod namespace_values;
 mod narrowing;
+#[cfg(any(test, feature = "test-utils"))]
+pub mod project_local;
 #[cfg(test)]
 pub(in crate::check) mod project_local_semantics;
 pub mod replay_index;

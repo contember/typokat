@@ -1312,6 +1312,7 @@ dependencies = [
  "oxc_span",
  "serde_json",
  "sha2",
+ "syn 2.0.118",
  "toml",
  "typokat-binder",
  "typokat-check",
