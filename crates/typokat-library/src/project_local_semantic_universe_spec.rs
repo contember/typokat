@@ -6,10 +6,11 @@ use crate::check::checker::project_local::{
     project_local_semantic_candidate_for_test, ObservationEventForTest,
     ObservationEventKindForTest, ObservationReceiptForTest, ObservationScopeForTest,
     ObservationWitnessKindForTest, ProjectLocalCacheWriteForTest,
-    ProjectLocalContributorOriginForTest, ProjectLocalDemandRootForTest,
-    ProjectLocalFaultSeamForTest, ProjectLocalForceAllTraceForTest,
-    ProjectLocalGlobalContributorForTest, ProjectLocalLibraryRecordForTest,
-    ProjectLocalMappedProductGroupForTest, ProjectLocalNamespaceFragmentForTest,
+    ProjectLocalContributorKindForTest, ProjectLocalContributorOriginForTest,
+    ProjectLocalDemandRootForTest, ProjectLocalFaultSeamForTest, ProjectLocalForceAllTraceForTest,
+    ProjectLocalGlobalContributorForTest, ProjectLocalGlobalContributorSiteForTest,
+    ProjectLocalLibraryRecordForTest, ProjectLocalMappedProductGroupForTest,
+    ProjectLocalModuleTypeProbeForTest, ProjectLocalNamespaceFragmentForTest,
     ProjectLocalOrderForTest, ProjectLocalProductDependencyForTest,
     ProjectLocalProductGroupForTest, ProjectLocalProductSccForTest,
     ProjectLocalPublicationSccCommitForTest, ProjectLocalRepeatedDemandForTest,
@@ -17,7 +18,7 @@ use crate::check::checker::project_local::{
     ProjectLocalSemanticProbesForTest, ProjectLocalSemanticRequestForTest,
     ProjectLocalSemanticTraceForTest, ProjectLocalTerminalStateForTest,
     ProjectLocalUnavailableAuditForTest, ProjectLocalUnavailableReasonForTest,
-    ProjectLocalUnavailableTerminalForTest, WeakLivenessForTest,
+    ProjectLocalUnavailableTerminalForTest, ProjectLocalValueProbeForTest, WeakLivenessForTest,
 };
 use crate::compiler::LibraryCompilerWorkScopeForTest;
 use crate::provider::{CompleteSourceBlackBoxOracleForTest, LibraryBaseProvider};
@@ -41,8 +42,30 @@ const OFFICIAL_FRAME_SHA256: &str =
 struct NativeProductEvidence {
     groups: Vec<ProjectLocalProductGroupForTest>,
     mapped_groups: Vec<ProjectLocalMappedProductGroupForTest>,
+    module_probe_sources: BTreeMap<usize, String>,
+    probe_evidence: Vec<StableProbeEvidence>,
     dependencies: Vec<ProjectLocalProductDependencyForTest>,
     publication_sccs: Vec<ProjectLocalProductSccForTest>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum StableProbeCoordinate {
+    GlobalType { name: String },
+    GlobalValue { name: String },
+    ModuleType { source_path: String, name: String },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum StableProbeSlot {
+    Type(usize),
+    Value(usize),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct StableProbeEvidence {
+    product_key: usize,
+    mapped_slot: StableProbeSlot,
+    coordinate: StableProbeCoordinate,
 }
 
 #[derive(Clone)]
@@ -644,6 +667,23 @@ fn product_native_authority_is_complete_and_preserves_the_exact_partition() {
         .expect("packaged declaration product");
     let evidence = native_product_evidence(&product);
     assert_eq!(evidence.groups.len(), product.group_count());
+    let exact_module_sources = product
+        .groups()
+        .iter()
+        .enumerate()
+        .filter_map(|(product_key, group)| {
+            let container = &product.containers()[group.container.index()];
+            if container.kind != typokat_library_product::ContainerKind::ExternalModule
+                || container.parent.is_some()
+            {
+                return None;
+            }
+            let source = &product.sources()[container.anchor?.source.index()];
+            Some((product_key, product.strings()[source.name.index()].clone()))
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert!(!exact_module_sources.is_empty());
+    assert_eq!(evidence.module_probe_sources, exact_module_sources);
     assert_eq!(
         evidence.publication_sccs.len(),
         product.dependency_sccs().len()
@@ -669,6 +709,286 @@ fn product_native_authority_is_complete_and_preserves_the_exact_partition() {
         .flat_map(|scc| scc.members.iter().map(|row| row.product_key))
         .collect::<BTreeSet<_>>();
     assert_eq!(partition.len(), evidence.groups.len());
+}
+
+#[test]
+fn demanded_probe_projection_uses_mapped_slot_and_visibility_coordinates() {
+    let group = |product_key, container_key, compilation_global, name: &str, has_value| {
+        ProjectLocalProductGroupForTest {
+            product_key,
+            container_key,
+            compilation_global,
+            name: name.to_owned(),
+            has_type: true,
+            has_value,
+            has_namespace: false,
+        }
+    };
+    let mapped =
+        |product: &ProjectLocalProductGroupForTest, local_symbol, local_type_group, local_value| {
+            ProjectLocalMappedProductGroupForTest {
+                product: product.clone(),
+                local_symbol,
+                local_type_group: Some(local_type_group),
+                local_value,
+                local_namespace: None,
+            }
+        };
+    let evidence = |product_key, mapped_slot, coordinate| StableProbeEvidence {
+        product_key,
+        mapped_slot,
+        coordinate,
+    };
+    let global_homonym = group(0, 0, true, "Homonym", true);
+    let module_root = group(1, 1, false, "ModuleRoot", false);
+    let module_homonym = group(2, 1, false, "Homonym", false);
+    let user_homonym_module = group(3, 2, false, "UserOnly", false);
+    let groups = vec![
+        global_homonym.clone(),
+        module_root.clone(),
+        module_homonym.clone(),
+        user_homonym_module.clone(),
+    ];
+    let mapped_groups = vec![
+        mapped(&global_homonym, 41, 73, Some(89)),
+        mapped(&module_root, 43, 79, None),
+        mapped(&module_homonym, 47, 83, None),
+        mapped(&user_homonym_module, 53, 97, None),
+    ];
+    let module_path = "/lib/module-a.d.ts";
+    let user_module_path = "/lib/module-user.d.ts";
+    let probe_evidence = vec![
+        evidence(
+            0,
+            StableProbeSlot::Type(73),
+            StableProbeCoordinate::GlobalType {
+                name: "Homonym".to_owned(),
+            },
+        ),
+        evidence(
+            0,
+            StableProbeSlot::Value(89),
+            StableProbeCoordinate::GlobalValue {
+                name: "Homonym".to_owned(),
+            },
+        ),
+        evidence(
+            1,
+            StableProbeSlot::Type(79),
+            StableProbeCoordinate::ModuleType {
+                source_path: module_path.to_owned(),
+                name: "ModuleRoot".to_owned(),
+            },
+        ),
+        evidence(
+            2,
+            StableProbeSlot::Type(83),
+            StableProbeCoordinate::ModuleType {
+                source_path: module_path.to_owned(),
+                name: "Homonym".to_owned(),
+            },
+        ),
+        evidence(
+            3,
+            StableProbeSlot::Type(97),
+            StableProbeCoordinate::ModuleType {
+                source_path: user_module_path.to_owned(),
+                name: "UserOnly".to_owned(),
+            },
+        ),
+    ];
+    let native = NativeProductEvidence {
+        groups: groups.clone(),
+        mapped_groups,
+        module_probe_sources: [
+            (1, module_path.to_owned()),
+            (2, module_path.to_owned()),
+            (3, user_module_path.to_owned()),
+        ]
+        .into_iter()
+        .collect(),
+        probe_evidence,
+        dependencies: vec![ProjectLocalProductDependencyForTest {
+            owner: 1,
+            target: 2,
+            kind: "Reference".to_owned(),
+            source_path: module_path.to_owned(),
+            source_start: 10,
+        }],
+        publication_sccs: groups
+            .iter()
+            .cloned()
+            .map(|member| ProjectLocalProductSccForTest {
+                members: vec![member],
+            })
+            .collect(),
+    };
+    assert!(stable_probe_evidence_matches_mapped_slots(&native));
+    let mut missing_evidence = native.clone();
+    missing_evidence.probe_evidence.remove(0);
+    assert!(!stable_probe_evidence_matches_mapped_slots(
+        &missing_evidence
+    ));
+    let mut duplicate_evidence = native.clone();
+    duplicate_evidence
+        .probe_evidence
+        .push(duplicate_evidence.probe_evidence[0].clone());
+    assert!(!stable_probe_evidence_matches_mapped_slots(
+        &duplicate_evidence
+    ));
+    let mut duplicate_coordinate = native.clone();
+    let homonym_coordinate = duplicate_coordinate
+        .probe_evidence
+        .iter()
+        .find_map(|row| match &row.coordinate {
+            StableProbeCoordinate::ModuleType { name, .. } if name == "Homonym" => {
+                Some(row.coordinate.clone())
+            }
+            _ => None,
+        })
+        .expect("module homonym coordinate");
+    duplicate_coordinate
+        .probe_evidence
+        .iter_mut()
+        .find(|row| {
+            matches!(
+                &row.coordinate,
+                StableProbeCoordinate::ModuleType { name, .. } if name == "ModuleRoot"
+            )
+        })
+        .expect("module root coordinate")
+        .coordinate = homonym_coordinate;
+    assert!(!stable_probe_evidence_matches_mapped_slots(
+        &duplicate_coordinate
+    ));
+    let mut wrong_module_source = native.clone();
+    let module = wrong_module_source
+        .probe_evidence
+        .iter_mut()
+        .find(|row| matches!(row.coordinate, StableProbeCoordinate::ModuleType { .. }))
+        .expect("module evidence");
+    let StableProbeCoordinate::ModuleType { source_path, .. } = &mut module.coordinate else {
+        unreachable!("selected module evidence")
+    };
+    *source_path = "/wrong/module.d.ts".to_owned();
+    assert!(!stable_probe_evidence_matches_mapped_slots(
+        &wrong_module_source
+    ));
+    let mut out_of_order = native.clone();
+    out_of_order.probe_evidence.swap(0, 1);
+    assert!(!stable_probe_evidence_matches_mapped_slots(&out_of_order));
+    let probes = ProjectLocalSemanticProbesForTest {
+        global_types: vec![type_probe("Homonym"), type_probe("UserOnly")],
+        module_types: vec![
+            module_type_probe(module_path, "ModuleRoot"),
+            module_type_probe(module_path, "Homonym"),
+            module_type_probe(user_module_path, "UserOnly"),
+        ],
+        global_values: vec![value_probe("Homonym"), value_probe("UserOnly")],
+    };
+
+    let global_closure = demanded_product_closure(
+        &native,
+        &[ProjectLocalDemandRootForTest::ProductGroup(
+            global_homonym.clone(),
+        )],
+    )
+    .expect("global closure");
+    assert_eq!(global_closure, vec![global_homonym]);
+    let global = demanded_probe_projection(&probes, &native, &global_closure, &[]);
+    assert_eq!(global.global_types, vec![type_probe("Homonym")]);
+    assert_eq!(global.global_values, vec![value_probe("Homonym")]);
+    assert!(global.module_types.is_empty());
+
+    let module_closure = demanded_product_closure(
+        &native,
+        &[ProjectLocalDemandRootForTest::ProductGroup(module_root)],
+    )
+    .expect("module edge closure");
+    assert_eq!(module_closure, vec![groups[1].clone(), module_homonym]);
+    let module = demanded_probe_projection(&probes, &native, &module_closure, &[]);
+    assert!(module.global_types.is_empty());
+    assert!(module.global_values.is_empty());
+    assert_eq!(
+        module.module_types,
+        vec![
+            module_type_probe(module_path, "ModuleRoot"),
+            module_type_probe(module_path, "Homonym"),
+        ]
+    );
+
+    let user_contributor = ProjectLocalGlobalContributorForTest {
+        name: "UserOnly".to_owned(),
+        has_value: true,
+        has_type: true,
+        has_namespace: false,
+        sites: vec![ProjectLocalGlobalContributorSiteForTest {
+            source_path: "/user/global.ts".to_owned(),
+            origin: ProjectLocalContributorOriginForTest::User,
+            span_start: 0,
+            span_end: 8,
+            kind: ProjectLocalContributorKindForTest::Ordinary,
+        }],
+    };
+    let user = demanded_probe_projection(&probes, &native, &[], &[user_contributor]);
+    assert_eq!(user.global_types, vec![type_probe("UserOnly")]);
+    assert_eq!(user.global_values, vec![value_probe("UserOnly")]);
+    assert!(user.module_types.is_empty());
+}
+
+#[test]
+fn array_projection_includes_global_iterator_and_excludes_module_homonym() {
+    let provider = LibraryBaseProvider::new();
+    let product = provider.declaration_product().expect("declaration product");
+    let inputs = case_inputs("array");
+    let product_native = native_product_evidence(&product);
+    let native = mapped_native_evidence(&provider, &product, &inputs, &product_native);
+    let roots = case_demand_roots("array", &native);
+    let materialized = demanded_product_closure(&native, &roots).expect("Array demand closure");
+    let oracle = provider
+        .complete_source_black_box_oracle_for_test(&inputs)
+        .expect("Array black-box observables");
+    assert!(oracle
+        .force_all_semantic_probes
+        .module_types
+        .iter()
+        .any(|probe| probe.probe.name == "Iterator"));
+    let projected = demanded_probe_projection(
+        &oracle.force_all_semantic_probes,
+        &native,
+        &materialized,
+        &oracle.global_contributors,
+    );
+
+    assert!(projected
+        .global_types
+        .iter()
+        .any(|probe| probe.name == "Iterator"));
+    assert!(projected
+        .module_types
+        .iter()
+        .all(|probe| probe.probe.name != "Iterator"));
+    let iterator_owners = native
+        .probe_evidence
+        .iter()
+        .filter(|row| match &row.coordinate {
+            StableProbeCoordinate::GlobalType { name }
+            | StableProbeCoordinate::GlobalValue { name }
+            | StableProbeCoordinate::ModuleType { name, .. } => name == "Iterator",
+        })
+        .collect::<Vec<_>>();
+    assert!(iterator_owners.iter().any(|row| {
+        materialized
+            .iter()
+            .any(|group| group.product_key == row.product_key)
+            && matches!(row.coordinate, StableProbeCoordinate::GlobalType { .. })
+    }));
+    assert!(iterator_owners.iter().any(|row| {
+        !materialized
+            .iter()
+            .any(|group| group.product_key == row.product_key)
+            && matches!(row.coordinate, StableProbeCoordinate::ModuleType { .. })
+    }));
 }
 
 #[test]
@@ -1358,6 +1678,7 @@ fn validate_candidate_trace_with_weak_mode(
     validate_passive_session_lifecycle(trace, observation, allow_synthetic_weak_schema)?;
     let expected_probes = demanded_probe_projection(
         &oracle.force_all_semantic_probes,
+        native,
         &materialized,
         &oracle.global_contributors,
     );
@@ -1836,6 +2157,22 @@ fn native_product_evidence(product: &LibraryDeclarationProduct) -> NativeProduct
             has_namespace: group.slots.namespace,
         })
         .collect::<Vec<_>>();
+    let module_probe_sources = product
+        .groups()
+        .iter()
+        .enumerate()
+        .filter_map(|(product_key, group)| {
+            let container = &product.containers()[group.container.index()];
+            if container.kind != typokat_library_product::ContainerKind::ExternalModule
+                || container.parent.is_some()
+            {
+                return None;
+            }
+            let anchor = container.anchor?;
+            let source = &product.sources()[anchor.source.index()];
+            Some((product_key, product.strings()[source.name.index()].clone()))
+        })
+        .collect::<BTreeMap<_, _>>();
     let mut dependencies = product
         .dependency_rows()
         .iter()
@@ -1867,6 +2204,8 @@ fn native_product_evidence(product: &LibraryDeclarationProduct) -> NativeProduct
     NativeProductEvidence {
         groups,
         mapped_groups: Vec::new(),
+        module_probe_sources,
+        probe_evidence: Vec::new(),
         dependencies,
         publication_sccs,
     }
@@ -1901,13 +2240,147 @@ fn mapped_native_evidence(
                 local_namespace: binding.namespace().map(|identity| identity.index()),
             }
         })
-        .collect();
+        .collect::<Vec<_>>();
+    let probe_evidence = stable_probe_evidence(product, &mapped_groups);
     NativeProductEvidence {
         groups: native.groups.clone(),
         mapped_groups,
+        module_probe_sources: native.module_probe_sources.clone(),
+        probe_evidence,
         dependencies: native.dependencies.clone(),
         publication_sccs: native.publication_sccs.clone(),
     }
+}
+
+fn stable_probe_evidence(
+    product: &LibraryDeclarationProduct,
+    mapped_groups: &[ProjectLocalMappedProductGroupForTest],
+) -> Vec<StableProbeEvidence> {
+    let mut evidence = Vec::new();
+    for mapped in mapped_groups {
+        if mapped.product.compilation_global {
+            if let (true, Some(local_type_group)) =
+                (mapped.product.has_type, mapped.local_type_group)
+            {
+                evidence.push(StableProbeEvidence {
+                    product_key: mapped.product.product_key,
+                    mapped_slot: StableProbeSlot::Type(local_type_group),
+                    coordinate: StableProbeCoordinate::GlobalType {
+                        name: mapped.product.name.clone(),
+                    },
+                });
+            }
+            if let (true, Some(local_value)) = (mapped.product.has_value, mapped.local_value) {
+                evidence.push(StableProbeEvidence {
+                    product_key: mapped.product.product_key,
+                    mapped_slot: StableProbeSlot::Value(local_value),
+                    coordinate: StableProbeCoordinate::GlobalValue {
+                        name: mapped.product.name.clone(),
+                    },
+                });
+            }
+        }
+        let group = &product.groups()[mapped.product.product_key];
+        let container = &product.containers()[group.container.index()];
+        if container.kind == typokat_library_product::ContainerKind::ExternalModule
+            && container.parent.is_none()
+        {
+            if let (true, Some(local_type_group), Some(anchor)) = (
+                mapped.product.has_type,
+                mapped.local_type_group,
+                container.anchor,
+            ) {
+                let source = &product.sources()[anchor.source.index()];
+                evidence.push(StableProbeEvidence {
+                    product_key: mapped.product.product_key,
+                    mapped_slot: StableProbeSlot::Type(local_type_group),
+                    coordinate: StableProbeCoordinate::ModuleType {
+                        source_path: product.strings()[source.name.index()].clone(),
+                        name: mapped.product.name.clone(),
+                    },
+                });
+            }
+        }
+    }
+    evidence.sort();
+    evidence
+}
+
+fn stable_probe_evidence_matches_mapped_slots(native: &NativeProductEvidence) -> bool {
+    expected_stable_probe_evidence(native).is_some_and(|expected| native.probe_evidence == expected)
+}
+
+fn expected_stable_probe_evidence(
+    native: &NativeProductEvidence,
+) -> Option<Vec<StableProbeEvidence>> {
+    let mapped_product_keys = native
+        .mapped_groups
+        .iter()
+        .map(|mapped| mapped.product.product_key)
+        .collect::<BTreeSet<_>>();
+    if native.mapped_groups.len() != native.groups.len()
+        || mapped_product_keys.len() != native.groups.len()
+        || native
+            .groups
+            .iter()
+            .enumerate()
+            .any(|(product_key, group)| group.product_key != product_key)
+        || native
+            .mapped_groups
+            .iter()
+            .any(|mapped| native.groups.get(mapped.product.product_key) != Some(&mapped.product))
+        || native.module_probe_sources.iter().any(|(product_key, _)| {
+            native
+                .groups
+                .get(*product_key)
+                .is_none_or(|group| group.compilation_global)
+        })
+    {
+        return None;
+    }
+
+    let mut expected = Vec::new();
+    for mapped in &native.mapped_groups {
+        if mapped.product.compilation_global {
+            if let (true, Some(identity)) = (mapped.product.has_type, mapped.local_type_group) {
+                expected.push(StableProbeEvidence {
+                    product_key: mapped.product.product_key,
+                    mapped_slot: StableProbeSlot::Type(identity),
+                    coordinate: StableProbeCoordinate::GlobalType {
+                        name: mapped.product.name.clone(),
+                    },
+                });
+            }
+            if let (true, Some(identity)) = (mapped.product.has_value, mapped.local_value) {
+                expected.push(StableProbeEvidence {
+                    product_key: mapped.product.product_key,
+                    mapped_slot: StableProbeSlot::Value(identity),
+                    coordinate: StableProbeCoordinate::GlobalValue {
+                        name: mapped.product.name.clone(),
+                    },
+                });
+            }
+        }
+        if let (true, Some(identity), Some(source_path)) = (
+            mapped.product.has_type,
+            mapped.local_type_group,
+            native.module_probe_sources.get(&mapped.product.product_key),
+        ) {
+            expected.push(StableProbeEvidence {
+                product_key: mapped.product.product_key,
+                mapped_slot: StableProbeSlot::Type(identity),
+                coordinate: StableProbeCoordinate::ModuleType {
+                    source_path: source_path.clone(),
+                    name: mapped.product.name.clone(),
+                },
+            });
+        }
+    }
+    expected.sort();
+    expected
+        .windows(2)
+        .all(|rows| rows[0] < rows[1])
+        .then_some(expected)
 }
 
 fn demanded_product_closure(
@@ -1971,40 +2444,70 @@ fn demanded_product_closure(
 
 fn demanded_probe_projection(
     probes: &ProjectLocalSemanticProbesForTest,
+    native: &NativeProductEvidence,
     materialized: &[ProjectLocalProductGroupForTest],
     contributors: &[ProjectLocalGlobalContributorForTest],
 ) -> ProjectLocalSemanticProbesForTest {
-    let mut names = materialized
-        .iter()
-        .map(|row| row.name.as_str())
-        .collect::<BTreeSet<_>>();
-    names.extend(
-        contributors
-            .iter()
-            .filter(|row| {
-                row.sites
-                    .iter()
-                    .any(|site| site.origin == ProjectLocalContributorOriginForTest::User)
-            })
-            .map(|row| row.name.as_str()),
+    assert!(
+        stable_probe_evidence_matches_mapped_slots(native),
+        "stable probe evidence must preserve the exact product-to-mapped-slot relation"
     );
+    let materialized = materialized
+        .iter()
+        .map(|row| row.product_key)
+        .collect::<BTreeSet<_>>();
+    let mut coordinates = native
+        .probe_evidence
+        .iter()
+        .filter(|row| materialized.contains(&row.product_key))
+        .map(|row| row.coordinate.clone())
+        .collect::<BTreeSet<_>>();
+    for contributor in contributors.iter().filter(|row| {
+        row.sites
+            .iter()
+            .any(|site| site.origin == ProjectLocalContributorOriginForTest::User)
+    }) {
+        if contributor.has_type {
+            coordinates.insert(StableProbeCoordinate::GlobalType {
+                name: contributor.name.clone(),
+            });
+        }
+        if contributor.has_value {
+            coordinates.insert(StableProbeCoordinate::GlobalValue {
+                name: contributor.name.clone(),
+            });
+        }
+    }
     ProjectLocalSemanticProbesForTest {
         global_types: probes
             .global_types
             .iter()
-            .filter(|row| names.contains(row.name.as_str()))
+            .filter(|row| {
+                coordinates.contains(&StableProbeCoordinate::GlobalType {
+                    name: row.name.clone(),
+                })
+            })
             .cloned()
             .collect(),
         module_types: probes
             .module_types
             .iter()
-            .filter(|row| names.contains(row.probe.name.as_str()))
+            .filter(|row| {
+                coordinates.contains(&StableProbeCoordinate::ModuleType {
+                    source_path: row.source_path.clone(),
+                    name: row.probe.name.clone(),
+                })
+            })
             .cloned()
             .collect(),
         global_values: probes
             .global_values
             .iter()
-            .filter(|row| names.contains(row.name.as_str()))
+            .filter(|row| {
+                coordinates.contains(&StableProbeCoordinate::GlobalValue {
+                    name: row.name.clone(),
+                })
+            })
             .cloned()
             .collect(),
     }
@@ -2141,22 +2644,39 @@ fn valid_control_trace() -> (
             members: vec![third],
         },
     ];
+    let mapped_groups = groups
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(
+            |(identity, product)| ProjectLocalMappedProductGroupForTest {
+                product,
+                local_symbol: identity,
+                local_type_group: Some(identity),
+                local_value: None,
+                local_namespace: None,
+            },
+        )
+        .collect::<Vec<_>>();
+    let probe_evidence = mapped_groups
+        .iter()
+        .map(|mapped| StableProbeEvidence {
+            product_key: mapped.product.product_key,
+            mapped_slot: StableProbeSlot::Type(
+                mapped
+                    .local_type_group
+                    .expect("control product has a mapped type slot"),
+            ),
+            coordinate: StableProbeCoordinate::GlobalType {
+                name: mapped.product.name.clone(),
+            },
+        })
+        .collect();
     let native = NativeProductEvidence {
         groups: groups.clone(),
-        mapped_groups: groups
-            .iter()
-            .cloned()
-            .enumerate()
-            .map(
-                |(identity, product)| ProjectLocalMappedProductGroupForTest {
-                    product,
-                    local_symbol: identity,
-                    local_type_group: Some(identity),
-                    local_value: None,
-                    local_namespace: None,
-                },
-            )
-            .collect(),
+        mapped_groups,
+        module_probe_sources: BTreeMap::new(),
+        probe_evidence,
         dependencies: dependencies.clone(),
         publication_sccs: sccs.clone(),
     };
@@ -2340,6 +2860,32 @@ fn empty_probes() -> ProjectLocalSemanticProbesForTest {
         global_types: Vec::new(),
         module_types: Vec::new(),
         global_values: Vec::new(),
+    }
+}
+
+fn type_probe(name: &str) -> crate::check::checker::library_compiler::NormalizedTypeProbeForTest {
+    crate::check::checker::library_compiler::NormalizedTypeProbeForTest {
+        name: name.to_owned(),
+        declaration_count: 1,
+        member_names: Vec::new(),
+    }
+}
+
+fn module_type_probe(source_path: &str, name: &str) -> ProjectLocalModuleTypeProbeForTest {
+    ProjectLocalModuleTypeProbeForTest {
+        source_path: source_path.to_owned(),
+        probe: type_probe(name),
+    }
+}
+
+fn value_probe(name: &str) -> ProjectLocalValueProbeForTest {
+    ProjectLocalValueProbeForTest {
+        name: name.to_owned(),
+        declaration_count: 1,
+        call_signature_count: 0,
+        signatures: Vec::new(),
+        member_names: Vec::new(),
+        callable_members: Vec::new(),
     }
 }
 

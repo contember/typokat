@@ -270,6 +270,13 @@ These conditions may not be relaxed after candidate results are visible.
   never sorts or deduplicates them and rejects a duplicate phase/group pair. Repeated demand is
   ID-stable inside one session, and every candidate call receives unique project and publisher
   identities. Cache writes and hits carry their publisher identity.
+  Ordinary semantic probes are projected only after the product-native demand closure is fixed.
+  Each admitted probe has independent evidence from one materialized product group through its
+  exact final WU3 binder-map type or value slot and its visibility coordinate: global type, global
+  value, or external-module `(source path, name)`. A shared name never crosses those coordinates.
+  User final-global contributors may admit only global type/value coordinates; they never admit a
+  module probe. Probe rows cannot add an owner, dependency, SCC member, or demand edge. `force_all`
+  remains the unfiltered full semantic-probe census and keeps its frozen receipt unchanged.
   The implementation registers `Weak<SessionCore>` and `Weak<DurableCache>` rows from the actual
   owners; scope finish upgrades those exact weak references and requires both to be dead after the
   call. Drop appends its lifecycle event but never deletes the registry's weak row. The spec patch
@@ -528,6 +535,15 @@ numbers are invalid without `--no-smt`.
   inventory and a positive Rust AST capability allowlist. Grouped or aliased imports, inline or
   undeclared modules, path attributes, opaque inclusion macros, unsafe/foreign code, and external
   checker paths outside `project_local_pass_port` fail the ordinary boundary test.
+- **2026-08-25 — WU4 probe-projection correction.** Review confirmed that the RED validator's
+  ordinary expected probe set filtered global types, global values, and module types through one
+  shared name set. That could admit an undemanded external-module homonym. The corrected spec uses
+  the materialized product key, its exact final binder-map type/value slot, and a distinct global or
+  external-module `(source path, name)` coordinate. Synthetic controls cover global/module
+  homonyms, a module dependency edge, and a user-global contributor that must not admit its module
+  homonym. The packaged Array witness requires global `Iterator` and excludes the unreachable
+  external-module `Iterator` without inspecting or predicting numeric identities. Probe projection
+  runs after closure and cannot create work. The full `force_all` oracle JSON and hash are unchanged.
 - **2026-08-25 — qualified-path provenance prerequisite.** WU4 review found that WU2 retained path
   names but discarded each segment's exact source site and collapsed every non-group binder outcome
   into a generic unresolved recipe. The revised scaffold adds empty canonical/validated tables and
