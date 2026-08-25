@@ -3,10 +3,9 @@ use super::declaration::{
     DeclarationKind, SourceDeclarationManifest, SourceDeclarationProductPayload,
     SourceInterfaceOccurrenceKind, TypeGroupId, ValueStorageId,
 };
-#[cfg(any(test, feature = "test-utils"))]
-use super::namespace::QualifiedTypePathDeferredReason;
 use super::namespace::{
-    NamespaceId, NamespaceOwner, QualifiedTypePathResolution, QualifiedValuePathResolution,
+    NamespaceId, NamespaceOwner, QualifiedTypePathDeferredReason, QualifiedTypePathResolution,
+    QualifiedValuePathResolution,
 };
 use super::scope::{ScopeId, ScopeKind};
 use crate::span::Span;
@@ -37,14 +36,29 @@ pub struct CertifiedIntrinsicMarkerEvidence {
 }
 
 #[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QualifiedPathRawResolutionForTest {
+    QualifiedType(QualifiedTypePathResolution),
+    QualifiedValue(QualifiedValuePathResolution),
+    StableTypeGroup(TypeGroupId),
+    StableValue(ValueStorageId),
+    MissingTypeRoot,
+    TypeOnlyValueRoot,
+    MissingValueRoot,
+    TypeParameter,
+    IntrinsicGlobalValue,
+    ImportQualifier,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct QualifiedPathOutcomeOracleRowForTest {
+pub struct QualifiedPathRawOracleRowForTest {
     pub source_ordinal: u32,
     pub start: u32,
     pub end: u32,
     pub role: product::QualifiedPathRole,
     pub path: Vec<String>,
-    pub outcome: product::QualifiedPathResolutionOutcome,
+    pub resolution: QualifiedPathRawResolutionForTest,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -146,7 +160,7 @@ pub fn project_library_declaration_product_with_qualified_path_oracle_for_test(
 ) -> Result<
     (
         product::LibraryDeclarationProduct,
-        Vec<QualifiedPathOutcomeOracleRowForTest>,
+        Vec<QualifiedPathRawOracleRowForTest>,
     ),
     LibraryProductProjectionError,
 > {
@@ -162,7 +176,7 @@ pub fn project_library_declaration_product_with_qualified_path_oracle_for_test(
 struct LibraryProductProjectionOutput {
     product: product::LibraryDeclarationProduct,
     #[cfg(any(test, feature = "test-utils"))]
-    qualified_path_oracle: Vec<QualifiedPathOutcomeOracleRowForTest>,
+    qualified_path_oracle: Vec<QualifiedPathRawOracleRowForTest>,
 }
 
 fn project_library_declaration_product_inner(
@@ -419,6 +433,7 @@ fn project_library_declaration_product_inner(
         value_group_keys: BTreeMap::new(),
         type_parameters: BTreeMap::new(),
         type_by_site: BTreeMap::new(),
+        pending_qualified_paths: BTreeMap::new(),
         pending_dependencies: Vec::new(),
         current_group: None,
         current_scope: None,
@@ -1128,6 +1143,7 @@ struct ProjectionContext<'binder> {
     value_group_keys: BTreeMap<u32, product::GroupKey>,
     type_parameters: BTreeMap<(u32, u32), product::TypeParameterKey>,
     type_by_site: BTreeMap<(u32, u32, u32), product::TypeRecipeKey>,
+    pending_qualified_paths: BTreeMap<(u32, u32, u32), PendingQualifiedPath>,
     pending_dependencies: Vec<PendingDependency>,
     current_group: Option<product::GroupKey>,
     current_scope: Option<ScopeId>,
@@ -1142,7 +1158,18 @@ struct ProjectionContext<'binder> {
     namespace_containers: BTreeMap<NamespaceId, product::ContainerKey>,
     region_containers: BTreeMap<product::RegionKey, product::ContainerKey>,
     #[cfg(any(test, feature = "test-utils"))]
-    qualified_path_oracle: Vec<QualifiedPathOutcomeOracleRowForTest>,
+    qualified_path_oracle: Vec<QualifiedPathRawOracleRowForTest>,
+}
+
+struct PendingQualifiedPath {
+    role: product::QualifiedPathRole,
+    resolution: product::QualifiedPathResolutionOutcome,
+    segments: Vec<PendingQualifiedPathSegment>,
+}
+
+struct PendingQualifiedPathSegment {
+    name: product::StringKey,
+    site: product::SourceSite,
 }
 
 #[derive(Clone)]
@@ -1939,10 +1966,12 @@ fn lower_declaration_payload(
                     heritage_item.type_arguments.as_deref(),
                     heritage_item.span,
                 )?;
-                heritage.push(context.assembly.add_type_recipe(product::TypeRecipe {
+                let key = context.assembly.add_type_recipe(product::TypeRecipe {
                     site: context.oxc_site(heritage_item.span),
                     node,
-                })?);
+                })?;
+                publish_qualified_path(context, key, heritage_item.span)?;
+                heritage.push(key);
             }
             let mut members = Vec::with_capacity(value.body.body.len());
             for member in &value.body.body {
@@ -2013,10 +2042,12 @@ fn lower_class(
             class.super_type_arguments.as_deref(),
             super_class.span(),
         )?;
-        heritage.push(context.assembly.add_type_recipe(product::TypeRecipe {
+        let key = context.assembly.add_type_recipe(product::TypeRecipe {
             site: context.oxc_site(super_class.span()),
             node,
-        })?);
+        })?;
+        publish_qualified_path(context, key, super_class.span())?;
+        heritage.push(key);
     }
     for implementation in &class.implements {
         let node = lower_reference_parts(
@@ -2025,10 +2056,12 @@ fn lower_class(
             implementation.type_arguments.as_deref(),
             implementation.span,
         )?;
-        heritage.push(context.assembly.add_type_recipe(product::TypeRecipe {
+        let key = context.assembly.add_type_recipe(product::TypeRecipe {
             site: context.oxc_site(implementation.span),
             node,
-        })?);
+        })?;
+        publish_qualified_path(context, key, implementation.span)?;
+        heritage.push(key);
     }
     let mut members = Vec::with_capacity(class.body.body.len());
     for element in &class.body.body {
@@ -2223,26 +2256,48 @@ fn lower_type(
                 value.span,
             )?,
             TSType::TSTypeQuery(value) => {
-                let (path_text, path) = match &value.expr_name {
+                let (path_text, path, segment_sites) = match &value.expr_name {
                     oxc_ast::ast::TSTypeQueryExprName::IdentifierReference(name) => {
                         let key = context.assembly.intern(name.name.as_str())?;
-                        (vec![name.name.as_str()], vec![key])
+                        (
+                            vec![name.name.as_str()],
+                            vec![key],
+                            vec![authenticated_path_segment(name.name.as_str(), name.span)],
+                        )
                     }
                     oxc_ast::ast::TSTypeQueryExprName::QualifiedName(name) => {
                         let mut path_text = type_name_segments(&name.left);
                         path_text.push(name.right.name.as_str());
                         let mut path = lower_qualified_path(context, &name.left)?;
                         path.push(context.assembly.intern(name.right.name.as_str())?);
-                        (path_text, path)
+                        let mut segment_sites = type_name_segment_sites(&name.left);
+                        segment_sites.push(authenticated_path_segment(
+                            name.right.name.as_str(),
+                            name.right.span,
+                        ));
+                        (path_text, path, segment_sites)
                     }
-                    oxc_ast::ast::TSTypeQueryExprName::ThisExpression(_)
-                    | oxc_ast::ast::TSTypeQueryExprName::TSImportType(_) => {
+                    oxc_ast::ast::TSTypeQueryExprName::ThisExpression(value) => {
+                        let key = context.assembly.intern("this")?;
+                        (
+                            vec!["this"],
+                            vec![key],
+                            vec![authenticated_path_segment("this", value.span)],
+                        )
+                    }
+                    oxc_ast::ast::TSTypeQueryExprName::TSImportType(_) => {
                         return Err(context.unsupported(value.span, "type-query-expression"))
                     }
                 };
-                #[cfg(any(test, feature = "test-utils"))]
-                record_value_path_outcome_for_test(context, &path_text, value.span)?;
-                let resolution = resolve_value_reference(context, &path_text)?;
+                let (resolution, outcome) =
+                    resolve_value_reference_with_outcome(context, &path_text, value.span)?;
+                stage_qualified_path(
+                    context,
+                    value.span,
+                    product::QualifiedPathRole::Query,
+                    &segment_sites,
+                    outcome,
+                )?;
                 let dependency = record_value_dependency(
                     context,
                     &path_text,
@@ -2411,7 +2466,41 @@ fn lower_type(
                     return Err(context.unsupported(value.span, "import-type-options"));
                 }
                 let argument = context.assembly.intern(value.source.value.as_str())?;
-                let qualifier = Vec::new();
+                let qualifier = value
+                    .qualifier
+                    .as_ref()
+                    .map(|qualifier| lower_import_qualifier(context, qualifier))
+                    .transpose()?
+                    .unwrap_or_default();
+                if let Some(qualifier_node) = &value.qualifier {
+                    let segments = import_qualifier_segment_sites(qualifier_node);
+                    #[cfg(any(test, feature = "test-utils"))]
+                    {
+                        let path = segments
+                            .iter()
+                            .map(|segment| segment.name.as_str())
+                            .collect::<Vec<_>>();
+                        observe_qualified_path_resolution_for_test(
+                            context,
+                            value.span,
+                            product::QualifiedPathRole::ImportQualifier,
+                            &path,
+                            QualifiedPathRawResolutionForTest::ImportQualifier,
+                        );
+                    }
+                    stage_qualified_path(
+                        context,
+                        value.span,
+                        product::QualifiedPathRole::ImportQualifier,
+                        &segments,
+                        unresolved_path_outcome(
+                            product::QualifiedPathUnresolvedCause::Deferred(
+                                product::QualifiedPathDeferredReason::Import,
+                            ),
+                            0,
+                        )?,
+                    )?;
+                }
                 let arguments = value
                     .type_arguments
                     .as_deref()
@@ -2450,6 +2539,7 @@ fn lower_type(
     let key = context
         .assembly
         .add_type_recipe(product::TypeRecipe { site, node })?;
+    publish_qualified_path(context, key, ty.span())?;
     context.type_by_site.insert(identity, key);
     Ok(key)
 }
@@ -2503,9 +2593,15 @@ fn lower_reference_parts(
 ) -> Result<product::TypeRecipeNode, LibraryProductProjectionError> {
     let path_text = type_name_segments(name);
     let path = lower_qualified_path(context, name)?;
-    #[cfg(any(test, feature = "test-utils"))]
-    record_type_path_outcome_for_test(context, &path_text, span)?;
-    let resolution = resolve_type_reference(context, &path_text)?;
+    let (resolution, outcome) = resolve_type_reference_with_outcome(context, &path_text, span)?;
+    let segments = type_name_segment_sites(name);
+    stage_qualified_path(
+        context,
+        span,
+        product::QualifiedPathRole::Reference,
+        &segments,
+        outcome,
+    )?;
     let dependency = record_dependency(
         context,
         &path_text,
@@ -2531,28 +2627,36 @@ fn lower_heritage(
     arguments: Option<&oxc_ast::ast::TSTypeParameterInstantiation<'_>>,
     span: oxc_span::Span,
 ) -> Result<product::TypeRecipeNode, LibraryProductProjectionError> {
-    let (path_text, path) = match expression {
+    let (path_text, path, segment_sites) = match expression {
         oxc_ast::ast::Expression::Identifier(value) => (
             vec![value.name.as_str()],
             vec![context.assembly.intern(value.name.as_str())?],
+            vec![authenticated_path_segment(value.name.as_str(), value.span)],
         ),
         oxc_ast::ast::Expression::StaticMemberExpression(value) => {
-            let oxc_ast::ast::Expression::Identifier(object) = &value.object else {
+            let Some(mut segment_sites) = expression_segment_sites(&value.object) else {
                 return Err(context.unsupported(span, "interface-heritage"));
             };
-            (
-                vec![object.name.as_str(), value.property.name.as_str()],
-                vec![
-                    context.assembly.intern(object.name.as_str())?,
-                    context.assembly.intern(value.property.name.as_str())?,
-                ],
-            )
+            let mut path_text = value_name_text_path(context.source_ordinal, &value.object)?;
+            path_text.push(value.property.name.as_str());
+            let mut path = lower_value_name_path(context, &value.object)?;
+            path.push(context.assembly.intern(value.property.name.as_str())?);
+            segment_sites.push(authenticated_path_segment(
+                value.property.name.as_str(),
+                value.property.span,
+            ));
+            (path_text, path, segment_sites)
         }
         _ => return Err(context.unsupported(span, "interface-heritage")),
     };
-    #[cfg(any(test, feature = "test-utils"))]
-    record_type_path_outcome_for_test(context, &path_text, span)?;
-    let resolution = resolve_type_reference(context, &path_text)?;
+    let (resolution, outcome) = resolve_type_reference_with_outcome(context, &path_text, span)?;
+    stage_qualified_path(
+        context,
+        span,
+        product::QualifiedPathRole::Reference,
+        &segment_sites,
+        outcome,
+    )?;
     let dependency = record_dependency(
         context,
         &path_text,
@@ -2582,6 +2686,179 @@ fn type_name_segments<'a>(name: &'a TSTypeName<'a>) -> Vec<&'a str> {
         }
         TSTypeName::ThisExpression(_) => vec!["this"],
     }
+}
+
+struct AuthenticatedPathSegment {
+    name: String,
+    span: oxc_span::Span,
+}
+
+fn authenticated_path_segment(name: &str, span: oxc_span::Span) -> AuthenticatedPathSegment {
+    AuthenticatedPathSegment {
+        name: name.to_owned(),
+        span,
+    }
+}
+
+fn type_name_segment_sites(name: &TSTypeName<'_>) -> Vec<AuthenticatedPathSegment> {
+    match name {
+        TSTypeName::IdentifierReference(value) => {
+            vec![authenticated_path_segment(value.name.as_str(), value.span)]
+        }
+        TSTypeName::QualifiedName(value) => {
+            let mut segments = type_name_segment_sites(&value.left);
+            segments.push(authenticated_path_segment(
+                value.right.name.as_str(),
+                value.right.span,
+            ));
+            segments
+        }
+        TSTypeName::ThisExpression(value) => {
+            vec![authenticated_path_segment("this", value.span)]
+        }
+    }
+}
+
+fn import_qualifier_segment_sites(
+    qualifier: &oxc_ast::ast::TSImportTypeQualifier<'_>,
+) -> Vec<AuthenticatedPathSegment> {
+    match qualifier {
+        oxc_ast::ast::TSImportTypeQualifier::Identifier(value) => {
+            vec![authenticated_path_segment(value.name.as_str(), value.span)]
+        }
+        oxc_ast::ast::TSImportTypeQualifier::QualifiedName(value) => {
+            let mut segments = import_qualifier_segment_sites(&value.left);
+            segments.push(authenticated_path_segment(
+                value.right.name.as_str(),
+                value.right.span,
+            ));
+            segments
+        }
+    }
+}
+
+fn expression_segment_sites(
+    expression: &oxc_ast::ast::Expression<'_>,
+) -> Option<Vec<AuthenticatedPathSegment>> {
+    match expression {
+        oxc_ast::ast::Expression::Identifier(value) => Some(vec![authenticated_path_segment(
+            value.name.as_str(),
+            value.span,
+        )]),
+        oxc_ast::ast::Expression::StaticMemberExpression(value) => {
+            let mut segments = expression_segment_sites(&value.object)?;
+            segments.push(authenticated_path_segment(
+                value.property.name.as_str(),
+                value.property.span,
+            ));
+            Some(segments)
+        }
+        _ => None,
+    }
+}
+
+fn lower_import_qualifier(
+    context: &mut ProjectionContext<'_>,
+    qualifier: &oxc_ast::ast::TSImportTypeQualifier<'_>,
+) -> Result<Vec<product::StringKey>, LibraryProductProjectionError> {
+    match qualifier {
+        oxc_ast::ast::TSImportTypeQualifier::Identifier(value) => {
+            Ok(vec![context.assembly.intern(value.name.as_str())?])
+        }
+        oxc_ast::ast::TSImportTypeQualifier::QualifiedName(value) => {
+            let mut path = lower_import_qualifier(context, &value.left)?;
+            path.push(context.assembly.intern(value.right.name.as_str())?);
+            Ok(path)
+        }
+    }
+}
+
+fn stage_qualified_path(
+    context: &mut ProjectionContext<'_>,
+    span: oxc_span::Span,
+    role: product::QualifiedPathRole,
+    segments: &[AuthenticatedPathSegment],
+    resolution: product::QualifiedPathResolutionOutcome,
+) -> Result<(), LibraryProductProjectionError> {
+    let identity = (context.source_ordinal, span.start, span.end);
+    let mut pending_segments = Vec::with_capacity(segments.len());
+    for segment in segments {
+        pending_segments.push(PendingQualifiedPathSegment {
+            name: context.assembly.intern(&segment.name)?,
+            site: context.oxc_site(segment.span),
+        });
+    }
+    if context
+        .pending_qualified_paths
+        .insert(
+            identity,
+            PendingQualifiedPath {
+                role,
+                resolution,
+                segments: pending_segments,
+            },
+        )
+        .is_some()
+    {
+        return Err(LibraryProductProjectionError::AuthenticatedOracleMismatch {
+            table: "qualified-path-site",
+        });
+    }
+    Ok(())
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn observe_qualified_path_resolution_for_test(
+    context: &mut ProjectionContext<'_>,
+    span: oxc_span::Span,
+    role: product::QualifiedPathRole,
+    path: &[&str],
+    resolution: QualifiedPathRawResolutionForTest,
+) {
+    context
+        .qualified_path_oracle
+        .push(QualifiedPathRawOracleRowForTest {
+            source_ordinal: context.source_ordinal,
+            start: span.start,
+            end: span.end,
+            role,
+            path: path.iter().map(|segment| (*segment).to_owned()).collect(),
+            resolution,
+        });
+}
+
+fn publish_qualified_path(
+    context: &mut ProjectionContext<'_>,
+    recipe: product::TypeRecipeKey,
+    span: oxc_span::Span,
+) -> Result<(), LibraryProductProjectionError> {
+    let identity = (context.source_ordinal, span.start, span.end);
+    let Some(pending) = context.pending_qualified_paths.remove(&identity) else {
+        return Ok(());
+    };
+    context
+        .assembly
+        .add_qualified_path(product::QualifiedPathRecipe {
+            recipe,
+            role: pending.role,
+            resolution: pending.resolution,
+        });
+    for (ordinal, segment) in pending.segments.into_iter().enumerate() {
+        let ordinal = u32::try_from(ordinal).map_err(|_| {
+            LibraryProductProjectionError::Product(product::ProductBuildError::TooManyRows(
+                "qualified_path_segments",
+            ))
+        })?;
+        context
+            .assembly
+            .add_qualified_path_segment(product::QualifiedPathSegmentRecipe {
+                recipe,
+                ordinal,
+                name: segment.name,
+                site: segment.site,
+            });
+    }
+    Ok(())
 }
 
 fn record_dependency(
@@ -2674,10 +2951,17 @@ fn record_value_dependency(
     Ok(product::DependencyLinkRecipe { owner, kind })
 }
 
-fn resolve_type_reference(
-    context: &ProjectionContext<'_>,
+fn resolve_type_reference_with_outcome(
+    context: &mut ProjectionContext<'_>,
     path: &[&str],
-) -> Result<product::TypeReferenceResolution, LibraryProductProjectionError> {
+    span: oxc_span::Span,
+) -> Result<
+    (
+        product::TypeReferenceResolution,
+        product::QualifiedPathResolutionOutcome,
+    ),
+    LibraryProductProjectionError,
+> {
     if let [name] = path {
         if let Some(parameter) = context
             .active_type_parameters
@@ -2685,7 +2969,18 @@ fn resolve_type_reference(
             .rev()
             .find_map(|scope| scope.bindings.get(*name).copied())
         {
-            return Ok(product::TypeReferenceResolution::TypeParameter(parameter));
+            #[cfg(any(test, feature = "test-utils"))]
+            observe_qualified_path_resolution_for_test(
+                context,
+                span,
+                product::QualifiedPathRole::Reference,
+                path,
+                QualifiedPathRawResolutionForTest::TypeParameter,
+            );
+            return Ok((
+                product::TypeReferenceResolution::TypeParameter(parameter),
+                product::QualifiedPathResolutionOutcome::Resolved,
+            ));
         }
     }
     let scope =
@@ -2693,17 +2988,219 @@ fn resolve_type_reference(
             .current_scope
             .ok_or(LibraryProductProjectionError::MissingAuthenticatedScope {
                 source: context.source_ordinal,
-                binding_start: 0,
+                binding_start: span.start,
             })?;
-    Ok(resolved_type_group(context.binder, scope, path)
-        .and_then(|group| context.group_keys.get(&group).copied())
-        .map(product::TypeReferenceResolution::Group)
-        .unwrap_or(product::TypeReferenceResolution::Unresolved {
-            region: context.current_region,
-        }))
+    if let [name] = path {
+        let raw = context
+            .binder
+            .resolve_type(scope, name)
+            .and_then(|symbol| context.binder.symbols.get(symbol))
+            .and_then(|symbol| symbol.ty);
+        #[cfg(any(test, feature = "test-utils"))]
+        observe_qualified_path_resolution_for_test(
+            context,
+            span,
+            product::QualifiedPathRole::Reference,
+            path,
+            raw.map_or(
+                QualifiedPathRawResolutionForTest::MissingTypeRoot,
+                QualifiedPathRawResolutionForTest::StableTypeGroup,
+            ),
+        );
+        let Some(group) = raw else {
+            return Ok((
+                product::TypeReferenceResolution::Unresolved {
+                    region: context.current_region,
+                },
+                unresolved_path_outcome(product::QualifiedPathUnresolvedCause::MissingRoot, 0)?,
+            ));
+        };
+        let group = context.group_keys.get(&group).copied().ok_or(
+            LibraryProductProjectionError::AuthenticatedOracleMismatch {
+                table: "qualified-type-path-target",
+            },
+        )?;
+        return Ok((
+            product::TypeReferenceResolution::Group(group),
+            product::QualifiedPathResolutionOutcome::Resolved,
+        ));
+    }
+    let raw = context.binder.resolve_qualified_type_path(scope, path);
+    #[cfg(any(test, feature = "test-utils"))]
+    observe_qualified_path_resolution_for_test(
+        context,
+        span,
+        product::QualifiedPathRole::Reference,
+        path,
+        QualifiedPathRawResolutionForTest::QualifiedType(raw),
+    );
+    let resolution = match raw {
+        QualifiedTypePathResolution::TypeGroup(group) => {
+            product::TypeReferenceResolution::Group(context.group_keys.get(&group).copied().ok_or(
+                LibraryProductProjectionError::AuthenticatedOracleMismatch {
+                    table: "qualified-type-path-target",
+                },
+            )?)
+        }
+        QualifiedTypePathResolution::MissingRoot { .. }
+        | QualifiedTypePathResolution::TypeOnlyRoot { .. }
+        | QualifiedTypePathResolution::MissingMember { .. }
+        | QualifiedTypePathResolution::TypeOnlyIntermediate { .. }
+        | QualifiedTypePathResolution::ValueOnlyLeaf { .. }
+        | QualifiedTypePathResolution::Unavailable { .. }
+        | QualifiedTypePathResolution::Deferred { .. } => {
+            product::TypeReferenceResolution::Unresolved {
+                region: context.current_region,
+            }
+        }
+    };
+    Ok((resolution, normalize_qualified_type_path_resolution(raw)?))
 }
 
-fn resolve_value_reference(
+fn resolve_value_reference_with_outcome(
+    context: &mut ProjectionContext<'_>,
+    path: &[&str],
+    span: oxc_span::Span,
+) -> Result<
+    (
+        product::ValueReferenceResolution,
+        product::QualifiedPathResolutionOutcome,
+    ),
+    LibraryProductProjectionError,
+> {
+    if path == ["globalThis"] {
+        #[cfg(any(test, feature = "test-utils"))]
+        observe_qualified_path_resolution_for_test(
+            context,
+            span,
+            product::QualifiedPathRole::Query,
+            path,
+            QualifiedPathRawResolutionForTest::IntrinsicGlobalValue,
+        );
+        return Ok((
+            product::ValueReferenceResolution::IntrinsicGlobalValue,
+            product::QualifiedPathResolutionOutcome::Resolved,
+        ));
+    }
+    let scope =
+        context
+            .current_scope
+            .ok_or(LibraryProductProjectionError::MissingAuthenticatedScope {
+                source: context.source_ordinal,
+                binding_start: span.start,
+            })?;
+    if let [name] = path {
+        let raw = context.binder.resolve_value_binding(scope, name);
+        #[cfg(any(test, feature = "test-utils"))]
+        {
+            let observed = match raw {
+                super::bind::ValueResolution::Resolved { symbol, kind } => {
+                    let storage = match kind {
+                        super::bind::ResolvedValueKind::Ordinary => context
+                            .binder
+                            .symbols
+                            .get(symbol)
+                            .and_then(|symbol| symbol.value),
+                        super::bind::ResolvedValueKind::StandaloneNamespace { storage, .. } => {
+                            Some(storage)
+                        }
+                    }
+                    .ok_or(
+                        LibraryProductProjectionError::AuthenticatedOracleMismatch {
+                            table: "qualified-value-path-observer",
+                        },
+                    )?;
+                    QualifiedPathRawResolutionForTest::StableValue(storage)
+                }
+                super::bind::ValueResolution::TypeOnlyNamespace { .. } => {
+                    QualifiedPathRawResolutionForTest::TypeOnlyValueRoot
+                }
+                super::bind::ValueResolution::Missing => {
+                    QualifiedPathRawResolutionForTest::MissingValueRoot
+                }
+            };
+            observe_qualified_path_resolution_for_test(
+                context,
+                span,
+                product::QualifiedPathRole::Query,
+                path,
+                observed,
+            );
+        }
+        let (resolution, outcome) = match raw {
+            super::bind::ValueResolution::Resolved { symbol, kind } => {
+                let storage = match kind {
+                    super::bind::ResolvedValueKind::Ordinary => context
+                        .binder
+                        .symbols
+                        .get(symbol)
+                        .and_then(|symbol| symbol.value),
+                    super::bind::ResolvedValueKind::StandaloneNamespace { storage, .. } => {
+                        Some(storage)
+                    }
+                }
+                .ok_or(
+                    LibraryProductProjectionError::AuthenticatedOracleMismatch {
+                        table: "qualified-value-path-target",
+                    },
+                )?;
+                let group = context.value_group_keys.get(&storage.0).copied().ok_or(
+                    LibraryProductProjectionError::AuthenticatedOracleMismatch {
+                        table: "qualified-value-path-target",
+                    },
+                )?;
+                (
+                    product::ValueReferenceResolution::Group(group),
+                    product::QualifiedPathResolutionOutcome::Resolved,
+                )
+            }
+            super::bind::ValueResolution::TypeOnlyNamespace { .. } => (
+                product::ValueReferenceResolution::Unresolved {
+                    region: context.current_region,
+                },
+                unresolved_path_outcome(product::QualifiedPathUnresolvedCause::TypeOnlyRoot, 0)?,
+            ),
+            super::bind::ValueResolution::Missing => (
+                product::ValueReferenceResolution::Unresolved {
+                    region: context.current_region,
+                },
+                unresolved_path_outcome(product::QualifiedPathUnresolvedCause::MissingRoot, 0)?,
+            ),
+        };
+        return Ok((resolution, outcome));
+    }
+    let raw = context.binder.resolve_qualified_value_path(scope, path);
+    #[cfg(any(test, feature = "test-utils"))]
+    observe_qualified_path_resolution_for_test(
+        context,
+        span,
+        product::QualifiedPathRole::Query,
+        path,
+        QualifiedPathRawResolutionForTest::QualifiedValue(raw),
+    );
+    let resolution = match raw {
+        QualifiedValuePathResolution::Value(storage) => product::ValueReferenceResolution::Group(
+            context.value_group_keys.get(&storage.0).copied().ok_or(
+                LibraryProductProjectionError::AuthenticatedOracleMismatch {
+                    table: "qualified-value-path-target",
+                },
+            )?,
+        ),
+        QualifiedValuePathResolution::MissingRoot { .. }
+        | QualifiedValuePathResolution::TypeOnlyRoot { .. }
+        | QualifiedValuePathResolution::MissingMember { .. }
+        | QualifiedValuePathResolution::NamespaceOnlyLeaf { .. }
+        | QualifiedValuePathResolution::Unavailable { .. }
+        | QualifiedValuePathResolution::Deferred { .. } => {
+            product::ValueReferenceResolution::Unresolved {
+                region: context.current_region,
+            }
+        }
+    };
+    Ok((resolution, normalize_qualified_value_path_resolution(raw)?))
+}
+
+fn resolve_symbolic_value_reference(
     context: &ProjectionContext<'_>,
     path: &[&str],
 ) -> Result<product::ValueReferenceResolution, LibraryProductProjectionError> {
@@ -2726,113 +3223,18 @@ fn resolve_value_reference(
 }
 
 #[cfg(any(test, feature = "test-utils"))]
-fn record_type_path_outcome_for_test(
-    context: &mut ProjectionContext<'_>,
-    path: &[&str],
-    span: oxc_span::Span,
-) -> Result<(), LibraryProductProjectionError> {
-    let outcome = if let [name] = path {
-        if context
-            .active_type_parameters
-            .iter()
-            .rev()
-            .any(|scope| scope.bindings.contains_key(*name))
-        {
-            product::QualifiedPathResolutionOutcome::Resolved
-        } else {
-            let scope = context.current_scope.ok_or(
-                LibraryProductProjectionError::MissingAuthenticatedScope {
-                    source: context.source_ordinal,
-                    binding_start: span.start,
-                },
-            )?;
-            if context.binder.resolve_type(scope, name).is_some() {
-                product::QualifiedPathResolutionOutcome::Resolved
-            } else {
-                unresolved_path_outcome(product::QualifiedPathUnresolvedCause::MissingRoot, 0)
-            }
-        }
-    } else {
-        let scope = context.current_scope.ok_or(
-            LibraryProductProjectionError::MissingAuthenticatedScope {
-                source: context.source_ordinal,
-                binding_start: span.start,
-            },
-        )?;
-        normalize_qualified_type_path_resolution_for_test(
-            context.binder.resolve_qualified_type_path(scope, path),
-        )
-    };
-    context
-        .qualified_path_oracle
-        .push(QualifiedPathOutcomeOracleRowForTest {
-            source_ordinal: context.source_ordinal,
-            start: span.start,
-            end: span.end,
-            role: product::QualifiedPathRole::Reference,
-            path: path.iter().map(|segment| (*segment).to_owned()).collect(),
-            outcome,
-        });
-    Ok(())
-}
-
-#[cfg(any(test, feature = "test-utils"))]
-fn record_value_path_outcome_for_test(
-    context: &mut ProjectionContext<'_>,
-    path: &[&str],
-    span: oxc_span::Span,
-) -> Result<(), LibraryProductProjectionError> {
-    let outcome = if path == ["globalThis"] {
-        product::QualifiedPathResolutionOutcome::Resolved
-    } else if let [name] = path {
-        let scope = context.current_scope.ok_or(
-            LibraryProductProjectionError::MissingAuthenticatedScope {
-                source: context.source_ordinal,
-                binding_start: span.start,
-            },
-        )?;
-        match context.binder.resolve_value_binding(scope, name) {
-            super::bind::ValueResolution::Resolved { .. } => {
-                product::QualifiedPathResolutionOutcome::Resolved
-            }
-            super::bind::ValueResolution::TypeOnlyNamespace { .. } => {
-                unresolved_path_outcome(product::QualifiedPathUnresolvedCause::TypeOnlyRoot, 0)
-            }
-            super::bind::ValueResolution::Missing => {
-                unresolved_path_outcome(product::QualifiedPathUnresolvedCause::MissingRoot, 0)
-            }
-        }
-    } else {
-        let scope = context.current_scope.ok_or(
-            LibraryProductProjectionError::MissingAuthenticatedScope {
-                source: context.source_ordinal,
-                binding_start: span.start,
-            },
-        )?;
-        normalize_qualified_value_path_resolution_for_test(
-            context.binder.resolve_qualified_value_path(scope, path),
-        )
-    };
-    context
-        .qualified_path_oracle
-        .push(QualifiedPathOutcomeOracleRowForTest {
-            source_ordinal: context.source_ordinal,
-            start: span.start,
-            end: span.end,
-            role: product::QualifiedPathRole::Query,
-            path: path.iter().map(|segment| (*segment).to_owned()).collect(),
-            outcome,
-        });
-    Ok(())
-}
-
-#[cfg(any(test, feature = "test-utils"))]
 pub fn normalize_qualified_type_path_resolution_for_test(
     resolution: QualifiedTypePathResolution,
 ) -> product::QualifiedPathResolutionOutcome {
+    normalize_qualified_type_path_resolution(resolution).expect("qualified path ordinal fits u32")
+}
+
+fn normalize_qualified_type_path_resolution(
+    resolution: QualifiedTypePathResolution,
+) -> Result<product::QualifiedPathResolutionOutcome, LibraryProductProjectionError> {
     match resolution {
         QualifiedTypePathResolution::TypeGroup(_) => {
-            product::QualifiedPathResolutionOutcome::Resolved
+            Ok(product::QualifiedPathResolutionOutcome::Resolved)
         }
         QualifiedTypePathResolution::MissingRoot { segment } => {
             unresolved_path_outcome(product::QualifiedPathUnresolvedCause::MissingRoot, segment)
@@ -2856,9 +3258,7 @@ pub fn normalize_qualified_type_path_resolution_for_test(
             unresolved_path_outcome(product::QualifiedPathUnresolvedCause::Unavailable, segment)
         }
         QualifiedTypePathResolution::Deferred { segment, reason } => unresolved_path_outcome(
-            product::QualifiedPathUnresolvedCause::Deferred(normalize_deferred_reason_for_test(
-                reason,
-            )),
+            product::QualifiedPathUnresolvedCause::Deferred(normalize_deferred_reason(reason)),
             segment,
         ),
     }
@@ -2868,8 +3268,16 @@ pub fn normalize_qualified_type_path_resolution_for_test(
 pub fn normalize_qualified_value_path_resolution_for_test(
     resolution: QualifiedValuePathResolution,
 ) -> product::QualifiedPathResolutionOutcome {
+    normalize_qualified_value_path_resolution(resolution).expect("qualified path ordinal fits u32")
+}
+
+fn normalize_qualified_value_path_resolution(
+    resolution: QualifiedValuePathResolution,
+) -> Result<product::QualifiedPathResolutionOutcome, LibraryProductProjectionError> {
     match resolution {
-        QualifiedValuePathResolution::Value(_) => product::QualifiedPathResolutionOutcome::Resolved,
+        QualifiedValuePathResolution::Value(_) => {
+            Ok(product::QualifiedPathResolutionOutcome::Resolved)
+        }
         QualifiedValuePathResolution::MissingRoot { segment } => {
             unresolved_path_outcome(product::QualifiedPathUnresolvedCause::MissingRoot, segment)
         }
@@ -2888,16 +3296,13 @@ pub fn normalize_qualified_value_path_resolution_for_test(
             unresolved_path_outcome(product::QualifiedPathUnresolvedCause::Unavailable, segment)
         }
         QualifiedValuePathResolution::Deferred { segment, reason } => unresolved_path_outcome(
-            product::QualifiedPathUnresolvedCause::Deferred(normalize_deferred_reason_for_test(
-                reason,
-            )),
+            product::QualifiedPathUnresolvedCause::Deferred(normalize_deferred_reason(reason)),
             segment,
         ),
     }
 }
 
-#[cfg(any(test, feature = "test-utils"))]
-fn normalize_deferred_reason_for_test(
+fn normalize_deferred_reason(
     reason: QualifiedTypePathDeferredReason,
 ) -> product::QualifiedPathDeferredReason {
     match reason {
@@ -2906,15 +3311,18 @@ fn normalize_deferred_reason_for_test(
     }
 }
 
-#[cfg(any(test, feature = "test-utils"))]
 fn unresolved_path_outcome(
     cause: product::QualifiedPathUnresolvedCause,
     segment: usize,
-) -> product::QualifiedPathResolutionOutcome {
-    product::QualifiedPathResolutionOutcome::Unresolved {
+) -> Result<product::QualifiedPathResolutionOutcome, LibraryProductProjectionError> {
+    Ok(product::QualifiedPathResolutionOutcome::Unresolved {
         cause,
-        failing_segment_ordinal: u32::try_from(segment).expect("qualified path ordinal fits u32"),
-    }
+        failing_segment_ordinal: u32::try_from(segment).map_err(|_| {
+            LibraryProductProjectionError::Product(product::ProductBuildError::TooManyRows(
+                "qualified_path_segments",
+            ))
+        })?,
+    })
 }
 
 fn resolved_type_group(
@@ -3395,7 +3803,7 @@ fn lower_property_name(
         PropertyKey::Identifier(value) => {
             let path_text = vec![value.name.as_str()];
             let path = vec![context.assembly.intern(value.name.as_str())?];
-            let resolution = resolve_value_reference(context, &path_text)?;
+            let resolution = resolve_symbolic_value_reference(context, &path_text)?;
             let dependency = record_value_dependency(
                 context,
                 &path_text,
@@ -3415,7 +3823,7 @@ fn lower_property_name(
             path_text.push(value.property.name.as_str());
             let mut path = lower_value_name_path(context, &value.object)?;
             path.push(context.assembly.intern(value.property.name.as_str())?);
-            let resolution = resolve_value_reference(context, &path_text)?;
+            let resolution = resolve_symbolic_value_reference(context, &path_text)?;
             let dependency = record_value_dependency(
                 context,
                 &path_text,
@@ -3830,6 +4238,157 @@ mod tests {
                 "{expected:?}: {resolution:?}"
             );
         }
+    }
+
+    #[test]
+    fn qualified_path_projection_covers_single_and_multi_segment_roles() {
+        let source = r#"
+            interface Root {}
+            declare namespace Space { const value: number; }
+            interface Uses {
+                reference: Root;
+                query: typeof Space.value;
+                global: typeof globalThis;
+                imported: import("pkg").One;
+                nestedImported: import("pkg").One.Two;
+            }
+        "#;
+        let product = project_test_source("qualified-paths.d.ts", source);
+        product
+            .validate()
+            .expect("qualified path product validates");
+        let text = |key: product::StringKey| product.strings()[key.index()].as_str();
+        for (role, expected) in [
+            (product::QualifiedPathRole::Reference, ["Root"].as_slice()),
+            (
+                product::QualifiedPathRole::Query,
+                ["Space", "value"].as_slice(),
+            ),
+            (product::QualifiedPathRole::Query, ["globalThis"].as_slice()),
+            (
+                product::QualifiedPathRole::ImportQualifier,
+                ["One"].as_slice(),
+            ),
+            (
+                product::QualifiedPathRole::ImportQualifier,
+                ["One", "Two"].as_slice(),
+            ),
+        ] {
+            let path = product
+                .qualified_path_rows()
+                .iter()
+                .find(|path| {
+                    let names = match &product.types()[path.recipe.index()].node {
+                        product::TypeRecipeNode::Reference { path, .. }
+                        | product::TypeRecipeNode::Query { path, .. } => Some(path.as_ref()),
+                        product::TypeRecipeNode::Import { qualifier, .. }
+                            if !qualifier.is_empty() =>
+                        {
+                            Some(qualifier.as_ref())
+                        }
+                        _ => None,
+                    };
+                    path.role == role
+                        && names.is_some_and(|names| {
+                            names
+                                .iter()
+                                .map(|name| text(*name))
+                                .eq(expected.iter().copied())
+                        })
+                })
+                .unwrap_or_else(|| panic!("missing {role:?} {expected:?}"));
+            let segments = product
+                .qualified_path_segment_rows()
+                .iter()
+                .filter(|segment| segment.recipe == path.recipe)
+                .collect::<Vec<_>>();
+            assert_eq!(segments.len(), expected.len());
+            for (segment, expected) in segments.iter().zip(expected) {
+                assert_eq!(text(segment.name), *expected);
+                let start = usize::try_from(segment.site.start).expect("segment start");
+                let end = usize::try_from(segment.site.end).expect("segment end");
+                assert_eq!(&source[start..end], *expected);
+            }
+            if role == product::QualifiedPathRole::ImportQualifier {
+                assert_eq!(
+                    path.resolution,
+                    product::QualifiedPathResolutionOutcome::Unresolved {
+                        cause: product::QualifiedPathUnresolvedCause::Deferred(
+                            product::QualifiedPathDeferredReason::Import,
+                        ),
+                        failing_segment_ordinal: 0,
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn qualified_path_segment_sites_preserve_escaped_and_non_ascii_source() {
+        let source = r#"
+            declare namespace Café {
+                interface Item {}
+                interface Δ {}
+            }
+            interface Uses {
+                escaped: Café.\u0049tem;
+                unicode: Café.Δ;
+            }
+        "#;
+        let product = project_test_source("qualified-unicode.d.ts", source);
+        product
+            .validate()
+            .expect("qualified path product validates");
+        let path_segments = |expected: &[&str]| {
+            let path = product
+                .qualified_path_rows()
+                .iter()
+                .find(|path| {
+                    let product::TypeRecipeNode::Reference { path: names, .. } =
+                        &product.types()[path.recipe.index()].node
+                    else {
+                        return false;
+                    };
+                    names
+                        .iter()
+                        .map(|name| product.strings()[name.index()].as_str())
+                        .eq(expected.iter().copied())
+                })
+                .expect("qualified reference path");
+            product
+                .qualified_path_segment_rows()
+                .iter()
+                .filter(|segment| segment.recipe == path.recipe)
+                .collect::<Vec<_>>()
+        };
+
+        let escaped = path_segments(&["Café", "Item"]);
+        let escaped_names = escaped
+            .iter()
+            .map(|segment| product.strings()[segment.name.index()].as_str())
+            .collect::<Vec<_>>();
+        let escaped_slices = escaped
+            .iter()
+            .map(|segment| {
+                let start = usize::try_from(segment.site.start).expect("segment start");
+                let end = usize::try_from(segment.site.end).expect("segment end");
+                &source[start..end]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(escaped_names, ["Café", "Item"]);
+        assert_eq!(escaped_slices, ["Café", r"\u0049tem"]);
+        assert_ne!(escaped_names[1], escaped_slices[1]);
+
+        let unicode = path_segments(&["Café", "Δ"]);
+        let unicode_slices = unicode
+            .iter()
+            .map(|segment| {
+                let start = usize::try_from(segment.site.start).expect("segment start");
+                let end = usize::try_from(segment.site.end).expect("segment end");
+                &source[start..end]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(unicode_slices, ["Café", "Δ"]);
     }
 
     #[test]

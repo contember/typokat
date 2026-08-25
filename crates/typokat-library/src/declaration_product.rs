@@ -10,7 +10,7 @@ use crate::binder::product::{
 #[cfg(test)]
 use crate::binder::product::{
     project_library_declaration_product_with_qualified_path_oracle_for_test,
-    QualifiedPathOutcomeOracleRowForTest,
+    QualifiedPathRawOracleRowForTest,
 };
 use crate::source::{CompilationOrigin, LibraryFileOrdinal};
 use oxc_allocator::Allocator;
@@ -251,7 +251,7 @@ fn build_declaration_product_from_sources_using<R>(
 pub(super) fn build_packaged_declaration_product_with_qualified_path_oracle_for_test() -> Result<
     (
         typokat_library_product::LibraryDeclarationProduct,
-        Vec<QualifiedPathOutcomeOracleRowForTest>,
+        Vec<QualifiedPathRawOracleRowForTest>,
     ),
     LibraryDeclarationProductBuildError,
 > {

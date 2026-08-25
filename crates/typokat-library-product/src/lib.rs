@@ -181,6 +181,12 @@ impl ProductAssembly {
     pub fn add_intrinsic_marker(&mut self, value: IntrinsicMarkerRecipe) {
         self.intrinsic_markers.push(value);
     }
+    pub fn add_qualified_path(&mut self, value: QualifiedPathRecipe) {
+        self.qualified_paths.push(value);
+    }
+    pub fn add_qualified_path_segment(&mut self, value: QualifiedPathSegmentRecipe) {
+        self.qualified_path_segments.push(value);
+    }
 
     pub fn finish(
         self,

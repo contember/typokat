@@ -9,7 +9,8 @@ use crate::binder::namespace::{
 };
 use crate::binder::product::{
     normalize_qualified_type_path_resolution_for_test,
-    normalize_qualified_value_path_resolution_for_test, QualifiedPathOutcomeOracleRowForTest,
+    normalize_qualified_value_path_resolution_for_test, QualifiedPathRawOracleRowForTest,
+    QualifiedPathRawResolutionForTest,
 };
 use crate::check::checker::library_compiler::{
     compile_library_binder_checkpoint, InjectedLibrarySource,
@@ -345,7 +346,7 @@ fn recipe_index_for_ast_path(
 
 fn binder_outcome_for_ast_path(
     expected: &AstQualifiedPath,
-    oracle: &[QualifiedPathOutcomeOracleRowForTest],
+    oracle: &[QualifiedPathRawOracleRowForTest],
 ) -> QualifiedPathResolutionOutcome {
     let expected_path = expected
         .segments
@@ -367,13 +368,106 @@ fn binder_outcome_for_ast_path(
         })
         .collect::<Vec<_>>();
     assert_eq!(matches.len(), 1, "one pre-normalization binder outcome");
-    matches[0].outcome
+    independently_normalize_raw_resolution(matches[0].resolution)
+}
+
+fn independently_normalize_raw_resolution(
+    resolution: QualifiedPathRawResolutionForTest,
+) -> QualifiedPathResolutionOutcome {
+    let unresolved = |cause, segment| QualifiedPathResolutionOutcome::Unresolved {
+        cause,
+        failing_segment_ordinal: u32::try_from(segment).expect("qualified path ordinal"),
+    };
+    match resolution {
+        QualifiedPathRawResolutionForTest::QualifiedType(raw) => match raw {
+            QualifiedTypePathResolution::TypeGroup(_) => QualifiedPathResolutionOutcome::Resolved,
+            QualifiedTypePathResolution::MissingRoot { segment } => {
+                unresolved(QualifiedPathUnresolvedCause::MissingRoot, segment)
+            }
+            QualifiedTypePathResolution::TypeOnlyRoot { segment } => {
+                unresolved(QualifiedPathUnresolvedCause::TypeOnlyRoot, segment)
+            }
+            QualifiedTypePathResolution::MissingMember { segment } => {
+                unresolved(QualifiedPathUnresolvedCause::MissingMember, segment)
+            }
+            QualifiedTypePathResolution::TypeOnlyIntermediate { segment } => {
+                unresolved(QualifiedPathUnresolvedCause::TypeOnlyIntermediate, segment)
+            }
+            QualifiedTypePathResolution::ValueOnlyLeaf { segment } => {
+                unresolved(QualifiedPathUnresolvedCause::ValueOnlyLeaf, segment)
+            }
+            QualifiedTypePathResolution::Unavailable { segment } => {
+                unresolved(QualifiedPathUnresolvedCause::Unavailable, segment)
+            }
+            QualifiedTypePathResolution::Deferred { segment, reason } => unresolved(
+                QualifiedPathUnresolvedCause::Deferred(match reason {
+                    QualifiedTypePathDeferredReason::Import => {
+                        typokat_library_product::QualifiedPathDeferredReason::Import
+                    }
+                    QualifiedTypePathDeferredReason::Enum => {
+                        typokat_library_product::QualifiedPathDeferredReason::Enum
+                    }
+                }),
+                segment,
+            ),
+        },
+        QualifiedPathRawResolutionForTest::QualifiedValue(raw) => match raw {
+            QualifiedValuePathResolution::Value(_) => QualifiedPathResolutionOutcome::Resolved,
+            QualifiedValuePathResolution::MissingRoot { segment } => {
+                unresolved(QualifiedPathUnresolvedCause::MissingRoot, segment)
+            }
+            QualifiedValuePathResolution::TypeOnlyRoot { segment } => {
+                unresolved(QualifiedPathUnresolvedCause::TypeOnlyRoot, segment)
+            }
+            QualifiedValuePathResolution::MissingMember { segment } => {
+                unresolved(QualifiedPathUnresolvedCause::MissingMember, segment)
+            }
+            QualifiedValuePathResolution::NamespaceOnlyLeaf { segment } => {
+                unresolved(QualifiedPathUnresolvedCause::NamespaceOnlyLeaf, segment)
+            }
+            QualifiedValuePathResolution::Unavailable { segment } => {
+                unresolved(QualifiedPathUnresolvedCause::Unavailable, segment)
+            }
+            QualifiedValuePathResolution::Deferred { segment, reason } => unresolved(
+                QualifiedPathUnresolvedCause::Deferred(match reason {
+                    QualifiedTypePathDeferredReason::Import => {
+                        typokat_library_product::QualifiedPathDeferredReason::Import
+                    }
+                    QualifiedTypePathDeferredReason::Enum => {
+                        typokat_library_product::QualifiedPathDeferredReason::Enum
+                    }
+                }),
+                segment,
+            ),
+        },
+        QualifiedPathRawResolutionForTest::StableTypeGroup(_)
+        | QualifiedPathRawResolutionForTest::StableValue(_)
+        | QualifiedPathRawResolutionForTest::TypeParameter
+        | QualifiedPathRawResolutionForTest::IntrinsicGlobalValue => {
+            QualifiedPathResolutionOutcome::Resolved
+        }
+        QualifiedPathRawResolutionForTest::MissingTypeRoot
+        | QualifiedPathRawResolutionForTest::MissingValueRoot => {
+            unresolved(QualifiedPathUnresolvedCause::MissingRoot, 0)
+        }
+        QualifiedPathRawResolutionForTest::TypeOnlyValueRoot => {
+            unresolved(QualifiedPathUnresolvedCause::TypeOnlyRoot, 0)
+        }
+        QualifiedPathRawResolutionForTest::ImportQualifier => {
+            QualifiedPathResolutionOutcome::Unresolved {
+                cause: QualifiedPathUnresolvedCause::Deferred(
+                    typokat_library_product::QualifiedPathDeferredReason::Import,
+                ),
+                failing_segment_ordinal: 0,
+            }
+        }
+    }
 }
 
 fn expected_qualified_path_tables(
     product: &LibraryDeclarationProduct,
     paths: &[AstQualifiedPath],
-    oracle: &[QualifiedPathOutcomeOracleRowForTest],
+    oracle: &[QualifiedPathRawOracleRowForTest],
 ) -> (Vec<QualifiedPathRecipe>, Vec<QualifiedPathSegmentRecipe>) {
     let mut headers = Vec::with_capacity(paths.len());
     let mut segments = Vec::new();
@@ -411,7 +505,7 @@ fn expected_qualified_path_tables(
 
 fn assert_binder_oracle_matches_ast_domain(
     paths: &[AstQualifiedPath],
-    oracle: &[QualifiedPathOutcomeOracleRowForTest],
+    oracle: &[QualifiedPathRawOracleRowForTest],
 ) {
     let import_qualifiers = paths
         .iter()
@@ -633,7 +727,7 @@ fn missing_root_diagnostic(path_segment_count: usize) -> u32 {
 }
 
 #[test]
-fn qualified_path_schema_authenticates_populated_controls_while_empty_product_stays_stable() {
+fn qualified_path_schema_authenticates_production_tables() {
     let profile = ExactLibraryProfile::load_packaged().expect("packaged profile");
     let (product, binder_oracle) =
         build_packaged_declaration_product_with_qualified_path_oracle_for_test()
@@ -644,26 +738,15 @@ fn qualified_path_schema_authenticates_populated_controls_while_empty_product_st
     assert!(!paths.is_empty());
     assert!(!segments.is_empty());
 
-    let empty_receipt = product.audit_receipt();
-    assert_eq!(empty_receipt.qualified_path_count, 0);
-    assert_eq!(empty_receipt.qualified_path_segment_count, 0);
-    assert_eq!(
-        empty_receipt.qualified_path_digest,
-        typokat_library_product::sha256_hex(b"")
-    );
-
-    let populated = typokat_library_product::with_qualified_path_tables_for_test(
-        &product,
-        paths.clone(),
-        segments.clone(),
-    );
-    populated
+    assert_eq!(product.qualified_path_rows(), paths);
+    assert_eq!(product.qualified_path_segment_rows(), segments);
+    product
         .validate()
         .expect("complete qualified-path tables validate");
-    let receipt = populated.audit_receipt();
+    let receipt = product.audit_receipt();
     assert_eq!(receipt.qualified_path_count, paths.len());
     assert_eq!(receipt.qualified_path_segment_count, segments.len());
-    let canonical = populated.canonical_audit_render();
+    let canonical = product.canonical_audit_render();
     assert_eq!(
         canonical
             .lines()
@@ -925,7 +1008,6 @@ fn qualified_path_outcome_normalization_preserves_unrepresented_binder_causes() 
 }
 
 #[test]
-#[ignore = "RED: the immutable product does not publish qualified-path provenance yet"]
 fn packaged_iterator_reference_has_exact_segment_sites_and_tk2503_outcome() {
     let profile = ExactLibraryProfile::load_packaged().expect("packaged profile");
     let (product, binder_oracle) =
@@ -990,7 +1072,6 @@ fn packaged_iterator_reference_has_exact_segment_sites_and_tk2503_outcome() {
 }
 
 #[test]
-#[ignore = "RED: the immutable product does not publish qualified-path provenance yet"]
 fn every_qualified_product_path_has_one_ast_derived_site_per_segment() {
     let profile = ExactLibraryProfile::load_packaged().expect("packaged profile");
     let (product, binder_oracle) =
@@ -1003,7 +1084,7 @@ fn every_qualified_product_path_has_one_ast_derived_site_per_segment() {
         .iter()
         .filter(|row| {
             matches!(
-                row.outcome,
+                independently_normalize_raw_resolution(row.resolution),
                 QualifiedPathResolutionOutcome::Unresolved { .. }
             )
         })
@@ -1016,7 +1097,7 @@ fn every_qualified_product_path_has_one_ast_derived_site_per_segment() {
                 row.start,
                 row.end,
                 row.path.clone(),
-                row.outcome,
+                independently_normalize_raw_resolution(row.resolution),
             )
         })
         .collect::<Vec<_>>();
@@ -1138,7 +1219,6 @@ fn every_qualified_product_path_has_one_ast_derived_site_per_segment() {
 }
 
 #[test]
-#[ignore = "RED: controls require populated qualified-path provenance"]
 fn qualified_path_contract_rejects_segment_provenance_mutations() {
     let profile = ExactLibraryProfile::load_packaged().expect("packaged profile");
     let (product, binder_oracle) =
@@ -1396,8 +1476,8 @@ fn product_receipt_matches_authenticated_edge_and_attachment_oracles() {
     assert_eq!(receipt.dependency_edge_count, 16_451);
     assert_eq!(receipt.namespace_attachment_count, 14);
     assert_eq!(receipt.value_attachment_count, 1_318);
-    assert_eq!(receipt.qualified_path_count, 0);
-    assert_eq!(receipt.qualified_path_segment_count, 0);
+    assert_eq!(receipt.qualified_path_count, 16_310);
+    assert_eq!(receipt.qualified_path_segment_count, 16_345);
     assert_eq!(receipt.index_signature_parameter_count, 72);
     assert_eq!(receipt.computed_property_name_count, 141);
     assert_eq!(receipt.constructor_count, 2);
@@ -1410,10 +1490,10 @@ fn product_receipt_matches_authenticated_edge_and_attachment_oracles() {
     assert_eq!(receipt.resolved_group_dependency_count, 14_235);
     assert_eq!(receipt.type_parameter_dependency_count, 2_207);
     assert_eq!(receipt.unresolved_dependency_count, 3);
-    assert_eq!(receipt.canonical_bytes, 30_688_670);
+    assert_eq!(receipt.canonical_bytes, 35_707_223);
     assert_eq!(
         receipt.canonical_digest,
-        "5469ee064cef88107b00837ee57c1d32e4efb15b2e8780819209e78e3c168e43"
+        "5a3b85f7f056f642c784b2f871b2df813f59e583742b549ad0f1519cefa97335"
     );
     assert_eq!(
         receipt.dependency_edge_digest,
@@ -1441,7 +1521,7 @@ fn product_receipt_matches_authenticated_edge_and_attachment_oracles() {
     );
     assert_eq!(
         receipt.qualified_path_digest,
-        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "1507b19431928d673075dbe54431dc483326738197766ca5bf0f6e44758d06ab"
     );
 
     assert!(product.groups().iter().any(|group| {
