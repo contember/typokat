@@ -32,6 +32,8 @@ impl LibraryDeclarationProduct {
             namespaces,
             values,
             intrinsic_markers,
+            qualified_paths,
+            qualified_path_segments,
             type_parameters,
             types,
             signatures,
@@ -150,6 +152,66 @@ impl LibraryDeclarationProduct {
                 row,
                 "marker",
             );
+        }
+        for (row, path) in qualified_paths.iter().enumerate() {
+            let QualifiedPathRecipe {
+                recipe: _recipe,
+                role,
+                resolution,
+            } = path;
+            field(
+                visitor,
+                ProductFieldClass::ProductKey,
+                "qualified_paths",
+                row,
+                "recipe",
+            );
+            walk_qualified_path_role(*role);
+            field(
+                visitor,
+                ProductFieldClass::Scalar,
+                "qualified_paths",
+                row,
+                "role",
+            );
+            walk_qualified_path_resolution(*resolution);
+            field(
+                visitor,
+                ProductFieldClass::Scalar,
+                "qualified_paths",
+                row,
+                "resolution",
+            );
+        }
+        for (row, segment) in qualified_path_segments.iter().enumerate() {
+            let QualifiedPathSegmentRecipe {
+                recipe: _recipe,
+                ordinal: _ordinal,
+                name: _name,
+                site,
+            } = segment;
+            field(
+                visitor,
+                ProductFieldClass::ProductKey,
+                "qualified_path_segments",
+                row,
+                "recipe",
+            );
+            field(
+                visitor,
+                ProductFieldClass::Scalar,
+                "qualified_path_segments",
+                row,
+                "ordinal",
+            );
+            field(
+                visitor,
+                ProductFieldClass::ProductKey,
+                "qualified_path_segments",
+                row,
+                "name",
+            );
+            walk_site(visitor, "qualified_path_segments", row, *site);
         }
         for (row, parameter) in type_parameters.iter().enumerate() {
             walk_type_parameter(visitor, row, parameter);
@@ -1215,6 +1277,35 @@ fn emit<V: ProductFieldVisitor>(
 ) {
     for (class, name) in fields {
         field(visitor, *class, table, row, name);
+    }
+}
+
+fn walk_qualified_path_role(role: QualifiedPathRole) {
+    match role {
+        QualifiedPathRole::Reference
+        | QualifiedPathRole::Query
+        | QualifiedPathRole::ImportQualifier => {}
+    }
+}
+
+fn walk_qualified_path_resolution(resolution: QualifiedPathResolutionOutcome) {
+    match resolution {
+        QualifiedPathResolutionOutcome::Resolved => {}
+        QualifiedPathResolutionOutcome::Unresolved {
+            cause,
+            failing_segment_ordinal: _,
+        } => match cause {
+            QualifiedPathUnresolvedCause::MissingRoot
+            | QualifiedPathUnresolvedCause::TypeOnlyRoot
+            | QualifiedPathUnresolvedCause::MissingMember
+            | QualifiedPathUnresolvedCause::TypeOnlyIntermediate
+            | QualifiedPathUnresolvedCause::ValueOnlyLeaf
+            | QualifiedPathUnresolvedCause::NamespaceOnlyLeaf
+            | QualifiedPathUnresolvedCause::Unavailable => {}
+            QualifiedPathUnresolvedCause::Deferred(reason) => match reason {
+                QualifiedPathDeferredReason::Import | QualifiedPathDeferredReason::Enum => {}
+            },
+        },
     }
 }
 

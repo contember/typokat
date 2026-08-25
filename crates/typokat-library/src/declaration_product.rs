@@ -7,6 +7,11 @@ use crate::binder::namespace::{
 use crate::binder::product::{
     project_library_declaration_product, CertifiedIntrinsicMarkerEvidence, LibraryProductSource,
 };
+#[cfg(test)]
+use crate::binder::product::{
+    project_library_declaration_product_with_qualified_path_oracle_for_test,
+    QualifiedPathOutcomeOracleRowForTest,
+};
 use crate::source::{CompilationOrigin, LibraryFileOrdinal};
 use oxc_allocator::Allocator;
 use oxc_parser::Parser;
@@ -103,11 +108,32 @@ fn packaged_intrinsic_marker_evidence(
 
 fn build_declaration_product_from_sources(
     profile_identity: &str,
-    mut sources: Vec<&super::profile::ExactLibrarySource>,
+    sources: Vec<&super::profile::ExactLibrarySource>,
     certified_intrinsic_markers: &[CertifiedIntrinsicMarkerEvidence],
     perturb_allocations: bool,
 ) -> Result<typokat_library_product::LibraryDeclarationProduct, LibraryDeclarationProductBuildError>
 {
+    build_declaration_product_from_sources_using(
+        profile_identity,
+        sources,
+        certified_intrinsic_markers,
+        perturb_allocations,
+        project_library_declaration_product,
+    )
+}
+
+fn build_declaration_product_from_sources_using<R>(
+    profile_identity: &str,
+    mut sources: Vec<&super::profile::ExactLibrarySource>,
+    certified_intrinsic_markers: &[CertifiedIntrinsicMarkerEvidence],
+    perturb_allocations: bool,
+    projector: impl FnOnce(
+        &str,
+        &crate::binder::Binder,
+        &[LibraryProductSource<'_, '_>],
+        &[CertifiedIntrinsicMarkerEvidence],
+    ) -> Result<R, crate::binder::product::LibraryProductProjectionError>,
+) -> Result<R, LibraryDeclarationProductBuildError> {
     sources.sort_by_key(|source| source.ordinal());
     let texts = sources
         .iter()
@@ -212,13 +238,33 @@ fn build_declaration_product_from_sources(
             },
         )
         .collect::<Vec<_>>();
-    project_library_declaration_product(
+    projector(
         profile_identity,
         &binder,
         &inputs,
         certified_intrinsic_markers,
     )
     .map_err(LibraryDeclarationProductBuildError::Projection)
+}
+
+#[cfg(test)]
+pub(super) fn build_packaged_declaration_product_with_qualified_path_oracle_for_test() -> Result<
+    (
+        typokat_library_product::LibraryDeclarationProduct,
+        Vec<QualifiedPathOutcomeOracleRowForTest>,
+    ),
+    LibraryDeclarationProductBuildError,
+> {
+    let profile = ExactLibraryProfile::load_packaged()
+        .map_err(LibraryDeclarationProductBuildError::Profile)?;
+    let intrinsic_markers = packaged_intrinsic_marker_evidence(&profile);
+    build_declaration_product_from_sources_using(
+        profile.profile_identity(),
+        profile.sources().iter().collect(),
+        &intrinsic_markers,
+        false,
+        project_library_declaration_product_with_qualified_path_oracle_for_test,
+    )
 }
 
 #[cfg(test)]

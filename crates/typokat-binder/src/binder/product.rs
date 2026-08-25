@@ -3,6 +3,8 @@ use super::declaration::{
     DeclarationKind, SourceDeclarationManifest, SourceDeclarationProductPayload,
     SourceInterfaceOccurrenceKind, TypeGroupId, ValueStorageId,
 };
+#[cfg(any(test, feature = "test-utils"))]
+use super::namespace::QualifiedTypePathDeferredReason;
 use super::namespace::{
     NamespaceId, NamespaceOwner, QualifiedTypePathResolution, QualifiedValuePathResolution,
 };
@@ -32,6 +34,17 @@ pub struct CertifiedIntrinsicMarkerEvidence {
     pub source_ordinal: u32,
     pub binding_start: u32,
     pub marker: product::IntrinsicMarker,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QualifiedPathOutcomeOracleRowForTest {
+    pub source_ordinal: u32,
+    pub start: u32,
+    pub end: u32,
+    pub role: product::QualifiedPathRole,
+    pub path: Vec<String>,
+    pub outcome: product::QualifiedPathResolutionOutcome,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -115,6 +128,49 @@ pub fn project_library_declaration_product(
     sources: &[LibraryProductSource<'_, '_>],
     certified_intrinsic_markers: &[CertifiedIntrinsicMarkerEvidence],
 ) -> Result<product::LibraryDeclarationProduct, LibraryProductProjectionError> {
+    project_library_declaration_product_inner(
+        profile_identity,
+        binder,
+        sources,
+        certified_intrinsic_markers,
+    )
+    .map(|output| output.product)
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn project_library_declaration_product_with_qualified_path_oracle_for_test(
+    profile_identity: &str,
+    binder: &Binder,
+    sources: &[LibraryProductSource<'_, '_>],
+    certified_intrinsic_markers: &[CertifiedIntrinsicMarkerEvidence],
+) -> Result<
+    (
+        product::LibraryDeclarationProduct,
+        Vec<QualifiedPathOutcomeOracleRowForTest>,
+    ),
+    LibraryProductProjectionError,
+> {
+    project_library_declaration_product_inner(
+        profile_identity,
+        binder,
+        sources,
+        certified_intrinsic_markers,
+    )
+    .map(|output| (output.product, output.qualified_path_oracle))
+}
+
+struct LibraryProductProjectionOutput {
+    product: product::LibraryDeclarationProduct,
+    #[cfg(any(test, feature = "test-utils"))]
+    qualified_path_oracle: Vec<QualifiedPathOutcomeOracleRowForTest>,
+}
+
+fn project_library_declaration_product_inner(
+    profile_identity: &str,
+    binder: &Binder,
+    sources: &[LibraryProductSource<'_, '_>],
+    certified_intrinsic_markers: &[CertifiedIntrinsicMarkerEvidence],
+) -> Result<LibraryProductProjectionOutput, LibraryProductProjectionError> {
     if sources.is_empty() {
         return Err(LibraryProductProjectionError::EmptySources);
     }
@@ -380,6 +436,8 @@ pub fn project_library_declaration_product(
             .copied()
             .zip(source_containers.iter().copied())
             .collect(),
+        #[cfg(any(test, feature = "test-utils"))]
+        qualified_path_oracle: Vec::new(),
     };
     for group in binder.type_groups.iter().filter(|group| {
         group.fragments.iter().any(|fragment| {
@@ -1020,6 +1078,8 @@ pub fn project_library_declaration_product(
         };
         context.assembly.add_dependency(row);
     }
+    #[cfg(any(test, feature = "test-utils"))]
+    let qualified_path_oracle = std::mem::take(&mut context.qualified_path_oracle);
     let product = context
         .assembly
         .finish(profile_identity)
@@ -1052,7 +1112,11 @@ pub fn project_library_declaration_product(
     if product_values != value_oracle {
         return Err(LibraryProductProjectionError::AuthenticatedOracleMismatch { table: "values" });
     }
-    Ok(product)
+    Ok(LibraryProductProjectionOutput {
+        product,
+        #[cfg(any(test, feature = "test-utils"))]
+        qualified_path_oracle,
+    })
 }
 
 struct ProjectionContext<'binder> {
@@ -1077,6 +1141,8 @@ struct ProjectionContext<'binder> {
     global_container: product::ContainerKey,
     namespace_containers: BTreeMap<NamespaceId, product::ContainerKey>,
     region_containers: BTreeMap<product::RegionKey, product::ContainerKey>,
+    #[cfg(any(test, feature = "test-utils"))]
+    qualified_path_oracle: Vec<QualifiedPathOutcomeOracleRowForTest>,
 }
 
 #[derive(Clone)]
@@ -2174,6 +2240,8 @@ fn lower_type(
                         return Err(context.unsupported(value.span, "type-query-expression"))
                     }
                 };
+                #[cfg(any(test, feature = "test-utils"))]
+                record_value_path_outcome_for_test(context, &path_text, value.span)?;
                 let resolution = resolve_value_reference(context, &path_text)?;
                 let dependency = record_value_dependency(
                     context,
@@ -2435,6 +2503,8 @@ fn lower_reference_parts(
 ) -> Result<product::TypeRecipeNode, LibraryProductProjectionError> {
     let path_text = type_name_segments(name);
     let path = lower_qualified_path(context, name)?;
+    #[cfg(any(test, feature = "test-utils"))]
+    record_type_path_outcome_for_test(context, &path_text, span)?;
     let resolution = resolve_type_reference(context, &path_text)?;
     let dependency = record_dependency(
         context,
@@ -2480,6 +2550,8 @@ fn lower_heritage(
         }
         _ => return Err(context.unsupported(span, "interface-heritage")),
     };
+    #[cfg(any(test, feature = "test-utils"))]
+    record_type_path_outcome_for_test(context, &path_text, span)?;
     let resolution = resolve_type_reference(context, &path_text)?;
     let dependency = record_dependency(
         context,
@@ -2651,6 +2723,198 @@ fn resolve_value_reference(
         .unwrap_or(product::ValueReferenceResolution::Unresolved {
             region: context.current_region,
         }))
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn record_type_path_outcome_for_test(
+    context: &mut ProjectionContext<'_>,
+    path: &[&str],
+    span: oxc_span::Span,
+) -> Result<(), LibraryProductProjectionError> {
+    let outcome = if let [name] = path {
+        if context
+            .active_type_parameters
+            .iter()
+            .rev()
+            .any(|scope| scope.bindings.contains_key(*name))
+        {
+            product::QualifiedPathResolutionOutcome::Resolved
+        } else {
+            let scope = context.current_scope.ok_or(
+                LibraryProductProjectionError::MissingAuthenticatedScope {
+                    source: context.source_ordinal,
+                    binding_start: span.start,
+                },
+            )?;
+            if context.binder.resolve_type(scope, name).is_some() {
+                product::QualifiedPathResolutionOutcome::Resolved
+            } else {
+                unresolved_path_outcome(product::QualifiedPathUnresolvedCause::MissingRoot, 0)
+            }
+        }
+    } else {
+        let scope = context.current_scope.ok_or(
+            LibraryProductProjectionError::MissingAuthenticatedScope {
+                source: context.source_ordinal,
+                binding_start: span.start,
+            },
+        )?;
+        normalize_qualified_type_path_resolution_for_test(
+            context.binder.resolve_qualified_type_path(scope, path),
+        )
+    };
+    context
+        .qualified_path_oracle
+        .push(QualifiedPathOutcomeOracleRowForTest {
+            source_ordinal: context.source_ordinal,
+            start: span.start,
+            end: span.end,
+            role: product::QualifiedPathRole::Reference,
+            path: path.iter().map(|segment| (*segment).to_owned()).collect(),
+            outcome,
+        });
+    Ok(())
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn record_value_path_outcome_for_test(
+    context: &mut ProjectionContext<'_>,
+    path: &[&str],
+    span: oxc_span::Span,
+) -> Result<(), LibraryProductProjectionError> {
+    let outcome = if path == ["globalThis"] {
+        product::QualifiedPathResolutionOutcome::Resolved
+    } else if let [name] = path {
+        let scope = context.current_scope.ok_or(
+            LibraryProductProjectionError::MissingAuthenticatedScope {
+                source: context.source_ordinal,
+                binding_start: span.start,
+            },
+        )?;
+        match context.binder.resolve_value_binding(scope, name) {
+            super::bind::ValueResolution::Resolved { .. } => {
+                product::QualifiedPathResolutionOutcome::Resolved
+            }
+            super::bind::ValueResolution::TypeOnlyNamespace { .. } => {
+                unresolved_path_outcome(product::QualifiedPathUnresolvedCause::TypeOnlyRoot, 0)
+            }
+            super::bind::ValueResolution::Missing => {
+                unresolved_path_outcome(product::QualifiedPathUnresolvedCause::MissingRoot, 0)
+            }
+        }
+    } else {
+        let scope = context.current_scope.ok_or(
+            LibraryProductProjectionError::MissingAuthenticatedScope {
+                source: context.source_ordinal,
+                binding_start: span.start,
+            },
+        )?;
+        normalize_qualified_value_path_resolution_for_test(
+            context.binder.resolve_qualified_value_path(scope, path),
+        )
+    };
+    context
+        .qualified_path_oracle
+        .push(QualifiedPathOutcomeOracleRowForTest {
+            source_ordinal: context.source_ordinal,
+            start: span.start,
+            end: span.end,
+            role: product::QualifiedPathRole::Query,
+            path: path.iter().map(|segment| (*segment).to_owned()).collect(),
+            outcome,
+        });
+    Ok(())
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn normalize_qualified_type_path_resolution_for_test(
+    resolution: QualifiedTypePathResolution,
+) -> product::QualifiedPathResolutionOutcome {
+    match resolution {
+        QualifiedTypePathResolution::TypeGroup(_) => {
+            product::QualifiedPathResolutionOutcome::Resolved
+        }
+        QualifiedTypePathResolution::MissingRoot { segment } => {
+            unresolved_path_outcome(product::QualifiedPathUnresolvedCause::MissingRoot, segment)
+        }
+        QualifiedTypePathResolution::TypeOnlyRoot { segment } => {
+            unresolved_path_outcome(product::QualifiedPathUnresolvedCause::TypeOnlyRoot, segment)
+        }
+        QualifiedTypePathResolution::MissingMember { segment } => unresolved_path_outcome(
+            product::QualifiedPathUnresolvedCause::MissingMember,
+            segment,
+        ),
+        QualifiedTypePathResolution::TypeOnlyIntermediate { segment } => unresolved_path_outcome(
+            product::QualifiedPathUnresolvedCause::TypeOnlyIntermediate,
+            segment,
+        ),
+        QualifiedTypePathResolution::ValueOnlyLeaf { segment } => unresolved_path_outcome(
+            product::QualifiedPathUnresolvedCause::ValueOnlyLeaf,
+            segment,
+        ),
+        QualifiedTypePathResolution::Unavailable { segment } => {
+            unresolved_path_outcome(product::QualifiedPathUnresolvedCause::Unavailable, segment)
+        }
+        QualifiedTypePathResolution::Deferred { segment, reason } => unresolved_path_outcome(
+            product::QualifiedPathUnresolvedCause::Deferred(normalize_deferred_reason_for_test(
+                reason,
+            )),
+            segment,
+        ),
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn normalize_qualified_value_path_resolution_for_test(
+    resolution: QualifiedValuePathResolution,
+) -> product::QualifiedPathResolutionOutcome {
+    match resolution {
+        QualifiedValuePathResolution::Value(_) => product::QualifiedPathResolutionOutcome::Resolved,
+        QualifiedValuePathResolution::MissingRoot { segment } => {
+            unresolved_path_outcome(product::QualifiedPathUnresolvedCause::MissingRoot, segment)
+        }
+        QualifiedValuePathResolution::TypeOnlyRoot { segment } => {
+            unresolved_path_outcome(product::QualifiedPathUnresolvedCause::TypeOnlyRoot, segment)
+        }
+        QualifiedValuePathResolution::MissingMember { segment } => unresolved_path_outcome(
+            product::QualifiedPathUnresolvedCause::MissingMember,
+            segment,
+        ),
+        QualifiedValuePathResolution::NamespaceOnlyLeaf { segment } => unresolved_path_outcome(
+            product::QualifiedPathUnresolvedCause::NamespaceOnlyLeaf,
+            segment,
+        ),
+        QualifiedValuePathResolution::Unavailable { segment } => {
+            unresolved_path_outcome(product::QualifiedPathUnresolvedCause::Unavailable, segment)
+        }
+        QualifiedValuePathResolution::Deferred { segment, reason } => unresolved_path_outcome(
+            product::QualifiedPathUnresolvedCause::Deferred(normalize_deferred_reason_for_test(
+                reason,
+            )),
+            segment,
+        ),
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn normalize_deferred_reason_for_test(
+    reason: QualifiedTypePathDeferredReason,
+) -> product::QualifiedPathDeferredReason {
+    match reason {
+        QualifiedTypePathDeferredReason::Import => product::QualifiedPathDeferredReason::Import,
+        QualifiedTypePathDeferredReason::Enum => product::QualifiedPathDeferredReason::Enum,
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn unresolved_path_outcome(
+    cause: product::QualifiedPathUnresolvedCause,
+    segment: usize,
+) -> product::QualifiedPathResolutionOutcome {
+    product::QualifiedPathResolutionOutcome::Unresolved {
+        cause,
+        failing_segment_ordinal: u32::try_from(segment).expect("qualified path ordinal fits u32"),
+    }
 }
 
 fn resolved_type_group(

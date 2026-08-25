@@ -120,6 +120,24 @@ pub enum ProductValidationError {
         table: &'static str,
         row: usize,
     },
+    InvalidQualifiedPath {
+        table: &'static str,
+        row: usize,
+    },
+    DuplicateQualifiedPath {
+        table: &'static str,
+        row: usize,
+    },
+    NonCanonicalQualifiedPath {
+        table: &'static str,
+        row: usize,
+    },
+    MissingQualifiedPath {
+        recipe: usize,
+    },
+    QualifiedPathResolutionMismatch {
+        row: usize,
+    },
 }
 
 impl std::fmt::Display for ProductValidationError {
@@ -792,6 +810,7 @@ impl LibraryDeclarationProduct {
             }
             valid_type_strings(self, &recipe.node, row)?;
         }
+        validate_qualified_paths(self)?;
         for (row, signature) in self.signatures.iter().enumerate() {
             if signature
                 .result
@@ -901,6 +920,305 @@ impl LibraryDeclarationProduct {
     }
 }
 
+fn validate_qualified_paths(
+    product: &LibraryDeclarationProduct,
+) -> Result<(), ProductValidationError> {
+    if product.qualified_paths.is_empty() && product.qualified_path_segments.is_empty() {
+        return Ok(());
+    }
+
+    for row in 1..product.qualified_paths.len() {
+        let previous = product.qualified_paths[row - 1].recipe;
+        let current = product.qualified_paths[row].recipe;
+        if previous == current {
+            return Err(ProductValidationError::DuplicateQualifiedPath {
+                table: "qualified_paths",
+                row,
+            });
+        }
+        if previous > current {
+            return Err(ProductValidationError::NonCanonicalQualifiedPath {
+                table: "qualified_paths",
+                row,
+            });
+        }
+    }
+    for row in 1..product.qualified_path_segments.len() {
+        let previous = &product.qualified_path_segments[row - 1];
+        let current = &product.qualified_path_segments[row];
+        let previous_key = (previous.recipe, previous.ordinal);
+        let current_key = (current.recipe, current.ordinal);
+        if previous_key == current_key {
+            return Err(ProductValidationError::DuplicateQualifiedPath {
+                table: "qualified_path_segments",
+                row,
+            });
+        }
+        if previous_key > current_key {
+            return Err(ProductValidationError::NonCanonicalQualifiedPath {
+                table: "qualified_path_segments",
+                row,
+            });
+        }
+    }
+
+    let expected_recipes = product
+        .types
+        .iter()
+        .enumerate()
+        .filter_map(|(recipe, value)| qualified_path_shape(&value.node).map(|_| recipe))
+        .collect::<Vec<_>>();
+    let actual_recipes = product
+        .qualified_paths
+        .iter()
+        .map(|path| path.recipe.index())
+        .collect::<Vec<_>>();
+    if let Some((row, (expected, actual))) = expected_recipes
+        .iter()
+        .zip(&actual_recipes)
+        .enumerate()
+        .find(|(_, (expected, actual))| expected != actual)
+    {
+        return Err(if actual > expected {
+            ProductValidationError::MissingQualifiedPath { recipe: *expected }
+        } else {
+            ProductValidationError::InvalidQualifiedPath {
+                table: "qualified_paths",
+                row,
+            }
+        });
+    }
+    if actual_recipes.len() < expected_recipes.len() {
+        return Err(ProductValidationError::MissingQualifiedPath {
+            recipe: expected_recipes[actual_recipes.len()],
+        });
+    }
+    if actual_recipes.len() > expected_recipes.len() {
+        return Err(ProductValidationError::InvalidQualifiedPath {
+            table: "qualified_paths",
+            row: expected_recipes.len(),
+        });
+    }
+
+    let mut segment_cursor = 0usize;
+    let mut previous_recipe = None;
+    for (row, path) in product.qualified_paths.iter().enumerate() {
+        if previous_recipe == Some(path.recipe) {
+            return Err(ProductValidationError::DuplicateQualifiedPath {
+                table: "qualified_paths",
+                row,
+            });
+        }
+        if previous_recipe.is_some_and(|previous| previous > path.recipe) {
+            return Err(ProductValidationError::NonCanonicalQualifiedPath {
+                table: "qualified_paths",
+                row,
+            });
+        }
+        previous_recipe = Some(path.recipe);
+        let Some(recipe) = product.types.get(path.recipe.index()) else {
+            return Err(ProductValidationError::InvalidQualifiedPath {
+                table: "qualified_paths",
+                row,
+            });
+        };
+        let Some((expected_role, names, resolved)) = qualified_path_shape(&recipe.node) else {
+            return Err(ProductValidationError::InvalidQualifiedPath {
+                table: "qualified_paths",
+                row,
+            });
+        };
+        if names.is_empty() || path.role != expected_role {
+            return Err(ProductValidationError::InvalidQualifiedPath {
+                table: "qualified_paths",
+                row,
+            });
+        }
+        if let Some(resolved) = resolved {
+            if matches!(
+                path.resolution,
+                crate::schema::QualifiedPathResolutionOutcome::Resolved
+            ) != resolved
+            {
+                return Err(ProductValidationError::QualifiedPathResolutionMismatch { row });
+            }
+        }
+        if let crate::schema::QualifiedPathResolutionOutcome::Unresolved {
+            cause,
+            failing_segment_ordinal,
+        } = path.resolution
+        {
+            let Ok(failing_segment_ordinal) = usize::try_from(failing_segment_ordinal) else {
+                return Err(ProductValidationError::QualifiedPathResolutionMismatch { row });
+            };
+            if failing_segment_ordinal >= names.len()
+                || !valid_qualified_path_failure(
+                    path.role,
+                    cause,
+                    failing_segment_ordinal,
+                    names.len(),
+                )
+            {
+                return Err(ProductValidationError::QualifiedPathResolutionMismatch { row });
+            }
+        }
+
+        for (ordinal, expected_name) in names.iter().enumerate() {
+            let Some(segment) = product.qualified_path_segments.get(segment_cursor) else {
+                return Err(ProductValidationError::InvalidQualifiedPath {
+                    table: "qualified_path_segments",
+                    row: segment_cursor,
+                });
+            };
+            if segment.recipe != path.recipe {
+                return Err(ProductValidationError::InvalidQualifiedPath {
+                    table: "qualified_path_segments",
+                    row: segment_cursor,
+                });
+            }
+            if usize::try_from(segment.ordinal).ok() != Some(ordinal) {
+                let duplicate = segment_cursor > 0
+                    && product.qualified_path_segments[segment_cursor - 1].recipe == segment.recipe
+                    && product.qualified_path_segments[segment_cursor - 1].ordinal
+                        == segment.ordinal;
+                return Err(if duplicate {
+                    ProductValidationError::DuplicateQualifiedPath {
+                        table: "qualified_path_segments",
+                        row: segment_cursor,
+                    }
+                } else {
+                    ProductValidationError::NonCanonicalQualifiedPath {
+                        table: "qualified_path_segments",
+                        row: segment_cursor,
+                    }
+                });
+            }
+            if segment.name != *expected_name {
+                return Err(ProductValidationError::InvalidQualifiedPath {
+                    table: "qualified_path_segments",
+                    row: segment_cursor,
+                });
+            }
+            valid_site(
+                product,
+                segment.site,
+                "qualified_path_segments",
+                segment_cursor,
+            )?;
+            if segment.site.source != recipe.site.source
+                || segment.site.start < recipe.site.start
+                || segment.site.end > recipe.site.end
+                || segment.site.start == segment.site.end
+            {
+                return Err(ProductValidationError::InvalidQualifiedPath {
+                    table: "qualified_path_segments",
+                    row: segment_cursor,
+                });
+            }
+            segment_cursor = segment_cursor.saturating_add(1);
+        }
+    }
+    if segment_cursor != product.qualified_path_segments.len() {
+        let duplicate = segment_cursor > 0
+            && product
+                .qualified_path_segments
+                .get(segment_cursor)
+                .is_some_and(|segment| {
+                    product.qualified_path_segments[segment_cursor - 1].recipe == segment.recipe
+                        && product.qualified_path_segments[segment_cursor - 1].ordinal
+                            == segment.ordinal
+                });
+        return Err(if duplicate {
+            ProductValidationError::DuplicateQualifiedPath {
+                table: "qualified_path_segments",
+                row: segment_cursor,
+            }
+        } else {
+            ProductValidationError::InvalidQualifiedPath {
+                table: "qualified_path_segments",
+                row: segment_cursor,
+            }
+        });
+    }
+    Ok(())
+}
+
+fn valid_qualified_path_failure(
+    role: crate::schema::QualifiedPathRole,
+    cause: crate::schema::QualifiedPathUnresolvedCause,
+    failing_segment_ordinal: usize,
+    segment_count: usize,
+) -> bool {
+    use crate::schema::{QualifiedPathRole, QualifiedPathUnresolvedCause};
+
+    match role {
+        QualifiedPathRole::Reference => match cause {
+            QualifiedPathUnresolvedCause::MissingRoot
+            | QualifiedPathUnresolvedCause::TypeOnlyRoot => failing_segment_ordinal == 0,
+            QualifiedPathUnresolvedCause::MissingMember => failing_segment_ordinal > 0,
+            QualifiedPathUnresolvedCause::TypeOnlyIntermediate => {
+                failing_segment_ordinal > 0 && failing_segment_ordinal + 1 < segment_count
+            }
+            QualifiedPathUnresolvedCause::ValueOnlyLeaf => {
+                failing_segment_ordinal > 0 && failing_segment_ordinal + 1 == segment_count
+            }
+            QualifiedPathUnresolvedCause::NamespaceOnlyLeaf => false,
+            QualifiedPathUnresolvedCause::Unavailable
+            | QualifiedPathUnresolvedCause::Deferred(_) => true,
+        },
+        QualifiedPathRole::Query => match cause {
+            QualifiedPathUnresolvedCause::MissingRoot
+            | QualifiedPathUnresolvedCause::TypeOnlyRoot => failing_segment_ordinal == 0,
+            QualifiedPathUnresolvedCause::MissingMember => failing_segment_ordinal > 0,
+            QualifiedPathUnresolvedCause::NamespaceOnlyLeaf => {
+                failing_segment_ordinal > 0 && failing_segment_ordinal + 1 == segment_count
+            }
+            QualifiedPathUnresolvedCause::TypeOnlyIntermediate
+            | QualifiedPathUnresolvedCause::ValueOnlyLeaf => false,
+            QualifiedPathUnresolvedCause::Unavailable
+            | QualifiedPathUnresolvedCause::Deferred(_) => true,
+        },
+        QualifiedPathRole::ImportQualifier => true,
+    }
+}
+
+fn qualified_path_shape(
+    node: &TypeRecipeNode,
+) -> Option<(
+    crate::schema::QualifiedPathRole,
+    &[crate::keys::StringKey],
+    Option<bool>,
+)> {
+    match node {
+        TypeRecipeNode::Reference {
+            path, resolution, ..
+        } => Some((
+            crate::schema::QualifiedPathRole::Reference,
+            path,
+            Some(!matches!(
+                resolution,
+                TypeReferenceResolution::Unresolved { .. }
+            )),
+        )),
+        TypeRecipeNode::Query {
+            path, resolution, ..
+        } => Some((
+            crate::schema::QualifiedPathRole::Query,
+            path,
+            Some(!matches!(
+                resolution,
+                ValueReferenceResolution::Unresolved { .. }
+            )),
+        )),
+        TypeRecipeNode::Import { qualifier, .. } if !qualifier.is_empty() => Some((
+            crate::schema::QualifiedPathRole::ImportQualifier,
+            qualifier,
+            None,
+        )),
+        _ => None,
+    }
+}
+
 fn intrinsic_marker_alias(marker: crate::schema::IntrinsicMarker) -> &'static str {
     match marker {
         crate::schema::IntrinsicMarker::Uppercase => "Uppercase",
@@ -957,6 +1275,18 @@ pub fn with_changed_callable_site_for_test(
         .validate()
         .map_err(|_| "changed callable site is not structurally valid")?;
     Ok(changed)
+}
+
+#[cfg(feature = "test-utils")]
+pub fn with_qualified_path_tables_for_test(
+    product: &LibraryDeclarationProduct,
+    paths: Vec<crate::schema::QualifiedPathRecipe>,
+    segments: Vec<crate::schema::QualifiedPathSegmentRecipe>,
+) -> LibraryDeclarationProduct {
+    let mut changed = product.clone();
+    changed.qualified_paths = paths.into_boxed_slice();
+    changed.qualified_path_segments = segments.into_boxed_slice();
+    changed
 }
 
 #[cfg(feature = "test-utils")]

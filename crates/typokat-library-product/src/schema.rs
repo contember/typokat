@@ -17,6 +17,55 @@ pub struct SourceSite {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QualifiedPathRole {
+    Reference,
+    Query,
+    ImportQualifier,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QualifiedPathDeferredReason {
+    Import,
+    Enum,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QualifiedPathUnresolvedCause {
+    MissingRoot,
+    TypeOnlyRoot,
+    MissingMember,
+    TypeOnlyIntermediate,
+    ValueOnlyLeaf,
+    NamespaceOnlyLeaf,
+    Unavailable,
+    Deferred(QualifiedPathDeferredReason),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QualifiedPathResolutionOutcome {
+    Resolved,
+    Unresolved {
+        cause: QualifiedPathUnresolvedCause,
+        failing_segment_ordinal: u32,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QualifiedPathRecipe {
+    pub recipe: TypeRecipeKey,
+    pub role: QualifiedPathRole,
+    pub resolution: QualifiedPathResolutionOutcome,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QualifiedPathSegmentRecipe {
+    pub recipe: TypeRecipeKey,
+    pub ordinal: u32,
+    pub name: StringKey,
+    pub site: SourceSite,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RegionKind {
     Source,
     Namespace,
@@ -494,6 +543,8 @@ pub struct LibraryDeclarationProduct {
     pub(crate) namespaces: Box<[NamespaceAttachmentRecipe]>,
     pub(crate) values: Box<[ValueAttachmentRecipe]>,
     pub(crate) intrinsic_markers: Box<[IntrinsicMarkerRecipe]>,
+    pub(crate) qualified_paths: Box<[QualifiedPathRecipe]>,
+    pub(crate) qualified_path_segments: Box<[QualifiedPathSegmentRecipe]>,
     pub(crate) type_parameters: Box<[TypeParameterRecipe]>,
     pub(crate) types: Box<[TypeRecipe]>,
     pub(crate) signatures: Box<[SignatureRecipe]>,
@@ -531,6 +582,11 @@ impl LibraryDeclarationProduct {
     pub fn group_key_at(&self, index: usize) -> Option<GroupKey> {
         (index < self.groups.len())
             .then(|| GroupKey::new(index))
+            .flatten()
+    }
+    pub fn type_recipe_key_at(&self, index: usize) -> Option<TypeRecipeKey> {
+        (index < self.types.len())
+            .then(|| TypeRecipeKey::new(index))
             .flatten()
     }
     pub fn profile_identity(&self) -> &str {
@@ -598,5 +654,11 @@ impl LibraryDeclarationProduct {
     }
     pub fn intrinsic_marker_rows(&self) -> &[IntrinsicMarkerRecipe] {
         &self.intrinsic_markers
+    }
+    pub fn qualified_path_rows(&self) -> &[QualifiedPathRecipe] {
+        &self.qualified_paths
+    }
+    pub fn qualified_path_segment_rows(&self) -> &[QualifiedPathSegmentRecipe] {
+        &self.qualified_path_segments
     }
 }

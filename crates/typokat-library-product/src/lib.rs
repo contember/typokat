@@ -11,7 +11,7 @@ pub use validate::ProductValidationError;
 #[cfg(feature = "test-utils")]
 pub use validate::{
     lexical_scope_corruption_receipt_for_test, with_changed_callable_site_for_test,
-    LexicalScopeCorruptionReceipt,
+    with_qualified_path_tables_for_test, LexicalScopeCorruptionReceipt,
 };
 pub use walk::{ProductFieldClass, ProductFieldVisitor};
 
@@ -27,6 +27,8 @@ pub struct ProductAssembly {
     namespaces: Vec<NamespaceAttachmentRecipe>,
     values: Vec<ValueAttachmentRecipe>,
     intrinsic_markers: Vec<IntrinsicMarkerRecipe>,
+    qualified_paths: Vec<QualifiedPathRecipe>,
+    qualified_path_segments: Vec<QualifiedPathSegmentRecipe>,
     type_parameters: Vec<TypeParameterRecipe>,
     types: Vec<TypeRecipe>,
     signatures: Vec<SignatureRecipe>,
@@ -209,6 +211,8 @@ impl ProductAssembly {
             namespaces: self.namespaces.into_boxed_slice(),
             values: self.values.into_boxed_slice(),
             intrinsic_markers: self.intrinsic_markers.into_boxed_slice(),
+            qualified_paths: self.qualified_paths.into_boxed_slice(),
+            qualified_path_segments: self.qualified_path_segments.into_boxed_slice(),
             type_parameters: self.type_parameters.into_boxed_slice(),
             types: self.types.into_boxed_slice(),
             signatures: self.signatures.into_boxed_slice(),

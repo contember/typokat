@@ -17,6 +17,8 @@ pub struct ProductAuditReceipt {
     pub dependency_edge_count: usize,
     pub namespace_attachment_count: usize,
     pub value_attachment_count: usize,
+    pub qualified_path_count: usize,
+    pub qualified_path_segment_count: usize,
     pub index_signature_parameter_count: usize,
     pub computed_property_name_count: usize,
     pub constructor_count: usize,
@@ -37,6 +39,7 @@ pub struct ProductAuditReceipt {
     pub callable_scope_digest: String,
     pub namespace_attachment_digest: String,
     pub value_attachment_digest: String,
+    pub qualified_path_digest: String,
 }
 
 impl LibraryDeclarationProduct {
@@ -55,6 +58,12 @@ impl LibraryDeclarationProduct {
         render_rows(&mut output, "namespace", &self.namespaces);
         render_rows(&mut output, "value", &self.values);
         render_rows(&mut output, "intrinsic_marker", &self.intrinsic_markers);
+        render_rows(&mut output, "qualified_path", &self.qualified_paths);
+        render_rows(
+            &mut output,
+            "qualified_path_segment",
+            &self.qualified_path_segments,
+        );
         render_rows(&mut output, "type_parameter", &self.type_parameters);
         render_rows(&mut output, "type", &self.types);
         render_rows(&mut output, "signature", &self.signatures);
@@ -81,6 +90,8 @@ impl LibraryDeclarationProduct {
             dependency_edge_count: self.dependencies.len(),
             namespace_attachment_count: self.namespaces.len(),
             value_attachment_count: self.values.len(),
+            qualified_path_count: self.qualified_paths.len(),
+            qualified_path_segment_count: self.qualified_path_segments.len(),
             index_signature_parameter_count: self
                 .members
                 .iter()
@@ -187,6 +198,7 @@ impl LibraryDeclarationProduct {
             callable_scope_digest: digest_rows(&self.callable_scopes),
             namespace_attachment_digest: digest_rows(&self.namespaces),
             value_attachment_digest: digest_rows(&self.values),
+            qualified_path_digest: qualified_path_digest(self),
         }
     }
 
@@ -202,6 +214,17 @@ impl LibraryDeclarationProduct {
             })
             .collect()
     }
+}
+
+fn qualified_path_digest(product: &LibraryDeclarationProduct) -> String {
+    let mut text = String::new();
+    for (row, value) in product.qualified_paths.iter().enumerate() {
+        let _ = writeln!(text, "path|{row}|{value:?}");
+    }
+    for (row, value) in product.qualified_path_segments.iter().enumerate() {
+        let _ = writeln!(text, "segment|{row}|{value:?}");
+    }
+    sha256_hex(text.as_bytes())
 }
 
 fn render_rows<T: std::fmt::Debug>(output: &mut String, table: &str, rows: &[T]) {

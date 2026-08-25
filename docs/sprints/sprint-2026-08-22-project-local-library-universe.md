@@ -245,7 +245,13 @@ These conditions may not be relaxed after candidate results are visible.
   from the immutable declaration product plus the final project-local binder map. The legacy
   complete-source route is only a temporary test-only black-box shadow for normalized observable
   output; its replay owners, root consumers, statement owners, general SCC graph, and raw record
-  ledger are not candidate authority.
+  ledger are not candidate authority. Before semantic lowering starts, amend the immutable product
+  with one canonical qualified-path row for every Reference and Query, including single-segment
+  paths, and every nonempty import qualifier, plus one exact source site per ordered segment.
+  Preserve the binder's full typed resolution or failure cause and exact failing segment ordinal.
+  Derive sites from the authenticated AST and outcomes from the live binder during product
+  extraction; never infer sites from a recipe start plus name length, re-resolve outcomes later
+  from product/local binder topology, or copy either from candidate or legacy semantic output.
 - **Scope.** Add the project-local terminal state machine and symbolic-to-local lowering. Reserve an
   entire dependency SCC before resolving it; allocate type parameters, classes, values, bridges,
   and global-object products in deterministic project-local order. Cache only final Ready or typed
@@ -522,3 +528,14 @@ numbers are invalid without `--no-smt`.
   inventory and a positive Rust AST capability allowlist. Grouped or aliased imports, inline or
   undeclared modules, path attributes, opaque inclusion macros, unsafe/foreign code, and external
   checker paths outside `project_local_pass_port` fail the ordinary boundary test.
+- **2026-08-25 — qualified-path provenance prerequisite.** WU4 review found that WU2 retained path
+  names but discarded each segment's exact source site and collapsed every non-group binder outcome
+  into a generic unresolved recipe. The revised scaffold adds empty canonical/validated tables and
+  ignored RED product tests for all single and qualified Reference/Query paths; the authenticated
+  packaged profile currently has zero import qualifiers. A test-only projection observer records
+  binder outcomes before normalization. It freezes three real unresolved rows (`U`,
+  `globalThis.IteratorObject`, and `IteratorObjectConstructor`) and synthetic typed controls cover
+  the absent `NamespaceOnlyLeaf` and deferred import/enum outcomes. Production extraction still
+  emits zero rows, so WU4 lowering must wait for its spec-first implementation. Name-length span
+  inference, later binder-topology re-resolution, and candidate or legacy oracle copying remain
+  forbidden.
