@@ -2320,16 +2320,17 @@ fn lower_type(
                 Some(&value.return_type),
                 value.span,
             )?),
-            TSType::TSConstructorType(value) => {
-                product::TypeRecipeNode::Constructor(lower_signature(
+            TSType::TSConstructorType(value) => product::TypeRecipeNode::Constructor {
+                signature: lower_signature(
                     context,
                     value.type_parameters.as_deref(),
                     None,
                     &value.params,
                     Some(&value.return_type),
                     value.span,
-                )?)
-            }
+                )?,
+                r#abstract: value.r#abstract,
+            },
             TSType::TSTypeLiteral(value) => {
                 let mut members = Vec::with_capacity(value.members.len());
                 for member in &value.members {
@@ -4069,7 +4070,7 @@ mod tests {
                 | product::TypeRecipeNode::Union(_)
                 | product::TypeRecipeNode::Intersection(_)
                 | product::TypeRecipeNode::Function(_)
-                | product::TypeRecipeNode::Constructor(_)
+                | product::TypeRecipeNode::Constructor { .. }
                 | product::TypeRecipeNode::Object(_)
                 | product::TypeRecipeNode::Operator { .. }
                 | product::TypeRecipeNode::IndexedAccess { .. }

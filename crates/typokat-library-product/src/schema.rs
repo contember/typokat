@@ -339,7 +339,10 @@ pub enum TypeRecipeNode {
     Union(Box<[TypeRecipeKey]>),
     Intersection(Box<[TypeRecipeKey]>),
     Function(SignatureKey),
-    Constructor(SignatureKey),
+    Constructor {
+        signature: SignatureKey,
+        r#abstract: bool,
+    },
     Object(Box<[MemberKey]>),
     Operator {
         operator: TypeOperator,

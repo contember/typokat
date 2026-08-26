@@ -696,12 +696,24 @@ fn walk_type_node<V: ProductFieldVisitor>(visitor: &mut V, row: usize, node: &Ty
             row,
             "node.types",
         ),
-        TypeRecipeNode::Function(_signature) | TypeRecipeNode::Constructor(_signature) => field(
+        TypeRecipeNode::Function(_signature) => field(
             visitor,
             ProductFieldClass::ProductKey,
             "types",
             row,
             "node.signature",
+        ),
+        TypeRecipeNode::Constructor {
+            signature: _signature,
+            r#abstract: _abstract,
+        } => emit(
+            visitor,
+            "types",
+            row,
+            &[
+                (ProductFieldClass::ProductKey, "node.signature"),
+                (ProductFieldClass::Scalar, "node.abstract"),
+            ],
         ),
         TypeRecipeNode::Object(_members) => field(
             visitor,

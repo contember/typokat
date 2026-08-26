@@ -744,7 +744,8 @@ impl LibraryDeclarationProduct {
                 }
             }
             match &recipe.node {
-                TypeRecipeNode::Function(key) | TypeRecipeNode::Constructor(key)
+                TypeRecipeNode::Function(key)
+                | TypeRecipeNode::Constructor { signature: key, .. }
                     if key.index() >= self.signatures.len() =>
                 {
                     return Err(ProductValidationError::InvalidSignature { row })
@@ -1642,7 +1643,7 @@ fn expected_dependencies(
             | TypeRecipeNode::Union(_)
             | TypeRecipeNode::Intersection(_)
             | TypeRecipeNode::Function(_)
-            | TypeRecipeNode::Constructor(_)
+            | TypeRecipeNode::Constructor { .. }
             | TypeRecipeNode::Object(_)
             | TypeRecipeNode::Operator { .. }
             | TypeRecipeNode::IndexedAccess { .. }
@@ -1813,7 +1814,7 @@ fn valid_type_strings(
         | TypeRecipeNode::Union(_)
         | TypeRecipeNode::Intersection(_)
         | TypeRecipeNode::Function(_)
-        | TypeRecipeNode::Constructor(_)
+        | TypeRecipeNode::Constructor { .. }
         | TypeRecipeNode::Object(_)
         | TypeRecipeNode::Operator { .. }
         | TypeRecipeNode::IndexedAccess { .. }
@@ -1913,7 +1914,7 @@ fn recipe_children(node: &TypeRecipeNode) -> Vec<crate::keys::TypeRecipeKey> {
             children.to_vec()
         }
         TypeRecipeNode::Function(_)
-        | TypeRecipeNode::Constructor(_)
+        | TypeRecipeNode::Constructor { .. }
         | TypeRecipeNode::Object(_) => Vec::new(),
         TypeRecipeNode::IndexedAccess { object, index } => vec![*object, *index],
         TypeRecipeNode::Mapped { name, value, .. } => {
