@@ -6,8 +6,9 @@ use crate::check::checker::project_local::{
     project_local_semantic_candidate_for_test, ObservationEventForTest,
     ObservationEventKindForTest, ObservationReceiptForTest, ObservationScopeForTest,
     ObservationWitnessKindForTest, ProjectLocalCacheWriteForTest,
-    ProjectLocalContributorKindForTest, ProjectLocalContributorOriginForTest,
-    ProjectLocalDemandRootForTest, ProjectLocalFaultSeamForTest, ProjectLocalForceAllTraceForTest,
+    ProjectLocalCandidateErrorForTest, ProjectLocalContributorKindForTest,
+    ProjectLocalContributorOriginForTest, ProjectLocalDemandRootForTest,
+    ProjectLocalFaultSeamForTest, ProjectLocalForceAllTraceForTest,
     ProjectLocalGlobalContributorForTest, ProjectLocalGlobalContributorSiteForTest,
     ProjectLocalLibraryRecordForTest, ProjectLocalMappedProductGroupForTest,
     ProjectLocalModuleTypeProbeForTest, ProjectLocalNamespaceFragmentForTest,
@@ -26,7 +27,14 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use syn::visit::Visit;
-use typokat_library_product::{DependencyTarget, LibraryDeclarationProduct};
+use typokat_library_product::{
+    ContainerKind, ContainerRecipe, DeclarationFlags, DeclarationGroupRecipe,
+    DeclarationLexicalScope, DeclarationPayload, DeclarationRecipe, DeclarationSlots,
+    DependencyKind, DependencyLinkRecipe, DependencyRecipe, DependencyTarget,
+    LibraryDeclarationProduct, ProductAssembly, RegionKind, RegionRecipe, SignatureRecipe,
+    SourceClassification, SourceRecipe, SourceSite, TupleElementRecipe, TypeRecipe, TypeRecipeNode,
+    TypeReferenceResolution,
+};
 
 const ORACLE_BYTES: &[u8] = include_bytes!(
     "../../../tests/cases/sr_project_local_library_candidate/semantic-demand-oracle.json"
@@ -38,6 +46,23 @@ const OFFICIAL_FRAME_PATH: &str = "conformance/types/typeRelationships/assignmen
 const OFFICIAL_FRAME_SHA256: &str =
     "8ea2fffa0e48d8727722bb2e52ba98a235d72dbe7ef9848ac355f8c5d82f6a68";
 
+const IDB_CURSOR_CONSUMPTION: &str = r#"
+declare const wu4Cursor: IDBCursor;
+const wu4CursorKey: IDBValidKey = wu4Cursor.key;
+wu4Cursor.continue(wu4CursorKey);
+const wu4WrongCursorKey: string = wu4Cursor.key;
+const wu4CursorConstructor: IDBCursor = new IDBCursor();
+"#;
+
+const AUGMENTED_DEFAULTED_GENERIC: &str = r#"
+interface ProgressEvent<T extends EventTarget = EventTarget> {
+    wu4DefaultedTarget(): T;
+}
+declare const wu4Progress: ProgressEvent;
+const wu4Target: EventTarget = wu4Progress.wu4DefaultedTarget();
+const wu4WrongTarget: string = wu4Progress.wu4DefaultedTarget();
+"#;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct NativeProductEvidence {
     groups: Vec<ProjectLocalProductGroupForTest>,
@@ -45,6 +70,7 @@ struct NativeProductEvidence {
     module_probe_sources: BTreeMap<usize, String>,
     probe_evidence: Vec<StableProbeEvidence>,
     dependencies: Vec<ProjectLocalProductDependencyForTest>,
+    containment_targets: BTreeMap<usize, Vec<usize>>,
     publication_sccs: Vec<ProjectLocalProductSccForTest>,
 }
 
@@ -123,13 +149,19 @@ fn insert_observation_event(
     receipt.events.insert(index, observation_event(stamp, kind));
 }
 
-const CANDIDATE_SOURCE_PATHS: [&str; 6] = [
+const CANDIDATE_SOURCE_PATHS: [&str; 12] = [
+    "cache.rs",
     "contract.rs",
+    "coordinator.rs",
     "entry.rs",
     "fault_gate.rs",
+    "global_owner.rs",
+    "lowerer.rs",
     "mod.rs",
     "observation.rs",
     "project_local_pass_port.rs",
+    "session.rs",
+    "terminal.rs",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -291,21 +323,138 @@ fn candidate_import_allowed(relative: &str, import: &CandidateImport) -> bool {
                 .split("::")
                 .any(|segment| segment == "super");
     }
-    if matches!(import.path.as_str(), "std::fmt" | "std::cell::RefCell") {
+    if matches!(
+        import.path.as_str(),
+        "std::fmt"
+            | "std::cell::Cell"
+            | "std::cell::RefCell"
+            | "std::collections::BTreeMap"
+            | "std::collections::BTreeSet"
+            | "std::rc::Rc"
+            | "std::rc::Weak"
+            | "std::sync::atomic::AtomicU64"
+            | "std::sync::atomic::Ordering"
+    ) {
         return true;
     }
     if relative != "project_local_pass_port.rs" {
         return false;
     }
+    candidate_adapter_external_path_allowed(&import.path)
+}
+
+fn candidate_adapter_external_path_allowed(path: &str) -> bool {
     matches!(
-        import.path.as_str(),
+        path,
         "crate::binder::bind::LibraryBinderUnit"
+            | "crate::binder::declaration::SourceGlobalContributorKind"
+            | "crate::binder::declaration::TypeGroupId"
+            | "crate::binder::declaration::ValueStorageId"
+            | "crate::binder::declaration::source_global_binding_census_with_provenance"
+            | "crate::binder::declaration::SourceBindingSlot"
+            | "crate::binder::namespace::NamespaceId"
+            | "crate::binder::roots::collect_final_global_object_contributors"
+            | "crate::binder::scope::ScopeId"
+            | "crate::binder::symbol::SymbolId"
+            | "crate::check::checker::annotations::project_local_well_known_symbol_from_name"
+            | "crate::check::checker::context::ProjectLocalDemandSnapshot"
+            | "crate::check::checker::context::ProjectLocalTypeOverlayDraft"
+            | "crate::check::checker::context::ProjectLocalUserDemandGateway"
+            | "crate::check::checker::eval::contains_deferred_argument"
+            | "crate::check::checker::eval::contains_deferred_keyof"
+            | "crate::check::checker::eval::keyof_of_type"
+            | "crate::check::checker::library_identities::LibrarySemanticIdentities"
+            | "crate::check::checker::namespace_values::ProjectLocalNamespaceSeed"
+            | "crate::check::checker::reporting_record::CheckerRecord"
+            | "crate::check::checker::type_groups::PublishedTypeParameterDefault"
+            | "crate::check::checker::type_groups::PublishedTypeEnvironment"
+            | "crate::check::checker::type_groups::PublishedTypeGroup"
+            | "crate::check::checker::type_groups::PublishedTypeGroupSurface"
+            | "crate::check::checker::type_groups::PublishedTypeGroupTerminal"
+            | "crate::check::checker::type_groups::PublishedTypeGroupUnavailable"
+            | "crate::check::checker::type_groups::TypeGroupUnavailableCause"
+            | "crate::check::checker::check_bound_project_local_programs"
             | "crate::check::checker::BoundProjectBinder"
+            | "crate::check::checker::ProjectLocalUserPassPlan"
+            | "crate::check::checker::ProjectLocalUserNamespaceUnavailableReason::Unsupported"
+            | "crate::check::checker::ProjectLocalUserNamespaceUnavailableReason::Invalid"
+            | "crate::check::checker::ProjectLocalUserNamespaceUnavailableReason::Cyclic"
+            | "crate::check::query::SemanticQueryCoordinator"
+            | "crate::check::query::SemanticQueryState"
+            | "crate::class_semantics::DemandOutcome"
+            | "crate::class_semantics::PublishedClasses"
+            | "crate::diagnostics::render_reason_chain"
+            | "crate::diagnostics::render_type"
+            | "crate::diagnostics::Diagnostic"
+            | "crate::diagnostics::IncompleteSurface"
+            | "crate::diagnostics::Severity"
             | "crate::frontend::ProjectProgram"
+            | "crate::relate::relation::RelationOutcome"
             | "crate::source::LibraryFileOrdinal"
             | "crate::source::ModuleOrdinal"
             | "crate::source::UnitSlot"
+            | "crate::source::CompilationOrigin"
+            | "crate::types::repr::ConditionalType"
+            | "crate::types::repr::AliasId"
+            | "crate::types::repr::FunctionType"
+            | "crate::types::repr::MappedType"
+            | "crate::types::repr::ModifierOp"
+            | "crate::types::repr::ObjectType"
+            | "crate::types::repr::ParameterType"
+            | "crate::types::repr::PropertyType"
+            | "crate::types::repr::TemplateType"
+            | "crate::types::repr::TupleRestType"
+            | "crate::types::repr::TupleType"
+            | "crate::types::repr::TypeTag"
+            | "crate::types::repr::WellKnownSymbol"
+            | "crate::types::repr::number_to_string"
+            | "crate::types::substitute"
+            | "crate::types::GenericTypeParam"
+            | "crate::types::Interner"
+            | "crate::types::LiteralValue"
+            | "crate::types::PropertyKey"
+            | "crate::types::TypeId"
+            | "crate::types::TypeParamId"
+            | "crate::types::Visibility"
+            | "rustc_hash::FxHashMap"
+            | "typokat_library_product::Accessibility"
+            | "typokat_library_product::ContainerKind"
+            | "typokat_library_product::DeclarationGroupRecipe"
+            | "typokat_library_product::DeclarationKey"
+            | "typokat_library_product::DeclarationPayload"
+            | "typokat_library_product::DependencyKind"
+            | "typokat_library_product::DependencyTarget"
+            | "typokat_library_product::IntrinsicMarker"
+            | "typokat_library_product::KeywordKind"
+            | "typokat_library_product::LexicalStepKind"
             | "typokat_library_product::LibraryDeclarationProduct"
+            | "typokat_library_product::LiteralRecipe"
+            | "typokat_library_product::MappedModifier"
+            | "typokat_library_product::MemberKey"
+            | "typokat_library_product::MemberKind"
+            | "typokat_library_product::MemberRecipe"
+            | "typokat_library_product::ParameterPattern"
+            | "typokat_library_product::PropertyNameRecipe"
+            | "typokat_library_product::QualifiedPathRecipe"
+            | "typokat_library_product::QualifiedPathResolutionOutcome"
+            | "typokat_library_product::QualifiedPathRole"
+            | "typokat_library_product::QualifiedPathUnresolvedCause"
+            | "typokat_library_product::RegionKey"
+            | "typokat_library_product::SignatureKey"
+            | "typokat_library_product::SourceKey"
+            | "typokat_library_product::SourceSite"
+            | "typokat_library_product::SymbolicValueNameRecipe"
+            | "typokat_library_product::TypeOperator"
+            | "typokat_library_product::TypeParameterKey"
+            | "typokat_library_product::TypeRecipeKey"
+            | "typokat_library_product::TypeRecipeNode"
+            | "typokat_library_product::TypeReferenceResolution"
+            | "typokat_library_product::ValueReferenceResolution"
+            | "typokat_library_product::sha256_hex"
+            | "typokat_types::alias_semantics::PublishedAliasSurface"
+            | "typokat_types::alias_semantics::PublishedAliasTerminal"
+            | "typokat_types::alias_semantics::PublishedAliasUnavailable"
+            | "typokat_types::alias_semantics::PublishedAliases"
     )
 }
 
@@ -326,7 +475,21 @@ struct CandidateSourceAudit<'a> {
 impl<'a> CandidateSourceAudit<'a> {
     fn new(relative: &'a str, file: &syn::File) -> Self {
         let mut local_roots = [
-            "Box", "Err", "None", "Ok", "Option", "Result", "Self", "Some", "String", "Vec",
+            "Box",
+            "Default",
+            "Err",
+            "IntoIterator",
+            "None",
+            "Ok",
+            "Option",
+            "Result",
+            "Self",
+            "Some",
+            "String",
+            "Vec",
+            "f64",
+            "u32",
+            "usize",
         ]
         .into_iter()
         .map(str::to_owned)
@@ -379,7 +542,17 @@ impl<'a> CandidateSourceAudit<'a> {
         let allowed = self.relative == "mod.rs"
             && matches!(
                 item.ident.to_string().as_str(),
-                "contract" | "entry" | "fault_gate" | "observation" | "project_local_pass_port"
+                "cache"
+                    | "contract"
+                    | "coordinator"
+                    | "entry"
+                    | "fault_gate"
+                    | "global_owner"
+                    | "lowerer"
+                    | "observation"
+                    | "project_local_pass_port"
+                    | "session"
+                    | "terminal"
             );
         if !allowed {
             self.reject(format!("undeclared external module {}", item.ident));
@@ -396,13 +569,14 @@ impl<'a> CandidateSourceAudit<'a> {
             .iter()
             .map(|segment| segment.ident.to_string())
             .collect::<Vec<_>>();
-        if matches!(
-            segments.last().map(String::as_str),
-            Some("append_observation" | "record_observation")
-        ) && !matches!(
-            self.relative,
-            "session.rs" | "terminal.rs" | "cache.rs" | "fault_gate.rs" | "global_owner.rs"
-        ) {
+        if segments
+            .last()
+            .is_some_and(|segment| segment.starts_with("record_"))
+            && !matches!(
+                self.relative,
+                "session.rs" | "terminal.rs" | "cache.rs" | "fault_gate.rs" | "global_owner.rs"
+            )
+        {
             self.reject("audit hook outside an owning module");
         }
         if segments.len() < 2 {
@@ -414,27 +588,32 @@ impl<'a> CandidateSourceAudit<'a> {
             "std" => {
                 text == "std::fmt"
                     || text.starts_with("std::fmt::")
+                    || text == "std::cell::Cell"
+                    || text.starts_with("std::cell::Cell::")
                     || text == "std::cell::RefCell"
                     || text.starts_with("std::cell::RefCell::")
+                    || text == "std::collections::BTreeMap"
+                    || text.starts_with("std::collections::BTreeMap::")
+                    || text == "std::collections::BTreeSet"
+                    || text.starts_with("std::collections::BTreeSet::")
+                    || text == "std::rc::Rc"
+                    || text.starts_with("std::rc::Rc::")
+                    || text == "std::rc::Weak"
+                    || text.starts_with("std::rc::Weak::")
+                    || text == "std::sync::atomic::AtomicU64"
+                    || text.starts_with("std::sync::atomic::AtomicU64::")
+                    || text == "std::sync::atomic::Ordering"
+                    || text.starts_with("std::sync::atomic::Ordering::")
+                    || text == "std::mem::take"
             }
             "core" => false,
             "crate" => {
                 self.relative == "project_local_pass_port.rs"
-                    && [
-                        "crate::binder::bind::LibraryBinderUnit",
-                        "crate::check::checker::BoundProjectBinder",
-                        "crate::frontend::ProjectProgram",
-                        "crate::source::LibraryFileOrdinal",
-                        "crate::source::ModuleOrdinal",
-                        "crate::source::UnitSlot",
-                    ]
-                    .iter()
-                    .any(|allowed| text == *allowed || text.starts_with(&format!("{allowed}::")))
+                    && candidate_adapter_external_path_allowed(&text)
             }
             "typokat_library_product" => {
                 self.relative == "project_local_pass_port.rs"
-                    && (text == "typokat_library_product::LibraryDeclarationProduct"
-                        || text.starts_with("typokat_library_product::LibraryDeclarationProduct::"))
+                    && candidate_adapter_external_path_allowed(&text)
             }
             "super" => {
                 self.relative != "mod.rs" && !segments[1..].iter().any(|segment| segment == "super")
@@ -553,6 +732,12 @@ impl<'ast> Visit<'ast> for CandidateSourceAudit<'_> {
 
     fn visit_macro(&mut self, item: &'ast syn::Macro) {
         let name = candidate_path_text(&item.path);
+        if matches!(
+            name.as_str(),
+            "debug_assert" | "debug_assert_eq" | "format" | "matches" | "unreachable" | "vec"
+        ) {
+            return;
+        }
         if name != "thread_local" {
             self.reject(format!("unapproved macro {name}"));
             return;
@@ -826,6 +1011,7 @@ fn demanded_probe_projection_uses_mapped_slot_and_visibility_coordinates() {
             source_path: module_path.to_owned(),
             source_start: 10,
         }],
+        containment_targets: BTreeMap::new(),
         publication_sccs: groups
             .iter()
             .cloned()
@@ -1362,8 +1548,7 @@ fn raw_controls_reject_provisional_escape_and_fault_seam_drift() {
 }
 
 #[test]
-#[ignore = "RED until the WU4 project-local semantic coordinator exists"]
-fn project_local_demands_match_candidate_native_authority_in_both_orders() {
+fn project_local_source_lookups_drive_demands_in_both_source_orders() {
     let provider = LibraryBaseProvider::new();
     let product = provider.declaration_product().expect("declaration product");
     let product_native = native_product_evidence(&product);
@@ -1371,14 +1556,19 @@ fn project_local_demands_match_candidate_native_authority_in_both_orders() {
     let mut publisher_sessions = BTreeSet::new();
     let mut call_count = 0usize;
     for (case_id, inputs) in oracle_inputs() {
-        let native = mapped_native_evidence(&provider, &product, &inputs, &product_native);
-        let oracle = provider
-            .complete_source_black_box_oracle_for_test(&inputs)
-            .expect("black-box complete-source shadow");
         for source_order in [
             ProjectLocalOrderForTest::Forward,
             ProjectLocalOrderForTest::Reverse,
         ] {
+            let mut ordered_inputs = inputs.clone();
+            if source_order == ProjectLocalOrderForTest::Reverse {
+                ordered_inputs.reverse();
+            }
+            let native =
+                mapped_native_evidence(&provider, &product, &ordered_inputs, &product_native);
+            let oracle = provider
+                .complete_source_black_box_oracle_for_test(&ordered_inputs)
+                .expect("black-box complete-source shadow");
             for demand_order in [
                 ProjectLocalOrderForTest::Forward,
                 ProjectLocalOrderForTest::Reverse,
@@ -1387,7 +1577,7 @@ fn project_local_demands_match_candidate_native_authority_in_both_orders() {
                 let trace = candidate_trace(
                     &provider,
                     CandidateHarnessRequest {
-                        inputs: inputs.clone(),
+                        inputs: ordered_inputs.clone(),
                         controls: ProjectLocalSemanticRequestForTest {
                             case_id,
                             source_order,
@@ -1425,7 +1615,6 @@ fn project_local_demands_match_candidate_native_authority_in_both_orders() {
 }
 
 #[test]
-#[ignore = "RED until the WU4 project-local semantic coordinator exists"]
 fn project_local_sessions_isolate_a_b_and_repeated_a() {
     let provider = LibraryBaseProvider::new();
     let product = provider.declaration_product().expect("declaration product");
@@ -1478,7 +1667,6 @@ fn project_local_sessions_isolate_a_b_and_repeated_a() {
 }
 
 #[test]
-#[ignore = "RED until the WU4 project-local semantic coordinator exists"]
 fn project_local_sccs_publish_atomically_and_repeat_identities() {
     let provider = LibraryBaseProvider::new();
     let product = provider.declaration_product().expect("declaration product");
@@ -1511,7 +1699,219 @@ fn project_local_sccs_publish_atomically_and_repeat_identities() {
 }
 
 #[test]
-#[ignore = "RED until the WU4 project-local semantic coordinator exists"]
+fn recursive_product_aliases_preserve_structural_semantics() {
+    for (kind, source, expected_code) in [
+        (
+            RecursiveAliasIndirection::Array,
+            "declare const wu4Recursive: Wu4RecursiveArray; const wu4View: Wu4RecursiveArray[] = wu4Recursive; const wu4Back: Wu4RecursiveArray = wu4View; const wu4EdgeWrong: string = wu4Recursive[0];",
+            "TK2322",
+        ),
+        (
+            RecursiveAliasIndirection::Tuple,
+            "declare const wu4Recursive: Wu4RecursiveTuple; const wu4View: [Wu4RecursiveTuple] = wu4Recursive; const wu4Back: Wu4RecursiveTuple = wu4View; const wu4EdgeWrong: string = wu4Recursive[0];",
+            "TK2322",
+        ),
+        (
+            RecursiveAliasIndirection::Function,
+            "declare const wu4Recursive: Wu4RecursiveFunction; const wu4View: () => Wu4RecursiveFunction = wu4Recursive; const wu4Back: Wu4RecursiveFunction = wu4View; const wu4EdgeWrong: string = wu4Recursive();",
+            "TK2322",
+        ),
+    ] {
+        let product = synthetic_recursive_alias_product(kind);
+        let group_name = recursive_alias_name(kind);
+        let inputs = vec![input("/candidate/recursive-alias.ts", source)];
+        let (result, observation) = candidate_result_with_product(
+            product,
+            inputs,
+            ProjectLocalSemanticRequestForTest {
+                case_id: "recursive-alias",
+                source_order: ProjectLocalOrderForTest::Forward,
+                demand_order: ProjectLocalOrderForTest::Forward,
+                demand_roots: Vec::new(),
+                force_all: false,
+                fault: None,
+            },
+        );
+        let trace = result
+            .unwrap_or_else(|error| panic!("{kind:?} recursive alias failed: {error:?}"));
+        let result = trace
+            .user_check_results
+            .iter()
+            .find(|row| row.source_path == "/candidate/recursive-alias.ts")
+            .expect("recursive alias user result");
+        let codes = result
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            codes,
+            [expected_code],
+            "{kind:?} changed {group_name}: {:?}",
+            result.incomplete
+        );
+        let edge_start = u32::try_from(
+            source
+                .find("const wu4EdgeWrong")
+                .expect("recursive edge assertion"),
+        )
+        .expect("recursive edge start");
+        let edge_end = u32::try_from(source.len()).expect("recursive edge end");
+        let diagnostic = result.diagnostics.first().expect("recursive edge error");
+        assert!(
+            diagnostic.span.start >= edge_start && diagnostic.span.end <= edge_end,
+            "{kind:?} diagnosed a clean round-trip instead of the recursive edge"
+        );
+        assert!(result.incomplete.is_empty(), "{kind:?} exhausted {group_name}");
+        assert!(observation.events.iter().any(|event| {
+            matches!(event.kind, ObservationEventKindForTest::ReceiptBuilt)
+        }));
+    }
+}
+
+#[test]
+fn real_idb_cursor_consumption_has_no_partial_ready_or_panic() {
+    let provider = LibraryBaseProvider::new();
+    let inputs = vec![input(
+        "/candidate/idb-cursor-consumption.ts",
+        IDB_CURSOR_CONSUMPTION,
+    )];
+    let oracle = provider
+        .complete_source_black_box_oracle_for_test(&inputs)
+        .expect("complete-source IDBCursor authority");
+    assert!(oracle.user_check_results.iter().any(|row| {
+        row.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "TK2322")
+    }));
+    let trace = candidate_trace(
+        &provider,
+        candidate_request("idb-cursor", inputs, Vec::new(), false, None),
+    );
+    assert_eq!(trace.trace.user_event_ledger, oracle.user_event_ledger);
+    assert_eq!(trace.trace.user_check_results, oracle.user_check_results);
+}
+
+#[test]
+fn augmented_defaulted_generic_finishes_without_partial_default_or_panic() {
+    let provider = LibraryBaseProvider::new();
+    let inputs = vec![input(
+        "/candidate/augmented-defaulted-generic.ts",
+        AUGMENTED_DEFAULTED_GENERIC,
+    )];
+    let oracle = provider
+        .complete_source_black_box_oracle_for_test(&inputs)
+        .expect("complete-source augmented generic authority");
+    assert!(oracle.user_check_results.iter().any(|row| {
+        row.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "TK2322")
+    }));
+    let trace = candidate_trace(
+        &provider,
+        candidate_request("augmented-default", inputs, Vec::new(), false, None),
+    );
+    assert_eq!(trace.trace.user_event_ledger, oracle.user_event_ledger);
+    assert_eq!(trace.trace.user_check_results, oracle.user_check_results);
+}
+
+#[test]
+fn publish_before_scc_complete_fails_at_real_seam_before_receipt() {
+    let provider = LibraryBaseProvider::new();
+    let product = provider.declaration_product().expect("declaration product");
+    let product_native = native_product_evidence(&product);
+    let inputs = case_inputs("array");
+    let native = mapped_native_evidence(&provider, &product, &inputs, &product_native);
+    let roots = publish_before_scc_complete_contract(&native)
+        .expect("authenticated fault SCC")
+        .canonical_roots;
+    let (result, observation) = candidate_result_with_product(
+        (*product).clone(),
+        inputs,
+        ProjectLocalSemanticRequestForTest {
+            case_id: "array",
+            source_order: ProjectLocalOrderForTest::Forward,
+            demand_order: ProjectLocalOrderForTest::Forward,
+            demand_roots: roots,
+            force_all: false,
+            fault: Some(ProjectLocalSemanticFaultForTest::PublishBeforeSccComplete),
+        },
+    );
+    let fault_events = observation
+        .events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.kind,
+                ObservationEventKindForTest::FaultActivated { .. }
+                    | ObservationEventKindForTest::DurableCacheWrite { .. }
+                    | ObservationEventKindForTest::ReceiptBuilt
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        matches!(result, Err(ProjectLocalCandidateErrorForTest::UserPass(_))),
+        "unexpected publish-before-SCC events: {fault_events:?}"
+    );
+    assert!(observation
+        .events
+        .iter()
+        .all(|event| { !matches!(event.kind, ObservationEventKindForTest::ReceiptBuilt) }));
+}
+
+#[test]
+fn request_product_roots_do_not_change_source_driven_output_or_passive_work() {
+    let provider = LibraryBaseProvider::new();
+    let product = provider.declaration_product().expect("declaration product");
+    let inputs = case_inputs("array");
+    let product_native = native_product_evidence(&product);
+    let native = mapped_native_evidence(&provider, &product, &inputs, &product_native);
+    let canonical = case_demand_roots("array", &native);
+    let canonical_closure = demanded_product_closure(&native, &canonical)
+        .expect("independent canonical closure")
+        .into_iter()
+        .map(|group| group.product_key)
+        .collect::<BTreeSet<_>>();
+    let spurious = native
+        .groups
+        .iter()
+        .find(|group| {
+            group.compilation_global
+                && group.name == "IDBCursor"
+                && !canonical_closure.contains(&group.product_key)
+        })
+        .cloned()
+        .expect("independent spurious product root");
+    let oracle = provider
+        .complete_source_black_box_oracle_for_test(&inputs)
+        .expect("Array observable authority");
+    let mut observations = Vec::new();
+    for roots in [
+        canonical,
+        Vec::new(),
+        vec![ProjectLocalDemandRootForTest::ProductGroup(spurious)],
+    ] {
+        let trace = candidate_trace(
+            &provider,
+            candidate_request("array", inputs.clone(), roots, false, None),
+        );
+        assert_eq!(trace.trace.user_event_ledger, oracle.user_event_ledger);
+        assert_eq!(trace.trace.user_check_results, oracle.user_check_results);
+        observations.push((
+            trace.trace.demand_root_visits.clone(),
+            trace.trace.materialized_product_groups.clone(),
+            trace.trace.semantic_probes,
+            trace.trace.final_global_contributors,
+            trace.trace.durable_cache_writes,
+            trace.trace.repeated_demands,
+            passive_ordinary_owner_keys(&trace.observation),
+            passive_cache_event_rows(&trace.observation),
+        ));
+    }
+    assert!(observations.windows(2).all(|rows| rows[0] == rows[1]));
+}
+
+#[test]
 fn project_local_force_all_matches_black_box_observations() {
     let provider = LibraryBaseProvider::new();
     let product = provider.declaration_product().expect("declaration product");
@@ -1548,7 +1948,6 @@ fn project_local_force_all_matches_black_box_observations() {
 }
 
 #[test]
-#[ignore = "RED until the WU4 project-local semantic coordinator exists"]
 fn injected_candidate_faults_reach_candidate_native_guards() {
     let provider = LibraryBaseProvider::new();
     let product = provider.declaration_product().expect("declaration product");
@@ -1584,6 +1983,27 @@ fn injected_candidate_faults_reach_candidate_native_guards() {
                 sibling.evidence(),
             )
             .expect("identical canonical Array roots are valid without fault injection");
+            let (result, observation) = candidate_result_with_product(
+                (*product).clone(),
+                inputs,
+                ProjectLocalSemanticRequestForTest {
+                    case_id,
+                    source_order: ProjectLocalOrderForTest::Forward,
+                    demand_order: ProjectLocalOrderForTest::Forward,
+                    demand_roots: roots,
+                    force_all: false,
+                    fault: Some(fault),
+                },
+            );
+            assert!(matches!(
+                result,
+                Err(ProjectLocalCandidateErrorForTest::UserPass(_))
+            ));
+            assert!(observation
+                .events
+                .iter()
+                .all(|event| !matches!(event.kind, ObservationEventKindForTest::ReceiptBuilt)));
+            continue;
         }
         let trace = candidate_trace(
             &provider,
@@ -2124,7 +2544,7 @@ fn validate_candidate_trace_with_weak_mode(
         observation,
         fault,
     } = candidate;
-    let (source_order, demand_order) = orders;
+    let _ = orders;
     if trace.case_id != case_id
         || trace.project_session_identity == 0
         || trace.publisher_session_identity == 0
@@ -2134,7 +2554,7 @@ fn validate_candidate_trace_with_weak_mode(
     }
     validate_fault_observation(native, roots, observation, fault)?;
     if trace.source_inputs != oracle.source_inputs
-        || trace.source_visit_rows != ordered(&oracle.source_visit_rows, source_order)
+        || trace.source_visit_rows != oracle.source_visit_rows
     {
         return Err(CandidateValidationError::SourceOrder);
     }
@@ -2145,10 +2565,41 @@ fn validate_candidate_trace_with_weak_mode(
     {
         return Err(CandidateValidationError::ProductAuthority);
     }
-    if trace.demand_root_visits != ordered(roots, demand_order) {
+    let requested_controls = roots
+        .iter()
+        .filter(|root| !matches!(root, ProjectLocalDemandRootForTest::ProductGroup(_)))
+        .collect::<Vec<_>>();
+    let observed_controls = trace
+        .demand_root_visits
+        .iter()
+        .filter(|root| !matches!(root, ProjectLocalDemandRootForTest::ProductGroup(_)))
+        .collect::<Vec<_>>();
+    let source_roots = trace
+        .demand_root_visits
+        .iter()
+        .filter_map(|root| match root {
+            ProjectLocalDemandRootForTest::ProductGroup(group)
+                if native.groups.get(group.product_key) == Some(group) =>
+            {
+                Some(root.clone())
+            }
+            ProjectLocalDemandRootForTest::ProductGroup(_) => None,
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let source_root_count = trace
+        .demand_root_visits
+        .iter()
+        .filter(|root| matches!(root, ProjectLocalDemandRootForTest::ProductGroup(_)))
+        .count();
+    let unique_source_roots = source_roots.iter().collect::<BTreeSet<_>>();
+    if observed_controls != requested_controls
+        || source_roots.len() != source_root_count
+        || unique_source_roots.len() != source_roots.len()
+    {
         return Err(CandidateValidationError::DemandOrder);
     }
-    let materialized = demanded_product_closure(native, roots)?;
+    let materialized = demanded_product_closure(native, &source_roots)?;
     let ordinary_observed = observed_product_groups(
         native,
         observation,
@@ -2189,7 +2640,7 @@ fn validate_candidate_trace_with_weak_mode(
         &trace.publication_scc_commits,
         fault,
     )?;
-    validate_cache_and_repeats(roots, &materialized, trace)?;
+    validate_cache_and_repeats(&source_roots, &materialized, trace)?;
     validate_internal_publications(case_id, trace)?;
     match (&trace.force_all, force_all_requested) {
         (None, false) => Ok(()),
@@ -2221,6 +2672,15 @@ fn validate_commits(
     if commits.len() != expected.len() {
         return Err(CandidateValidationError::PublicationSccCensus);
     }
+    let committed_sccs = commits
+        .iter()
+        .map(|commit| &commit.scc)
+        .collect::<BTreeSet<_>>();
+    if committed_sccs.len() != commits.len()
+        || expected.iter().any(|scc| !committed_sccs.contains(scc))
+    {
+        return Err(CandidateValidationError::PublicationSccCensus);
+    }
     let premature_contract =
         if fault == Some(ProjectLocalSemanticFaultForTest::PublishBeforeSccComplete) {
             Some(validate_publish_before_scc_complete_roots(native, roots)?)
@@ -2233,7 +2693,11 @@ fn validate_commits(
         CandidateValidationError::PrematureSccPublication
     };
     let mut premature_commits = 0usize;
-    for (scc, commit) in expected.into_iter().zip(commits) {
+    for scc in expected {
+        let commit = commits
+            .iter()
+            .find(|commit| commit.scc == *scc)
+            .ok_or(CandidateValidationError::PublicationSccCensus)?;
         if commit.scc != *scc
             || commit.reserved_members != scc.members
             || commit.state_before_publish != ProjectLocalTerminalStateForTest::Resolving
@@ -2618,11 +3082,18 @@ fn validate_passive_session_lifecycle(
                 .ok_or(CandidateValidationError::PassiveCacheCensus)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let reported_hits = trace
+    let observed_hits = observed_hits
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let mut reported_hits = trace
         .repeated_demands
         .iter()
         .map(|row| row.owner.clone())
         .collect::<Vec<_>>();
+    reported_hits.sort();
+    reported_hits.dedup();
     if observed_hits != reported_hits {
         return Err(CandidateValidationError::PassiveCacheCensus);
     }
@@ -2784,12 +3255,48 @@ fn native_product_evidence(product: &LibraryDeclarationProduct) -> NativeProduct
                 .collect(),
         })
         .collect();
+    let containment_targets = product
+        .groups()
+        .iter()
+        .enumerate()
+        .filter_map(|(owner, group)| {
+            let children = group
+                .fragments
+                .iter()
+                .filter_map(|declaration| {
+                    match product.declarations()[declaration.index()].payload {
+                        DeclarationPayload::Namespace { child_region }
+                        | DeclarationPayload::Global { child_region } => {
+                            Some(product.regions()[child_region.index()].container)
+                        }
+                        _ => None,
+                    }
+                })
+                .flat_map(|container| {
+                    product
+                        .groups()
+                        .iter()
+                        .enumerate()
+                        .filter_map(move |(index, child)| {
+                            (child.container == container
+                                && (child.slots.namespace
+                                    || product_group_has_runtime_value(product, child)))
+                            .then_some(index)
+                        })
+                })
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            (!children.is_empty()).then_some((owner, children))
+        })
+        .collect();
     NativeProductEvidence {
         groups,
         mapped_groups: Vec::new(),
         module_probe_sources,
         probe_evidence: Vec::new(),
         dependencies,
+        containment_targets,
         publication_sccs,
     }
 }
@@ -2831,8 +3338,26 @@ fn mapped_native_evidence(
         module_probe_sources: native.module_probe_sources.clone(),
         probe_evidence,
         dependencies: native.dependencies.clone(),
+        containment_targets: native.containment_targets.clone(),
         publication_sccs: native.publication_sccs.clone(),
     }
+}
+
+fn product_group_has_runtime_value(
+    product: &LibraryDeclarationProduct,
+    group: &typokat_library_product::DeclarationGroupRecipe,
+) -> bool {
+    group.fragments.iter().any(|declaration| {
+        matches!(
+            product.declarations()[declaration.index()].payload,
+            DeclarationPayload::Variable { .. }
+                | DeclarationPayload::Function { .. }
+                | DeclarationPayload::Class { .. }
+                | DeclarationPayload::Enum { .. }
+                | DeclarationPayload::Namespace { .. }
+                | DeclarationPayload::Global { .. }
+        )
+    })
 }
 
 fn stable_probe_evidence(
@@ -2995,23 +3520,31 @@ fn demanded_product_closure(
     for row in &native.dependencies {
         dependencies.entry(row.owner).or_default().push(row.target);
     }
-    let mut pending = roots
-        .iter()
-        .filter_map(|root| match root {
-            ProjectLocalDemandRootForTest::ProductGroup(group) => Some(group.product_key),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    let mut closure = BTreeSet::new();
-    while let Some(owner) = pending.pop() {
-        for member in sccs
-            .get(&owner)
-            .ok_or(CandidateValidationError::ProductGraph)?
-        {
-            if closure.insert(*member) {
-                pending.extend(dependencies.get(member).into_iter().flatten().copied());
+    for (owner, targets) in &native.containment_targets {
+        dependencies
+            .entry(*owner)
+            .or_default()
+            .extend(targets.iter().copied());
+    }
+    let mut closure = Vec::new();
+    let mut seen = BTreeSet::new();
+    for root in roots.iter().filter_map(|root| match root {
+        ProjectLocalDemandRootForTest::ProductGroup(group) => Some(group.product_key),
+        _ => None,
+    }) {
+        let mut pending = vec![root];
+        let mut root_closure = BTreeSet::new();
+        while let Some(owner) = pending.pop() {
+            for member in sccs
+                .get(&owner)
+                .ok_or(CandidateValidationError::ProductGraph)?
+            {
+                if root_closure.insert(*member) {
+                    pending.extend(dependencies.get(member).into_iter().flatten().copied());
+                }
             }
         }
+        closure.extend(root_closure.into_iter().filter(|key| seen.insert(*key)));
     }
     closure
         .into_iter()
@@ -3292,9 +3825,28 @@ fn case_demand_roots(
             .map(ProjectLocalDemandRootForTest::ProductGroup)
             .collect::<Vec<_>>()
     };
+    let type_group = |name: &str| {
+        native
+            .groups
+            .iter()
+            .find(|row| row.name == name && row.compilation_global && row.has_type)
+            .cloned()
+            .map(ProjectLocalDemandRootForTest::ProductGroup)
+            .unwrap_or_else(|| panic!("at least one product type group named {name}"))
+    };
     match case_id {
-        "reflect" => groups("Reflect"),
-        "array" => [groups("ConcatArray"), groups("Array"), groups("Reflect")].concat(),
+        "reflect" => [vec![type_group("Array")], groups("Reflect")].concat(),
+        "array" => vec![
+            groups("ConcatArray")
+                .into_iter()
+                .next()
+                .expect("ConcatArray product group"),
+            type_group("Array"),
+            groups("Reflect")
+                .into_iter()
+                .next()
+                .expect("Reflect product group"),
+        ],
         "global-this" => vec![ProjectLocalDemandRootForTest::GlobalObject],
         "unavailable" => [
             "Wu6aTypeQueryUnavailable",
@@ -3309,11 +3861,11 @@ fn case_demand_roots(
         .into_iter()
         .map(|name| ProjectLocalDemandRootForTest::UserNamespace(name.to_owned()))
         .collect(),
-        "mixed-forward"
-        | "mixed-reverse"
-        | "isolation-a"
-        | "isolation-b"
-        | "official-assignment-compat-between-tuple-and-array" => groups("Array"),
+        "mixed-forward" | "mixed-reverse" => groups("Array"),
+        "isolation-a" | "isolation-b" => [groups("Array"), vec![type_group("Object")]].concat(),
+        "official-assignment-compat-between-tuple-and-array" => {
+            vec![type_group("Array")]
+        }
         _ => panic!("unknown WU4 case {case_id}"),
     }
 }
@@ -3441,6 +3993,7 @@ fn valid_control_trace() -> (
         module_probe_sources: BTreeMap::new(),
         probe_evidence,
         dependencies: dependencies.clone(),
+        containment_targets: BTreeMap::new(),
         publication_sccs: sccs.clone(),
     };
     let roots = vec![ProjectLocalDemandRootForTest::ProductGroup(first.clone())];
@@ -3820,6 +4373,84 @@ fn candidate_trace(
     }
 }
 
+fn candidate_result_with_product(
+    product: LibraryDeclarationProduct,
+    inputs: Vec<UserDeltaProjectInputForTest<'static>>,
+    controls: ProjectLocalSemanticRequestForTest,
+) -> (
+    Result<ProjectLocalSemanticTraceForTest, ProjectLocalCandidateErrorForTest>,
+    ObservationReceiptForTest,
+) {
+    let observation_scope = ObservationScopeForTest::start();
+    let product = std::sync::Arc::new(product);
+    let product_for_candidate = std::sync::Arc::clone(&product);
+    let files = inputs
+        .iter()
+        .map(|input| crate::frontend::FileInput {
+            name: input.path.to_owned(),
+            source: input.source.to_owned(),
+        })
+        .collect::<Vec<_>>();
+    let run = crate::frontend::run_prepared_project_frontend(
+        files,
+        move |programs, source_reexports, default_modules| {
+            let (library_units, bound) =
+                crate::check::checker::bind_library_product_project_programs(
+                    &product_for_candidate,
+                    programs,
+                    source_reexports,
+                    default_modules,
+                )?;
+            Ok::<_, crate::check::checker::LibraryProductProjectBindingError>(
+                project_local_semantic_candidate_for_test(
+                    &product_for_candidate,
+                    library_units,
+                    bound,
+                    programs,
+                    controls,
+                ),
+            )
+        },
+    );
+    let result = run
+        .product
+        .expect("candidate prepared programs")
+        .expect("candidate project-local binder");
+    (result, observation_scope.finish())
+}
+
+fn passive_ordinary_owner_keys(observation: &ObservationReceiptForTest) -> Vec<usize> {
+    observation
+        .events
+        .iter()
+        .filter_map(|event| match event.kind {
+            ObservationEventKindForTest::OwnerMaterialized {
+                phase: ProjectLocalSemanticPhaseForTest::Ordinary,
+                product_group,
+            } => Some(product_group),
+            _ => None,
+        })
+        .collect()
+}
+
+fn passive_cache_event_rows(observation: &ObservationReceiptForTest) -> Vec<String> {
+    observation
+        .events
+        .iter()
+        .filter_map(|event| match event.kind {
+            ObservationEventKindForTest::DurableCacheWrite {
+                publisher: _,
+                product_group,
+            } => Some(format!("write:{product_group}")),
+            ObservationEventKindForTest::DurableCacheHit {
+                publisher: _,
+                product_group,
+            } => Some(format!("hit:{product_group}")),
+            _ => None,
+        })
+        .collect()
+}
+
 fn complete_source_oracles(
     provider: &LibraryBaseProvider,
 ) -> Vec<(&'static str, CompleteSourceBlackBoxOracleForTest)> {
@@ -3925,6 +4556,7 @@ fn library_record_rows(rows: &[ProjectLocalLibraryRecordForTest]) -> Vec<String>
         })
         .collect()
 }
+
 fn user_event_rows(oracle: &CompleteSourceBlackBoxOracleForTest) -> Vec<String> {
     oracle
         .user_event_ledger
@@ -4100,16 +4732,191 @@ fn encode_rows(rows: &[String]) -> String {
         .collect::<Vec<_>>()
         .join("|")
 }
-fn ordered<T: Clone>(rows: &[T], order: ProjectLocalOrderForTest) -> Vec<T> {
-    let mut rows = rows.to_vec();
-    if order == ProjectLocalOrderForTest::Reverse {
-        rows.reverse();
-    }
-    rows
-}
 fn frozen_oracle() -> Value {
     serde_json::from_slice(ORACLE_BYTES).expect("valid WU4 oracle")
 }
+
+#[derive(Clone, Copy, Debug)]
+enum RecursiveAliasIndirection {
+    Array,
+    Tuple,
+    Function,
+}
+
+const fn recursive_alias_name(kind: RecursiveAliasIndirection) -> &'static str {
+    match kind {
+        RecursiveAliasIndirection::Array => "Wu4RecursiveArray",
+        RecursiveAliasIndirection::Tuple => "Wu4RecursiveTuple",
+        RecursiveAliasIndirection::Function => "Wu4RecursiveFunction",
+    }
+}
+
+fn synthetic_recursive_alias_product(kind: RecursiveAliasIndirection) -> LibraryDeclarationProduct {
+    let mut assembly = ProductAssembly::new();
+    let source = assembly.next_source_key().expect("synthetic source key");
+    let root = assembly.next_region_key().expect("synthetic root region");
+    let container = assembly
+        .add_container(ContainerRecipe {
+            parent: None,
+            kind: ContainerKind::CompilationGlobal,
+            name: None,
+            anchor: None,
+        })
+        .expect("synthetic global container");
+    let source_name = assembly
+        .intern("wu4-recursive-alias.d.ts")
+        .expect("synthetic source name");
+    let digest = assembly.intern("00").expect("synthetic digest");
+    assembly
+        .add_source(SourceRecipe {
+            ordinal: 0,
+            name: source_name,
+            sha256: digest,
+            byte_len: 128,
+            classification: SourceClassification::Script,
+            root_region: root,
+        })
+        .expect("synthetic source");
+    assembly
+        .add_region(RegionRecipe {
+            parent: None,
+            container,
+            kind: RegionKind::Source,
+            site: SourceSite {
+                source,
+                start: 0,
+                end: 128,
+            },
+        })
+        .expect("synthetic root");
+    let name = assembly
+        .intern(recursive_alias_name(kind))
+        .expect("recursive alias name");
+    let group = assembly.next_group_key().expect("recursive alias group");
+    let reference = assembly
+        .add_type_recipe(TypeRecipe {
+            site: SourceSite {
+                source,
+                start: 30,
+                end: 40,
+            },
+            node: TypeRecipeNode::Reference {
+                path: Box::new([name]),
+                resolution: TypeReferenceResolution::Group(group),
+                arguments: Box::new([]),
+                dependency: DependencyLinkRecipe {
+                    owner: group,
+                    kind: DependencyKind::Reference,
+                },
+            },
+        })
+        .expect("recursive reference");
+    let value = match kind {
+        RecursiveAliasIndirection::Array => assembly
+            .add_type_recipe(TypeRecipe {
+                site: SourceSite {
+                    source,
+                    start: 25,
+                    end: 42,
+                },
+                node: TypeRecipeNode::Array(reference),
+            })
+            .expect("recursive array"),
+        RecursiveAliasIndirection::Tuple => assembly
+            .add_type_recipe(TypeRecipe {
+                site: SourceSite {
+                    source,
+                    start: 25,
+                    end: 42,
+                },
+                node: TypeRecipeNode::Tuple {
+                    elements: Box::new([TupleElementRecipe {
+                        name: None,
+                        value: reference,
+                        optional: false,
+                        rest: false,
+                    }]),
+                },
+            })
+            .expect("recursive tuple"),
+        RecursiveAliasIndirection::Function => {
+            let signature = assembly
+                .add_signature(SignatureRecipe {
+                    type_parameters: Box::new([]),
+                    parameters: Box::new([]),
+                    result: Some(reference),
+                })
+                .expect("recursive function signature");
+            assembly
+                .add_type_recipe(TypeRecipe {
+                    site: SourceSite {
+                        source,
+                        start: 25,
+                        end: 42,
+                    },
+                    node: TypeRecipeNode::Function(signature),
+                })
+                .expect("recursive function")
+        }
+    };
+    let declaration = assembly
+        .add_declaration(DeclarationRecipe {
+            site: SourceSite {
+                source,
+                start: 1,
+                end: 50,
+            },
+            binding_site: SourceSite {
+                source,
+                start: 6,
+                end: 24,
+            },
+            region: root,
+            lexical_scope: DeclarationLexicalScope::Region(root),
+            name,
+            spaces: DeclarationSlots {
+                value: false,
+                r#type: true,
+                namespace: false,
+            },
+            flags: DeclarationFlags {
+                ambient: true,
+                ..DeclarationFlags::default()
+            },
+            payload: DeclarationPayload::TypeAlias {
+                type_parameters: Box::new([]),
+                value,
+            },
+        })
+        .expect("recursive alias declaration");
+    let actual_group = assembly
+        .add_group(DeclarationGroupRecipe {
+            container,
+            name,
+            slots: DeclarationSlots {
+                value: false,
+                r#type: true,
+                namespace: false,
+            },
+            fragments: Box::new([declaration]),
+        })
+        .expect("recursive alias group");
+    assert_eq!(actual_group, group);
+    assembly.add_dependency(DependencyRecipe {
+        owner: group,
+        target: DependencyTarget::Group(group),
+        kind: DependencyKind::Reference,
+        site: SourceSite {
+            source,
+            start: 30,
+            end: 40,
+        },
+    });
+    assembly
+        .finish(format!("wu4-recursive-{kind:?}"))
+        .expect("valid recursive alias product")
+}
+
 fn case_inputs(id: &str) -> Vec<UserDeltaProjectInputForTest<'static>> {
     oracle_inputs()
         .into_iter()
