@@ -4442,6 +4442,42 @@ mod tests {
     }
 
     #[test]
+    fn constructor_type_modifier_is_explicit_and_canonical() {
+        let ordinary_source = "type C =          new () => void;";
+        let abstract_source = "type C = abstract new () => void;";
+        assert_eq!(ordinary_source.len(), abstract_source.len());
+
+        let ordinary = project_test_source("constructor-modifier.d.ts", ordinary_source);
+        let abstract_product =
+            project_test_source("constructor-modifier.d.ts", abstract_source);
+
+        let constructor_modifier = |product: &product::LibraryDeclarationProduct| {
+            product
+                .types()
+                .iter()
+                .find_map(|recipe| match recipe.node {
+                    product::TypeRecipeNode::Constructor {
+                        signature: _,
+                        r#abstract,
+                    } => Some(r#abstract),
+                    _ => None,
+                })
+                .expect("constructor type recipe")
+        };
+        assert!(!constructor_modifier(&ordinary));
+        assert!(constructor_modifier(&abstract_product));
+        assert_ne!(ordinary.types(), abstract_product.types());
+        assert_ne!(
+            ordinary.canonical_audit_render(),
+            abstract_product.canonical_audit_render()
+        );
+        assert_ne!(
+            ordinary.audit_receipt().canonical_digest,
+            abstract_product.audit_receipt().canonical_digest
+        );
+    }
+
+    #[test]
     fn projection_rejects_template_quasi_without_cooked_text() {
         let error = try_project_test_source_with_identity(
             "template-invalid.d.ts",
