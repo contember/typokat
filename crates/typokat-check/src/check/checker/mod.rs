@@ -4775,7 +4775,7 @@ where
         }
         AuthoritativeProjectBinderFinish::Product => {
             let (binder, map) = builder
-                .finish_library_product_project(final_module.unwrap_or(ScopeId(0)))
+                .finish_library_product_project(final_module)
                 .map_err(|error| ProjectBindingCoreError::Binding(error.to_string()))?;
             (binder, Some(map))
         }

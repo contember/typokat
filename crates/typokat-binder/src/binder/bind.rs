@@ -1713,13 +1713,21 @@ impl<'ast> ProjectBinderBuilder<'ast> {
         state.current_module = facts.final_module;
         state.fn_scopes = facts.fn_scopes;
         state.fn_decl_ids = facts.fn_decl_ids;
+        let delta_compilation_global = state.graph.push(Scope::new(
+            ScopeKind::CompilationGlobal,
+            Some(script_namespace_root),
+        ));
+        let delta_script_namespace_root = state.graph.push(Scope::new(
+            ScopeKind::ScriptNamespaceRoot,
+            Some(delta_compilation_global),
+        ));
         Ok((
             Self {
                 state,
                 prelude_module,
                 compilation_global,
-                delta_compilation_global: None,
-                script_namespace_root,
+                delta_compilation_global: Some(delta_compilation_global),
+                script_namespace_root: delta_script_namespace_root,
                 prelude_type_group_count: 0,
                 use_mode: BuilderUseMode::Product,
                 empty_prelude: true,
@@ -2068,13 +2076,21 @@ impl<'ast> ProjectBinderBuilder<'ast> {
                 unit,
                 self.compilation_global,
             );
+            let namespace_metadata_script_root = if self.use_mode == BuilderUseMode::Product {
+                self.delta_compilation_global
+                    .and_then(|delta| self.state.graph.get(delta))
+                    .and_then(|scope| scope.parent)
+                    .expect("product delta global retains the library script root")
+            } else {
+                self.script_namespace_root
+            };
             collect_project_namespace_metadata(
                 &mut self.state,
                 module,
                 program,
                 unit,
                 self.compilation_global,
-                self.script_namespace_root,
+                namespace_metadata_script_root,
                 self.delta_compilation_global,
             );
         } else {
@@ -2370,7 +2386,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
 
     pub fn finish_library_product_project(
         mut self,
-        module: ScopeId,
+        module: Option<ScopeId>,
     ) -> Result<
         (Binder, crate::binder::namespace::LibraryProductBinderMap),
         crate::binder::namespace::LibraryProductBinderMapError,
@@ -2379,7 +2395,9 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             .library_product_map
             .take()
             .expect("library product builder owns its exact identity map");
-        let binder = self.finish(module);
+        let binder = self
+            .finish_library_suffix(module)
+            .expect("product module exists in its binder graph");
         map.finalize(&binder)?;
         Ok((binder, map))
     }
@@ -2462,10 +2480,17 @@ impl<'ast> ProjectBinderBuilder<'ast> {
 
     /// Freeze only the appended user suffix; the library global prefix is already final.
     pub fn finish_frozen_library_continuation(
-        mut self,
+        self,
         appended_module: Option<ScopeId>,
     ) -> Result<Binder, &'static str> {
         assert_eq!(self.use_mode, BuilderUseMode::Continuation);
+        self.finish_library_suffix(appended_module)
+    }
+
+    fn finish_library_suffix(
+        mut self,
+        appended_module: Option<ScopeId>,
+    ) -> Result<Binder, &'static str> {
         let current_module = self.state.current_module;
         self.finalize_pending_namespaces();
         allocate_dormant_namespace_value_storages(&mut self.state);
@@ -6430,6 +6455,227 @@ namespace Standalone { export const value = 1; }
         assert!(
             binder.resolve_type(consume_module, "FreshShape").is_some(),
             "a fresh script type global is visible from another file"
+        );
+    }
+
+    fn type_only_library_declaration_product() -> typokat_library_product::LibraryDeclarationProduct
+    {
+        let library_source = "interface ProductTypeOnly { marker: string }\n\
+                              declare namespace ProductSpace { interface Member {} }\n";
+        let library_allocator = Allocator::default();
+        let library = Parser::new(&library_allocator, library_source, SourceType::d_ts()).parse();
+        assert!(library.diagnostics.is_empty());
+        let library_manifest = SourceDeclarationManifest::build(&library.program);
+        let prelude_allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::d_ts()).parse();
+        let mut library_builder = ProjectBinderBuilder::new_empty_library_prelude(&prelude.program);
+        let library_unit = CompilationUnit::library(
+            SourceUnitKey(1),
+            LibraryFileOrdinal::new(0),
+            &library.program,
+        );
+        let library_modules = library_builder
+            .try_add_library_modules_with_declaration_manifests(&[(
+                &library.program,
+                &library_manifest,
+                library_unit,
+            )])
+            .expect("library source binds");
+        let library_binder = library_builder.finish(library_modules[0]);
+        crate::binder::product::project_library_declaration_product(
+            "binder-product-delta-seam",
+            &library_binder,
+            &[crate::binder::product::LibraryProductSource {
+                ordinal: 0,
+                name: "lib.product.d.ts",
+                source_sha256: "00",
+                byte_len: u32::try_from(library_source.len()).expect("source length fits u32"),
+                external_module: false,
+                module: library_modules[0],
+                manifest: &library_manifest,
+                source_text: library_source,
+            }],
+            &[],
+        )
+        .expect("library declaration product projects")
+    }
+
+    #[test]
+    fn declaration_product_user_global_resolves_to_its_declaration_storage() {
+        let product = type_only_library_declaration_product();
+        let user_source = "let userGlobal: ProductTypeOnly;\n";
+        let user_allocator = Allocator::default();
+        let user = Parser::new(&user_allocator, user_source, SourceType::ts()).parse();
+        assert!(user.diagnostics.is_empty());
+        let (mut builder, _) = ProjectBinderBuilder::from_library_declaration_product(&product)
+            .expect("library declaration product instantiates");
+        let user_unit = CompilationUnit::implementation(SourceUnitKey(2), &user.program);
+        builder.reserve_script_namespace_roots([(&user.program, user_unit)]);
+        let (user_module, _) = builder.add_module(&user.program, &[], user_unit);
+        let (binder, _) = builder
+            .finish_library_product_project(Some(user_module))
+            .expect("product project binder finishes");
+
+        let binding_start = u32::try_from(
+            user_source
+                .find("userGlobal")
+                .expect("user binding is present"),
+        )
+        .expect("binding offset fits u32");
+        let declaration_storage = binder
+            .declarations
+            .iter()
+            .find(|declaration| {
+                declaration.site.module == user_module
+                    && declaration.site.binding_span.start == binding_start
+                    && declaration.kind == DeclarationKind::Variable
+            })
+            .and_then(|declaration| declaration.value_storage)
+            .expect("user declaration owns value storage");
+        let published = binder
+            .resolve_value(user_module, "userGlobal")
+            .and_then(|symbol| binder.symbols.get(symbol))
+            .expect("user module resolves its script global");
+        assert_eq!(published.value, Some(declaration_storage));
+
+        let product_type = binder
+            .graph
+            .get(binder.compilation_global)
+            .and_then(|scope| scope.lookup_local("ProductTypeOnly"))
+            .and_then(|symbol| binder.symbols.get(symbol))
+            .expect("product type-only symbol is retained");
+        assert!(product_type.ty.is_some());
+        assert!(product_type.value.is_none());
+        assert!(binder
+            .resolve_type(user_module, "ProductTypeOnly")
+            .is_some());
+        assert!(binder
+            .resolve_value(user_module, "ProductTypeOnly")
+            .is_none());
+    }
+
+    #[test]
+    fn declaration_product_user_namespaces_keep_library_and_delta_owners() {
+        let product = type_only_library_declaration_product();
+        let user_source = "declare namespace ProductSpace { interface UserMember {} }\n\
+                           declare namespace UserSpace { interface LocalMember {} }\n";
+        let user_allocator = Allocator::default();
+        let user = Parser::new(&user_allocator, user_source, SourceType::ts()).parse();
+        assert!(user.diagnostics.is_empty());
+        let (mut builder, _) = ProjectBinderBuilder::from_library_declaration_product(&product)
+            .expect("library declaration product instantiates");
+        let user_unit = CompilationUnit::implementation(SourceUnitKey(2), &user.program);
+        builder.reserve_script_namespace_roots([(&user.program, user_unit)]);
+        let (user_module, _) = builder.add_module(&user.program, &[], user_unit);
+        let (binder, _) = builder
+            .finish_library_product_project(Some(user_module))
+            .expect("product namespace project finishes");
+
+        let delta_global = binder
+            .graph
+            .get(binder.script_namespace_root)
+            .and_then(|scope| scope.parent)
+            .expect("delta script root has a global parent");
+        assert_eq!(
+            binder.graph.get(delta_global).map(|scope| scope.kind),
+            Some(ScopeKind::CompilationGlobal)
+        );
+
+        let product_namespaces = binder
+            .namespaces
+            .namespaces()
+            .filter(|namespace| namespace.name == "ProductSpace")
+            .collect::<Vec<_>>();
+        assert_eq!(product_namespaces.len(), 1);
+        let product_namespace = product_namespaces[0];
+        assert_eq!(product_namespace.owner, NamespaceOwner::CompilationGlobal);
+        assert_eq!(product_namespace.fragments.len(), 2);
+        assert!(product_namespace.fragments.iter().any(|fragment| {
+            binder
+                .namespaces
+                .fragment(*fragment)
+                .is_some_and(|fragment| fragment.module == user_module)
+        }));
+        assert_eq!(
+            binder.graph.resolve(user_module, "ProductSpace"),
+            Some(product_namespace.symbol)
+        );
+
+        let user_namespace = binder
+            .namespaces
+            .namespaces()
+            .find(|namespace| namespace.name == "UserSpace")
+            .expect("fresh user namespace is retained");
+        assert_eq!(user_namespace.owner, NamespaceOwner::Lexical(delta_global));
+        assert!(user_namespace.fragments.iter().any(|fragment| {
+            binder
+                .namespaces
+                .fragment(*fragment)
+                .is_some_and(|fragment| fragment.module == user_module)
+        }));
+        assert_eq!(
+            binder.graph.resolve(user_module, "UserSpace"),
+            Some(user_namespace.symbol)
+        );
+    }
+
+    #[test]
+    fn empty_declaration_product_project_preserves_acyclic_library_roots() {
+        let product = type_only_library_declaration_product();
+        let (builder, library_units) =
+            ProjectBinderBuilder::from_library_declaration_product(&product)
+                .expect("library declaration product instantiates");
+        let library_module = library_units
+            .last()
+            .map(|unit| unit.module)
+            .expect("product retains its library module");
+        let (binder, _) = builder
+            .finish_library_product_project(None)
+            .expect("empty product project binder finishes");
+
+        assert_eq!(binder.module, library_module);
+        assert!(binder
+            .graph
+            .get(binder.prelude_module)
+            .is_some_and(|scope| scope.parent.is_none()));
+        let mut cursor = Some(binder.module);
+        let mut steps = 0;
+        while let Some(scope) = cursor {
+            steps += 1;
+            assert!(steps <= binder.graph.len(), "scope parents contain a cycle");
+            cursor = binder.graph.get(scope).and_then(|scope| scope.parent);
+        }
+        assert!(binder.resolve_value(binder.module, "userGlobal").is_none());
+        assert!(binder.resolve_type(binder.module, "userGlobal").is_none());
+        assert!(binder
+            .resolve_type(binder.module, "ProductTypeOnly")
+            .is_some());
+        assert!(binder
+            .resolve_value(binder.module, "ProductTypeOnly")
+            .is_none());
+        let product_namespace = binder
+            .namespaces
+            .namespaces()
+            .find(|namespace| namespace.name == "ProductSpace")
+            .expect("product namespace is retained");
+        assert_eq!(product_namespace.owner, NamespaceOwner::CompilationGlobal);
+        assert_eq!(
+            binder
+                .graph
+                .get(product_namespace.public_scope)
+                .map(|scope| scope.kind),
+            Some(ScopeKind::NamespacePublic)
+        );
+        assert_eq!(
+            binder
+                .graph
+                .get(binder.compilation_global)
+                .and_then(|scope| scope.lookup_local("ProductSpace")),
+            Some(product_namespace.symbol)
+        );
+        assert_eq!(
+            binder.graph.resolve(binder.module, "ProductSpace"),
+            Some(product_namespace.symbol)
         );
     }
 
