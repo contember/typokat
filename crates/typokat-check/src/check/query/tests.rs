@@ -215,6 +215,42 @@ fn optional_property(name: &str, ty: TypeId) -> PropertyType {
     }
 }
 
+#[test]
+fn planner_bounds_one_successive_instantiation_root_before_provenance_explodes() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let parameter = TypeParamId(91_001);
+    let parameter_type = interner.intern_type_param(parameter, "T");
+    let mut source = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", parameter_type)],
+        ..Default::default()
+    });
+    for _ in 0..=MAX_CLASS_PROJECTION_EXPANSIONS {
+        source = interner.intern_instantiation(source, vec![(parameter, wk.string)]);
+    }
+    let target = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", wk.string)],
+        ..Default::default()
+    });
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    let outcome =
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .is_assignable(source, target);
+
+    assert!(matches!(
+        outcome,
+        RelationOutcome::Exhausted(Exhaustion::EvaluationBudget)
+    ));
+    assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
+    assert!(
+        interner.derivation_storage_counts_for_test().1
+            <= MAX_CLASS_PROJECTION_EXPANSIONS * MAX_CLASS_PROJECTION_EXPANSIONS
+    );
+}
+
 fn object_with_irrelevant_recursive_computations(
     interner: &mut Interner,
 ) -> (TypeId, TypeId, TypeId, TypeId) {
