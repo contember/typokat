@@ -68,6 +68,14 @@ struct StableProbeEvidence {
     coordinate: StableProbeCoordinate,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PublishBeforeSccCompleteContract {
+    canonical_roots: Vec<ProjectLocalDemandRootForTest>,
+    selected_owner: ProjectLocalProductGroupForTest,
+    selected_scc: ProjectLocalProductSccForTest,
+    clean_scc: ProjectLocalProductSccForTest,
+}
+
 #[derive(Clone)]
 struct ObservedCandidateTrace {
     trace: ProjectLocalSemanticTraceForTest,
@@ -635,6 +643,9 @@ enum CandidateValidationError {
     PassiveCacheCensus,
     FaultNotReached,
     FaultSeamMismatch,
+    FaultTargetContract,
+    FaultCommitContract,
+    FaultActivationOrder,
     FaultAfterReceipt,
 }
 
@@ -1183,6 +1194,36 @@ fn candidate_native_validator_rejects_each_known_broken_control() {
         CandidateValidationError::ProductAuthority,
     );
     broken = trace.clone();
+    broken.trace.product_dependencies[0].target = native.groups[2].product_key;
+    assert_invalid(
+        &native,
+        &oracle,
+        &roots,
+        &broken,
+        CandidateValidationError::ProductAuthority,
+    );
+    broken = trace.clone();
+    broken
+        .trace
+        .product_dependencies
+        .push(native.dependencies[0].clone());
+    assert_invalid(
+        &native,
+        &oracle,
+        &roots,
+        &broken,
+        CandidateValidationError::ProductAuthority,
+    );
+    broken = trace.clone();
+    broken.trace.materialized_product_groups.pop();
+    assert_invalid(
+        &native,
+        &oracle,
+        &roots,
+        &broken,
+        CandidateValidationError::MaterializedTraceDrift,
+    );
+    broken = trace.clone();
     broken.trace.publication_scc_commits[0]
         .observed_before_complete
         .push(native.groups[0].clone());
@@ -1271,7 +1312,7 @@ fn raw_controls_reject_provisional_escape_and_fault_seam_drift() {
         Err(CandidateValidationError::ProvisionalUnavailablePublished)
     );
 
-    let (_, _, _, mut seam) = valid_control_trace();
+    let (fault_native, _, fault_roots, mut seam) = valid_control_trace();
     insert_observation_event(
         &mut seam.observation,
         1,
@@ -1282,14 +1323,19 @@ fn raw_controls_reject_provisional_escape_and_fault_seam_drift() {
     );
     assert_eq!(
         validate_fault_observation(
+            &fault_native,
+            &fault_roots,
             &seam.observation,
             Some(ProjectLocalSemanticFaultForTest::OmitDependencyEdge),
         ),
         Err(CandidateValidationError::FaultSeamMismatch)
     );
+    let (_, _, _, missing) = valid_control_trace();
     assert_eq!(
         validate_fault_observation(
-            &valid_control_trace().3.observation,
+            &fault_native,
+            &fault_roots,
+            &missing.observation,
             Some(ProjectLocalSemanticFaultForTest::OmitDependencyEdge),
         ),
         Err(CandidateValidationError::FaultNotReached)
@@ -1306,6 +1352,8 @@ fn raw_controls_reject_provisional_escape_and_fault_seam_drift() {
     );
     assert_eq!(
         validate_fault_observation(
+            &fault_native,
+            &fault_roots,
             &late.observation,
             Some(ProjectLocalSemanticFaultForTest::OmitDependencyEdge),
         ),
@@ -1512,17 +1560,31 @@ fn injected_candidate_faults_reach_candidate_native_guards() {
             .complete_source_black_box_oracle_for_test(&inputs)
             .expect("black-box complete-source shadow");
         let roots = if fault == ProjectLocalSemanticFaultForTest::PublishBeforeSccComplete {
-            let cycle = native
-                .publication_sccs
-                .iter()
-                .find(|scc| scc.members.len() > 1)
-                .expect("real nontrivial product SCC");
-            vec![ProjectLocalDemandRootForTest::ProductGroup(
-                cycle.members[0].clone(),
-            )]
+            publish_before_scc_complete_contract(&native)
+                .expect("authenticated Symbol publication SCC")
+                .canonical_roots
         } else {
             case_demand_roots(case_id, &native)
         };
+        if fault == ProjectLocalSemanticFaultForTest::PublishBeforeSccComplete {
+            let sibling = candidate_trace(
+                &provider,
+                candidate_request(case_id, inputs.clone(), roots.clone(), false, None),
+            );
+            validate_candidate_trace(
+                case_id,
+                &native,
+                &oracle,
+                &roots,
+                (
+                    ProjectLocalOrderForTest::Forward,
+                    ProjectLocalOrderForTest::Forward,
+                ),
+                false,
+                sibling.evidence(),
+            )
+            .expect("identical canonical Array roots are valid without fault injection");
+        }
         let trace = candidate_trace(
             &provider,
             candidate_request(case_id, inputs.clone(), roots.clone(), false, Some(fault)),
@@ -1547,14 +1609,17 @@ fn injected_candidate_faults_reach_candidate_native_guards() {
 
 #[test]
 fn candidate_fault_scenarios_use_their_canonical_reachable_seams() {
-    let product = LibraryBaseProvider::new()
-        .declaration_product()
-        .expect("declaration product");
-    let native = native_product_evidence(&product);
-    assert!(native
-        .publication_sccs
-        .iter()
-        .any(|scc| scc.members.len() > 1));
+    let provider = LibraryBaseProvider::new();
+    let product = provider.declaration_product().expect("declaration product");
+    let product_native = native_product_evidence(&product);
+    let native =
+        mapped_native_evidence(&provider, &product, &case_inputs("array"), &product_native);
+    let contract = publish_before_scc_complete_contract(&native)
+        .expect("authenticated Symbol publication SCC");
+    assert_eq!(
+        contract.canonical_roots,
+        case_demand_roots("array", &native)
+    );
     for (fault, case_id) in fault_scenarios() {
         match fault {
             ProjectLocalSemanticFaultForTest::PublishProvisionalUnavailableWrite => {
@@ -1566,6 +1631,427 @@ fn candidate_fault_scenarios_use_their_canonical_reachable_seams() {
             _ => assert_eq!(case_id, "array"),
         }
     }
+}
+
+#[test]
+fn publish_before_scc_complete_uses_exact_canonical_symbol_contract() {
+    let provider = LibraryBaseProvider::new();
+    let product = provider.declaration_product().expect("declaration product");
+    let product_native = native_product_evidence(&product);
+    let native =
+        mapped_native_evidence(&provider, &product, &case_inputs("array"), &product_native);
+    let contract = publish_before_scc_complete_contract(&native)
+        .expect("authenticated Symbol publication SCC");
+    assert_eq!(
+        contract.canonical_roots,
+        case_demand_roots("array", &native)
+    );
+    assert_eq!(
+        contract
+            .selected_scc
+            .members
+            .iter()
+            .map(|member| member.name.as_str())
+            .collect::<BTreeSet<_>>(),
+        ["Symbol", "SymbolConstructor"].into_iter().collect()
+    );
+    assert!(contract
+        .selected_scc
+        .members
+        .iter()
+        .all(|member| member.compilation_global));
+    let canonical_closure = demanded_product_closure(&native, &contract.canonical_roots)
+        .expect("canonical Array closure")
+        .into_iter()
+        .map(|group| group.product_key)
+        .collect::<BTreeSet<_>>();
+    assert!(contract
+        .selected_scc
+        .members
+        .iter()
+        .all(|member| canonical_closure.contains(&member.product_key)));
+    let demanded_nontrivial_sccs = native
+        .publication_sccs
+        .iter()
+        .filter(|scc| {
+            scc.members.len() > 1
+                && scc
+                    .members
+                    .iter()
+                    .any(|member| canonical_closure.contains(&member.product_key))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        demanded_nontrivial_sccs,
+        vec![&contract.selected_scc, &contract.clean_scc]
+    );
+    assert_eq!(
+        contract
+            .clean_scc
+            .members
+            .iter()
+            .map(|member| member.name.as_str())
+            .collect::<BTreeSet<_>>(),
+        ["FlatArray", "ReadonlyArray"].into_iter().collect()
+    );
+    validate_publish_before_scc_complete_roots(&native, &contract.canonical_roots)
+        .expect("exact canonical Array roots");
+    let mut missing_root = contract.canonical_roots.clone();
+    missing_root.pop().expect("canonical Array root");
+    assert_eq!(
+        validate_publish_before_scc_complete_roots(&native, &missing_root),
+        Err(CandidateValidationError::FaultTargetContract)
+    );
+    let replaced = vec![ProjectLocalDemandRootForTest::ProductGroup(
+        contract.selected_owner.clone(),
+    )];
+    assert_eq!(
+        validate_publish_before_scc_complete_roots(&native, &replaced),
+        Err(CandidateValidationError::FaultTargetContract)
+    );
+    let singleton = native
+        .publication_sccs
+        .iter()
+        .find_map(|scc| {
+            let [member] = scc.members.as_slice() else {
+                return None;
+            };
+            member.compilation_global.then_some(member.clone())
+        })
+        .expect("independent compilation-global singleton");
+    let mut singleton_roots = contract.canonical_roots.clone();
+    singleton_roots.push(ProjectLocalDemandRootForTest::ProductGroup(singleton));
+    assert_eq!(
+        validate_publish_before_scc_complete_roots(&native, &singleton_roots),
+        Err(CandidateValidationError::FaultTargetContract)
+    );
+    let module_homonym = native
+        .probe_evidence
+        .iter()
+        .find_map(|evidence| match &evidence.coordinate {
+            StableProbeCoordinate::ModuleType { .. } => native
+                .groups
+                .get(evidence.product_key)
+                .filter(|group| !group.compilation_global)
+                .cloned(),
+            _ => None,
+        })
+        .expect("external-module probe owner");
+    let mut module_roots = contract.canonical_roots.clone();
+    module_roots.push(ProjectLocalDemandRootForTest::ProductGroup(module_homonym));
+    assert_eq!(
+        validate_publish_before_scc_complete_roots(&native, &module_roots),
+        Err(CandidateValidationError::FaultTargetContract)
+    );
+    let wrong_scc = native
+        .publication_sccs
+        .iter()
+        .find(|scc| scc.members.len() > 1 && **scc != contract.selected_scc)
+        .expect("independent wrong nontrivial SCC");
+    let mut wrong_scc_roots = contract.canonical_roots.clone();
+    wrong_scc_roots.push(ProjectLocalDemandRootForTest::ProductGroup(
+        wrong_scc.members[0].clone(),
+    ));
+    assert_eq!(
+        validate_publish_before_scc_complete_roots(&native, &wrong_scc_roots),
+        Err(CandidateValidationError::FaultTargetContract)
+    );
+
+    let selected_index = native
+        .publication_sccs
+        .iter()
+        .position(|scc| *scc == contract.selected_scc)
+        .expect("selected SCC index");
+    let mut duplicate_member = native.clone();
+    duplicate_member.publication_sccs[selected_index].members[1] =
+        duplicate_member.publication_sccs[selected_index].members[0].clone();
+    assert_eq!(
+        publish_before_scc_complete_contract(&duplicate_member),
+        Err(CandidateValidationError::FaultTargetContract)
+    );
+    let mut wrong_member = native.clone();
+    wrong_member.publication_sccs[selected_index].members[1] = wrong_scc.members[0].clone();
+    assert_eq!(
+        publish_before_scc_complete_contract(&wrong_member),
+        Err(CandidateValidationError::FaultTargetContract)
+    );
+    let mut missing_edge = native.clone();
+    let selected_keys = contract
+        .selected_scc
+        .members
+        .iter()
+        .map(|member| member.product_key)
+        .collect::<BTreeSet<_>>();
+    missing_edge.dependencies.retain(|edge| {
+        edge.owner != contract.selected_owner.product_key || !selected_keys.contains(&edge.target)
+    });
+    assert_eq!(
+        publish_before_scc_complete_contract(&missing_edge),
+        Err(CandidateValidationError::FaultTargetContract)
+    );
+    let mut duplicate_edge = native.clone();
+    let edge = duplicate_edge
+        .dependencies
+        .iter()
+        .find(|edge| selected_keys.contains(&edge.owner) && selected_keys.contains(&edge.target))
+        .cloned()
+        .expect("selected internal dependency");
+    duplicate_edge.dependencies.push(edge);
+    assert_eq!(
+        publish_before_scc_complete_contract(&duplicate_edge),
+        Err(CandidateValidationError::FaultTargetContract)
+    );
+
+    let materialized = demanded_product_closure(&native, &contract.canonical_roots)
+        .expect("canonical materialized closure");
+    let materialized_keys = materialized
+        .iter()
+        .map(|group| group.product_key)
+        .collect::<BTreeSet<_>>();
+    let mut commits = native
+        .publication_sccs
+        .iter()
+        .filter(|scc| {
+            scc.members
+                .iter()
+                .any(|member| materialized_keys.contains(&member.product_key))
+        })
+        .map(|scc| ProjectLocalPublicationSccCommitForTest {
+            scc: scc.clone(),
+            reserved_members: scc.members.clone(),
+            published_members: scc.members.clone(),
+            observed_before_complete: Vec::new(),
+            state_before_publish: ProjectLocalTerminalStateForTest::Resolving,
+            final_state: ProjectLocalTerminalStateForTest::Ready,
+        })
+        .collect::<Vec<_>>();
+    let premature_index = commits
+        .iter()
+        .position(|commit| commit.scc == contract.selected_scc)
+        .expect("selected commit");
+    commits[premature_index].observed_before_complete = contract.selected_scc.members.clone();
+    assert_eq!(
+        validate_commits(
+            &native,
+            &contract.canonical_roots,
+            &materialized,
+            &commits,
+            Some(ProjectLocalSemanticFaultForTest::PublishBeforeSccComplete),
+        ),
+        Err(CandidateValidationError::PrematureSccPublication)
+    );
+    let mut wrong_published_member = commits.clone();
+    wrong_published_member[premature_index]
+        .published_members
+        .pop();
+    assert_eq!(
+        validate_commits(
+            &native,
+            &contract.canonical_roots,
+            &materialized,
+            &wrong_published_member,
+            Some(ProjectLocalSemanticFaultForTest::PublishBeforeSccComplete),
+        ),
+        Err(CandidateValidationError::FaultCommitContract)
+    );
+    let mut duplicate_published_member = commits.clone();
+    duplicate_published_member[premature_index]
+        .published_members
+        .push(contract.selected_scc.members[0].clone());
+    assert_eq!(
+        validate_commits(
+            &native,
+            &contract.canonical_roots,
+            &materialized,
+            &duplicate_published_member,
+            Some(ProjectLocalSemanticFaultForTest::PublishBeforeSccComplete),
+        ),
+        Err(CandidateValidationError::FaultCommitContract)
+    );
+    let exact_second_commit = commits
+        .iter()
+        .position(|commit| commit.scc == contract.clean_scc)
+        .expect("exact ReadonlyArray / FlatArray commit");
+    let mut wrong_commit_scc = commits.clone();
+    wrong_commit_scc[exact_second_commit].observed_before_complete =
+        wrong_commit_scc[exact_second_commit].scc.members.clone();
+    assert_eq!(
+        validate_commits(
+            &native,
+            &contract.canonical_roots,
+            &materialized,
+            &wrong_commit_scc,
+            Some(ProjectLocalSemanticFaultForTest::PublishBeforeSccComplete),
+        ),
+        Err(CandidateValidationError::FaultCommitContract)
+    );
+
+    let selected_member_keys = contract
+        .selected_scc
+        .members
+        .iter()
+        .map(|member| member.product_key)
+        .collect::<BTreeSet<_>>();
+    let first_selected_cache = *selected_member_keys
+        .iter()
+        .next()
+        .expect("selected cache owner");
+    let fault_kind = ObservationEventKindForTest::FaultActivated {
+        fault: ProjectLocalSemanticFaultForTest::PublishBeforeSccComplete,
+        seam: ProjectLocalFaultSeamForTest::SccCompletion,
+    };
+    let mut events = selected_member_keys
+        .iter()
+        .enumerate()
+        .map(|(index, product_group)| {
+            observation_event(
+                index as u64 + 1,
+                ObservationEventKindForTest::OwnerMaterialized {
+                    phase: ProjectLocalSemanticPhaseForTest::Ordinary,
+                    product_group: *product_group,
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    let fault_index = events.len();
+    events.push(observation_event(
+        fault_index as u64 + 1,
+        fault_kind.clone(),
+    ));
+    events.push(observation_event(
+        fault_index as u64 + 2,
+        ObservationEventKindForTest::DurableCacheWrite {
+            publisher: 1,
+            product_group: first_selected_cache,
+        },
+    ));
+    events.push(observation_event(
+        fault_index as u64 + 3,
+        ObservationEventKindForTest::ReceiptBuilt,
+    ));
+    let observation = ObservationReceiptForTest {
+        events,
+        witness_kind: ObservationWitnessKindForTest::SyntheticSchema,
+        session_weak: Vec::new(),
+        cache_weak: Vec::new(),
+    };
+    assert_eq!(
+        validate_fault_observation(
+            &native,
+            &contract.canonical_roots,
+            &observation,
+            Some(ProjectLocalSemanticFaultForTest::PublishBeforeSccComplete),
+        ),
+        Ok(())
+    );
+    let mut missing_activation = observation.clone();
+    missing_activation.events.remove(fault_index);
+    assert_eq!(
+        validate_fault_observation(
+            &native,
+            &contract.canonical_roots,
+            &missing_activation,
+            Some(ProjectLocalSemanticFaultForTest::PublishBeforeSccComplete),
+        ),
+        Err(CandidateValidationError::FaultNotReached)
+    );
+    let mut wrong_seam = observation.clone();
+    wrong_seam.events[fault_index].kind = ObservationEventKindForTest::FaultActivated {
+        fault: ProjectLocalSemanticFaultForTest::PublishBeforeSccComplete,
+        seam: ProjectLocalFaultSeamForTest::DependencyProjection,
+    };
+    assert_eq!(
+        validate_fault_observation(
+            &native,
+            &contract.canonical_roots,
+            &wrong_seam,
+            Some(ProjectLocalSemanticFaultForTest::PublishBeforeSccComplete),
+        ),
+        Err(CandidateValidationError::FaultSeamMismatch)
+    );
+    let mut duplicate_activation = observation.clone();
+    duplicate_activation.events.insert(
+        fault_index + 1,
+        observation_event(fault_index as u64 + 1, fault_kind),
+    );
+    assert_eq!(
+        validate_fault_observation(
+            &native,
+            &contract.canonical_roots,
+            &duplicate_activation,
+            Some(ProjectLocalSemanticFaultForTest::PublishBeforeSccComplete),
+        ),
+        Err(CandidateValidationError::FaultNotReached)
+    );
+    let mut duplicate_stamp = observation.clone();
+    duplicate_stamp.events[fault_index].stamp = duplicate_stamp.events[fault_index - 1].stamp;
+    assert_eq!(
+        validate_fault_observation(
+            &native,
+            &contract.canonical_roots,
+            &duplicate_stamp,
+            Some(ProjectLocalSemanticFaultForTest::PublishBeforeSccComplete),
+        ),
+        Err(CandidateValidationError::FaultActivationOrder)
+    );
+    let restamp = |observation: &mut ObservationReceiptForTest| {
+        for (index, event) in observation.events.iter_mut().enumerate() {
+            event.stamp = index as u64 + 1;
+        }
+    };
+    let mut before_any_owner = observation.clone();
+    let fault_event = before_any_owner.events.remove(fault_index);
+    before_any_owner.events.insert(0, fault_event);
+    restamp(&mut before_any_owner);
+    assert_eq!(
+        validate_fault_observation(
+            &native,
+            &contract.canonical_roots,
+            &before_any_owner,
+            Some(ProjectLocalSemanticFaultForTest::PublishBeforeSccComplete),
+        ),
+        Err(CandidateValidationError::FaultActivationOrder)
+    );
+    let mut after_one_owner = observation.clone();
+    let fault_event = after_one_owner.events.remove(fault_index);
+    after_one_owner.events.insert(1, fault_event);
+    restamp(&mut after_one_owner);
+    assert_eq!(
+        validate_fault_observation(
+            &native,
+            &contract.canonical_roots,
+            &after_one_owner,
+            Some(ProjectLocalSemanticFaultForTest::PublishBeforeSccComplete),
+        ),
+        Err(CandidateValidationError::FaultActivationOrder)
+    );
+    let mut after_selected_cache = observation.clone();
+    let fault_event = after_selected_cache.events.remove(fault_index);
+    after_selected_cache
+        .events
+        .insert(fault_index + 1, fault_event);
+    restamp(&mut after_selected_cache);
+    assert_eq!(
+        validate_fault_observation(
+            &native,
+            &contract.canonical_roots,
+            &after_selected_cache,
+            Some(ProjectLocalSemanticFaultForTest::PublishBeforeSccComplete),
+        ),
+        Err(CandidateValidationError::FaultActivationOrder)
+    );
+    let mut late_stamp = observation;
+    let receipt_stamp = late_stamp.events.last().expect("receipt event").stamp;
+    late_stamp.events[fault_index].stamp = receipt_stamp;
+    assert_eq!(
+        validate_fault_observation(
+            &native,
+            &contract.canonical_roots,
+            &late_stamp,
+            Some(ProjectLocalSemanticFaultForTest::PublishBeforeSccComplete),
+        ),
+        Err(CandidateValidationError::FaultAfterReceipt)
+    );
 }
 
 fn validate_candidate_trace(
@@ -1646,7 +2132,7 @@ fn validate_candidate_trace_with_weak_mode(
     {
         return Err(CandidateValidationError::InvalidSession);
     }
-    validate_fault_observation(observation, fault)?;
+    validate_fault_observation(native, roots, observation, fault)?;
     if trace.source_inputs != oracle.source_inputs
         || trace.source_visit_rows != ordered(&oracle.source_visit_rows, source_order)
     {
@@ -1696,7 +2182,13 @@ fn validate_candidate_trace_with_weak_mode(
     if !trace.ordinary_force_all_invocations.is_empty() {
         return Err(CandidateValidationError::OrdinaryForceAll);
     }
-    validate_commits(native, &materialized, &trace.publication_scc_commits)?;
+    validate_commits(
+        native,
+        roots,
+        &materialized,
+        &trace.publication_scc_commits,
+        fault,
+    )?;
     validate_cache_and_repeats(roots, &materialized, trace)?;
     validate_internal_publications(case_id, trace)?;
     match (&trace.force_all, force_all_requested) {
@@ -1708,8 +2200,10 @@ fn validate_candidate_trace_with_weak_mode(
 
 fn validate_commits(
     native: &NativeProductEvidence,
+    roots: &[ProjectLocalDemandRootForTest],
     materialized: &[ProjectLocalProductGroupForTest],
     commits: &[ProjectLocalPublicationSccCommitForTest],
+    fault: Option<ProjectLocalSemanticFaultForTest>,
 ) -> Result<(), CandidateValidationError> {
     let keys = materialized
         .iter()
@@ -1727,22 +2221,58 @@ fn validate_commits(
     if commits.len() != expected.len() {
         return Err(CandidateValidationError::PublicationSccCensus);
     }
+    let premature_contract =
+        if fault == Some(ProjectLocalSemanticFaultForTest::PublishBeforeSccComplete) {
+            Some(validate_publish_before_scc_complete_roots(native, roots)?)
+        } else {
+            None
+        };
+    let malformed_commit_error = if premature_contract.is_some() {
+        CandidateValidationError::FaultCommitContract
+    } else {
+        CandidateValidationError::PrematureSccPublication
+    };
+    let mut premature_commits = 0usize;
     for (scc, commit) in expected.into_iter().zip(commits) {
         if commit.scc != *scc
             || commit.reserved_members != scc.members
-            || !commit.observed_before_complete.is_empty()
             || commit.state_before_publish != ProjectLocalTerminalStateForTest::Resolving
         {
-            return Err(CandidateValidationError::PrematureSccPublication);
+            return Err(malformed_commit_error);
+        }
+        let selected_for_fault = premature_contract
+            .as_ref()
+            .is_some_and(|contract| contract.selected_scc == *scc);
+        if selected_for_fault {
+            if commit.observed_before_complete != scc.members
+                || commit.published_members != scc.members
+                || commit.final_state != ProjectLocalTerminalStateForTest::Ready
+            {
+                return Err(malformed_commit_error);
+            }
+            premature_commits = premature_commits.saturating_add(1);
+            continue;
+        }
+        if !commit.observed_before_complete.is_empty() {
+            return Err(malformed_commit_error);
         }
         match commit.final_state {
             ProjectLocalTerminalStateForTest::Ready if commit.published_members == scc.members => {}
             ProjectLocalTerminalStateForTest::Unavailable(_)
                 if commit.published_members.is_empty() => {}
+            _ if premature_contract.is_some() => return Err(malformed_commit_error),
             _ => return Err(CandidateValidationError::AtomicSccPublication),
         }
     }
-    Ok(())
+    if premature_contract.is_some() {
+        if premature_commits == 1 {
+            Err(CandidateValidationError::PrematureSccPublication)
+        } else {
+            Err(CandidateValidationError::FaultNotReached)
+        }
+    } else {
+        Ok(())
+    }
 }
 
 fn validate_cache_and_repeats(
@@ -2100,6 +2630,8 @@ fn validate_passive_session_lifecycle(
 }
 
 fn validate_fault_observation(
+    native: &NativeProductEvidence,
+    roots: &[ProjectLocalDemandRootForTest],
     observation: &ObservationReceiptForTest,
     injection: Option<ProjectLocalSemanticFaultForTest>,
 ) -> Result<(), CandidateValidationError> {
@@ -2135,6 +2667,57 @@ fn validate_fault_observation(
     }
     if *stamp >= receipt_stamp {
         return Err(CandidateValidationError::FaultAfterReceipt);
+    }
+    if expected_fault == ProjectLocalSemanticFaultForTest::PublishBeforeSccComplete {
+        let contract = validate_publish_before_scc_complete_roots(native, roots)?;
+        let selected_members = contract
+            .selected_scc
+            .members
+            .iter()
+            .map(|member| member.product_key)
+            .collect::<BTreeSet<_>>();
+        let mut last_owner_stamp = 0;
+        for selected_member in &selected_members {
+            let owner_stamps = observation
+                .events
+                .iter()
+                .filter_map(|event| match event.kind {
+                    ObservationEventKindForTest::OwnerMaterialized {
+                        phase: ProjectLocalSemanticPhaseForTest::Ordinary,
+                        product_group,
+                    } if product_group == *selected_member => Some(event.stamp),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let [owner_stamp] = owner_stamps.as_slice() else {
+                return Err(CandidateValidationError::FaultActivationOrder);
+            };
+            last_owner_stamp = last_owner_stamp.max(*owner_stamp);
+        }
+        let first_cache_stamp = observation
+            .events
+            .iter()
+            .filter_map(|event| match event.kind {
+                ObservationEventKindForTest::DurableCacheWrite { product_group, .. }
+                    if selected_members.contains(&product_group) =>
+                {
+                    Some(event.stamp)
+                }
+                _ => None,
+            })
+            .min();
+        let Some(first_cache_stamp) = first_cache_stamp else {
+            return Err(CandidateValidationError::FaultActivationOrder);
+        };
+        if observation
+            .events
+            .windows(2)
+            .any(|events| events[0].stamp >= events[1].stamp)
+            || last_owner_stamp >= *stamp
+            || *stamp >= first_cache_stamp
+        {
+            return Err(CandidateValidationError::FaultActivationOrder);
+        }
     }
     Ok(())
 }
@@ -2511,6 +3094,186 @@ fn demanded_probe_projection(
             .cloned()
             .collect(),
     }
+}
+
+fn publish_before_scc_complete_contract(
+    native: &NativeProductEvidence,
+) -> Result<PublishBeforeSccCompleteContract, CandidateValidationError> {
+    if !stable_probe_evidence_matches_mapped_slots(native) {
+        return Err(CandidateValidationError::FaultTargetContract);
+    }
+    let expected_names = ["Symbol", "SymbolConstructor"]
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let candidates = native
+        .publication_sccs
+        .iter()
+        .filter(|scc| {
+            scc.members.len() > 1
+                && scc.members.iter().all(|member| member.compilation_global)
+                && scc
+                    .members
+                    .iter()
+                    .map(|member| member.name.as_str())
+                    .collect::<BTreeSet<_>>()
+                    == expected_names
+        })
+        .collect::<Vec<_>>();
+    let [selected_scc] = candidates.as_slice() else {
+        return Err(CandidateValidationError::FaultTargetContract);
+    };
+    let selected_keys = selected_scc
+        .members
+        .iter()
+        .map(|member| member.product_key)
+        .collect::<BTreeSet<_>>();
+    if selected_keys.len() != selected_scc.members.len()
+        || selected_scc.members.iter().any(|member| {
+            native.groups.get(member.product_key) != Some(member)
+                || native
+                    .mapped_groups
+                    .iter()
+                    .filter(|mapped| mapped.product == *member)
+                    .count()
+                    != 1
+        })
+    {
+        return Err(CandidateValidationError::FaultTargetContract);
+    }
+    if native.dependencies.iter().collect::<BTreeSet<_>>().len() != native.dependencies.len() {
+        return Err(CandidateValidationError::FaultTargetContract);
+    }
+    let mut internal_edges = BTreeMap::<usize, Vec<usize>>::new();
+    for edge in native
+        .dependencies
+        .iter()
+        .filter(|edge| selected_keys.contains(&edge.owner) && selected_keys.contains(&edge.target))
+    {
+        internal_edges
+            .entry(edge.owner)
+            .or_default()
+            .push(edge.target);
+    }
+    let strongly_connected = selected_keys.iter().all(|start| {
+        let mut reached = BTreeSet::new();
+        let mut pending = vec![*start];
+        while let Some(owner) = pending.pop() {
+            if reached.insert(owner) {
+                pending.extend(internal_edges.get(&owner).into_iter().flatten().copied());
+            }
+        }
+        reached == selected_keys
+    });
+    if !strongly_connected {
+        return Err(CandidateValidationError::FaultTargetContract);
+    }
+
+    let selected_owner = selected_scc
+        .members
+        .iter()
+        .find(|member| member.name == "SymbolConstructor")
+        .cloned()
+        .ok_or(CandidateValidationError::FaultTargetContract)?;
+    let mapped = native
+        .mapped_groups
+        .iter()
+        .find(|mapped| mapped.product == selected_owner)
+        .ok_or(CandidateValidationError::FaultTargetContract)?;
+    let mapped_type = mapped
+        .local_type_group
+        .ok_or(CandidateValidationError::FaultTargetContract)?;
+    let expected_evidence = StableProbeEvidence {
+        product_key: selected_owner.product_key,
+        mapped_slot: StableProbeSlot::Type(mapped_type),
+        coordinate: StableProbeCoordinate::GlobalType {
+            name: selected_owner.name.clone(),
+        },
+    };
+    if !native.probe_evidence.contains(&expected_evidence)
+        || native.probe_evidence.iter().any(|evidence| {
+            evidence.product_key == selected_owner.product_key
+                && matches!(
+                    evidence.coordinate,
+                    StableProbeCoordinate::ModuleType { .. }
+                )
+        })
+    {
+        return Err(CandidateValidationError::FaultTargetContract);
+    }
+
+    let canonical_roots = case_demand_roots("array", native);
+    let canonical_closure = demanded_product_closure(native, &canonical_roots)?
+        .into_iter()
+        .map(|group| group.product_key)
+        .collect::<BTreeSet<_>>();
+    if !selected_scc
+        .members
+        .iter()
+        .all(|member| canonical_closure.contains(&member.product_key))
+    {
+        return Err(CandidateValidationError::FaultTargetContract);
+    }
+    let demanded_nontrivial_sccs = native
+        .publication_sccs
+        .iter()
+        .filter(|scc| {
+            scc.members.len() > 1
+                && scc
+                    .members
+                    .iter()
+                    .any(|member| canonical_closure.contains(&member.product_key))
+        })
+        .collect::<Vec<_>>();
+    let [first_scc, clean_scc] = demanded_nontrivial_sccs.as_slice() else {
+        return Err(CandidateValidationError::FaultTargetContract);
+    };
+    let clean_names = clean_scc
+        .members
+        .iter()
+        .map(|member| member.name.as_str())
+        .collect::<BTreeSet<_>>();
+    if **first_scc != **selected_scc
+        || clean_scc.members.len() != 2
+        || clean_names != ["FlatArray", "ReadonlyArray"].into_iter().collect()
+        || clean_scc.members.iter().any(|member| {
+            if !member.compilation_global {
+                return true;
+            }
+            let mapped = native
+                .mapped_groups
+                .iter()
+                .find(|mapped| mapped.product == *member);
+            let Some(mapped_type) = mapped.and_then(|mapped| mapped.local_type_group) else {
+                return true;
+            };
+            !native.probe_evidence.contains(&StableProbeEvidence {
+                product_key: member.product_key,
+                mapped_slot: StableProbeSlot::Type(mapped_type),
+                coordinate: StableProbeCoordinate::GlobalType {
+                    name: member.name.clone(),
+                },
+            })
+        })
+    {
+        return Err(CandidateValidationError::FaultTargetContract);
+    }
+    Ok(PublishBeforeSccCompleteContract {
+        canonical_roots,
+        selected_owner,
+        selected_scc: (*selected_scc).clone(),
+        clean_scc: (*clean_scc).clone(),
+    })
+}
+
+fn validate_publish_before_scc_complete_roots(
+    native: &NativeProductEvidence,
+    roots: &[ProjectLocalDemandRootForTest],
+) -> Result<PublishBeforeSccCompleteContract, CandidateValidationError> {
+    let contract = publish_before_scc_complete_contract(native)?;
+    if roots != contract.canonical_roots {
+        return Err(CandidateValidationError::FaultTargetContract);
+    }
+    Ok(contract)
 }
 
 fn case_demand_roots(

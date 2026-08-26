@@ -291,11 +291,19 @@ These conditions may not be relaxed after candidate results are visible.
   diagnostics, incompletes and check results, semantic probes, final global contributors, the live
   user EventStore ledger, and `force_all` library diagnostics/incompletes normalized by source
   path/span/content with legacy library event and record ordinals removed. Known-broken controls
-  catch an omitted independently projected product edge, premature SCC terminal from a real
-  nontrivial product SCC, resolving cache
-  write, escaped provisional unavailable write, stale global-object product, and an ordinary call
+  catch an omitted independently projected product edge, premature SCC terminal from the unique
+  compilation-global product SCC whose names are exactly `Symbol` and `SymbolConstructor`,
+  resolving cache write, escaped provisional unavailable write, stale global-object product, and an ordinary call
   to `force_all`, with an exact typed validator error and a stamped pre-receipt seam witness for each.
   Requests carry only the fault identity; the checker-owned fault gate defines its canonical seam.
+  `PublishBeforeSccComplete` keeps the canonical Array demand roots unchanged. Their independently
+  computed closure already contains the authenticated Symbol SCC, including its separate type and
+  value product rows. A no-fault sibling uses those identical roots. The fault witness requires one
+  exact premature commit on that SCC, clean commits everywhere else, and one canonical activation
+  after every selected Symbol SCC owner is materialized and before that SCC's first durable-cache
+  write and the receipt. It is the first of exactly two nontrivial SCCs in the canonical Array
+  publication schedule; the second has the exact compilation-global mapped name set
+  `ReadonlyArray` / `FlatArray` and must remain clean.
   The provisional-write fault runs only on `unavailable`, stale-global only on `global-this`, and a
   missing activation returns `FaultNotReached`. The boundary enumerates an exact set of relative
   paths, rejects every unexpected directory, file, or symlink, parses every admitted file as Rust,
@@ -544,6 +552,18 @@ numbers are invalid without `--no-smt`.
   homonym. The packaged Array witness requires global `Iterator` and excludes the unreachable
   external-module `Iterator` without inspecting or predicting numeric identities. Probe projection
   runs after closure and cannot create work. The full `force_all` oracle JSON and hash are unchanged.
+- **2026-08-26 — WU4 premature-SCC fault correction.** The earlier fault scenario replaced the
+  canonical Array roots with the first nontrivial SCC member, so it could test a different workload
+  and accept an unrelated premature commit. Product evidence shows that the unchanged Array closure
+  already contains the unique compilation-global SCC named `Symbol` / `SymbolConstructor`: three
+  product rows for Symbol type, SymbolConstructor type, and Symbol value. The corrected spec selects
+  that SCC by names, product graph, final mapped slot and global visibility without numeric or
+  iteration-order assumptions. The closure has exactly one later nontrivial SCC with the mapped
+  global names `ReadonlyArray` / `FlatArray`, so the validator also proves that only the selected
+  first SCC is premature. It requires one owner event for every selected member before activation
+  and the first selected cache write afterward. It rejects replaced, missing or extra roots and
+  authenticates the exact premature commit and passive activation interval. An identical-root
+  no-fault sibling proves that the injected fault, not a changed demand set, causes the typed failure.
 - **2026-08-25 — qualified-path provenance prerequisite.** WU4 review found that WU2 retained path
   names but discarded each segment's exact source site and collapsed every non-group binder outcome
   into a generic unresolved recipe. The revised scaffold adds empty canonical/validated tables and
