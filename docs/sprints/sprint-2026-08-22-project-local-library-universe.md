@@ -343,6 +343,33 @@ These conditions may not be relaxed after candidate results are visible.
   observationally inert. `IDBCursor` publishes its real supported `key` and `continue` members while
   preserving the recursive `IDBValidKey` semantics and the complete-source user ledger.
   Cold/warm and forward/reverse relation order must not change the verdict.
+  `force_all` record parity uses a separate, branded, test-only `ForceAllRecordAudit`; it does not
+  reuse publication lowering with a mode flag. The audit receives only the immutable declaration
+  product and a narrow final project-local binder projection. It owns a new scratch `Store`,
+  interner, alias registry, query state, and relation/query caches and returns only normalized
+  library records, record provenance, a complete visit receipt, and audit counts. It cannot receive
+  any mutable publication reference or receive or return a publication terminal, durable cache,
+  publisher callback, `TypeId`, object surface, alias registry, semantic probe, or
+  complete-source/provider handle. Every audit record first carries an internally validated product
+  owner/key, recipe/member/signature key, and audit rule; normalization alone removes that
+  provenance. Audit-only `error` or `never` recovery may reproduce the complete-source record model
+  inside the scratch universe, but no audit identity or surface may enter a publication draft,
+  staged object, group or alias body, overlay, terminal, probe, relation cache, or demand/SCC event.
+  Pre/post controls prove unchanged publication store length and identities, alias registry, and
+  caches. Ordinary requests cannot construct the audit and perform zero audit work. The immutable
+  product must retain every syntax fact the audit needs; in particular, constructor type recipes
+  carry an explicit `abstract` bit through extraction, canonical encoding, digesting, and round-trip
+  validation. Positive `abstract new` and negative `new` recipes are unequal and encode
+  differently; a one-bit metamorphic change changes exactly the corresponding
+  `ClassDecoratorContext` default-incomplete record. Missing product evidence stops the audit and
+  expands the product contract. File/name/offset special cases, static record tables,
+  digest-dispatched behavior, fixture replay, and imports or calls into the provider,
+  `library_compiler`, replay layers, their ledger types, or the legacy complete-source route are
+  forbidden by the capability audit. Exact acceptance remains the unchanged 558-row normalized
+  complete-source/ADR-0018 multiset (267 diagnostics and 291 incompletes), including path, owner,
+  span, code or surface id, and content. Separate controls prove that publication omission cannot
+  change the audit ledger, audit recovery cannot change published terminals or semantic probes, and
+  an ordinary-path fault cannot reach even audit construction.
 - **Touch points.** Checker type-group/class/value publication, query coordination, library semantic
   lowering, bridges/global object, event ownership, evaluator/relation/flow caches, and focused
   specs.
@@ -616,3 +643,15 @@ numbers are invalid without `--no-smt`.
   the exact staged incomplete record; every retained interface signature and dependency must lower
   without recovery before atomic Ready. Class surfaces remain all-or-unavailable, omission creates
   no scheduling edge, and `IDBCursor.key` / `continue` retain recursive `IDBValidKey` semantics.
+- **2026-08-26 — WU4 force-all audit boundary.** The first atomic deferred-member implementation
+  proved that one `ProductLowerer { force_all }` cannot serve both sound publication and exact
+  library-record inspection. Sound whole-member omission produced the correct ordinary `Array` and
+  `IDBCursor` results but first produced only 411 candidate records (120 diagnostics / 291
+  incompletes) against the unchanged 558-row authority (267 / 291). A later mixed-lifecycle patch
+  regressed the candidate further to 288 (10 / 278); neither result is a new baseline. The exact
+  diff also exposed missing product evidence: extraction discarded the `abstract` modifier on
+  constructor type recipes, so the candidate could not authenticate the `ClassDecoratorContext`
+  default incomplete. WU4 therefore separates publication lowering from a test-only scratch
+  `ForceAllRecordAudit`, retains the constructor modifier in the immutable product, and keeps the
+  existing 558-row ADR-0018 authority unchanged. Audit recovery is permitted only inside the
+  branded scratch model and cannot affect publication, probes, scheduling, or caches.
