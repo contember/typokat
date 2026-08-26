@@ -468,6 +468,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `sr_semantic_duplication_project/` | shipped project-mode semantic-duplication gate | dependency-first class publication and heritage poison remain deterministic across module/input order |
 | `b121_symbol_namespace_surface/` | shipped backlog `121` | callable namespace surfaces lower the ordinary `symbol` keyword used by `Reflect.ownKeys` through the canonical well-known identity |
 | `sr_project_local_library_candidate/` | project-local library universe WU0 (disabled) | candidate-only `tsc` truth, global-merge/order/isolation witnesses, and the immutable declaration-product ownership contract; it does not enter the frozen conformance receipt until the new session exists |
+| `sr_recursive_alias_applications/` | project-local library universe WU4 / ADR-0024 (disabled) | productive array, tuple, function, mutual, and generic recursive aliases remain transparent structural applications; direct cycles still report `TK2456` |
 
 A few corpora need **construction** notes so they stay editable (the *why* of their marker choices):
 
