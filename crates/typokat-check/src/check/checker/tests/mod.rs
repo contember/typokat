@@ -16,6 +16,7 @@ mod member_assign;
 mod modifiers;
 mod narrowing;
 mod product_project_structure;
+mod project_local_lowerer;
 mod publication;
 mod statements;
 mod tuple;
