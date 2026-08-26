@@ -39,3 +39,4 @@ a commit message suffices.
 - [`0021`](0021-use-complete-source-compilation-for-standalone-cli-checks.md) — use complete-source compilation for standalone CLI checks — accepted (2026-08-05)
 - [`0022`](0022-use-one-binder-authenticated-declaration-inventory.md) — use one binder-authenticated declaration inventory — accepted (2026-08-20)
 - [`0023`](0023-own-default-library-semantics-per-project.md) — own default-library semantics per project — proposed (2026-08-22)
+- [`0024`](0024-represent-recursive-aliases-as-immutable-applications.md) — represent recursive aliases as immutable applications — accepted (2026-08-26)

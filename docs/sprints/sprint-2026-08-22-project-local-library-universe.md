@@ -261,6 +261,14 @@ These conditions may not be relaxed after candidate results are visible.
   lives in the dedicated checker-owned `project_local/` tree and receives only the immutable
   declaration product, prepared project-local binder/program inputs, and request controls. The
   library provider and complete-source shadow are outside that capability boundary.
+- **Recursive-alias boundary.** Implement
+  [ADR-0024](../decisions/0024-represent-recursive-aliases-as-immutable-applications.md) before
+  publishing any product SCC that contains a recursive alias. Allocate immutable project-local
+  alias templates for the complete alias SCC, lower recursive references as lazy immutable
+  instantiations, keep bodies in checker-owned draft/publication state, and unfold one outer layer
+  through the semantic query coordinator. The general source checker and product lowerer consume
+  the same guarded-recursion plan. Mutable Array/Tuple/Function shells, cyclic declared recipes,
+  error-typed recursion, fabricated member surfaces, and Ready opaque aliases are forbidden.
 - **Acceptance / witness.** Demand and source order do not affect normalized results or stable source
   ownership. Product-native group, edge, SCC, demand, terminal, cache, and exact materialized-owner
   traces match their independent product/binder projection. A passive scope outside the returned
@@ -317,6 +325,12 @@ These conditions may not be relaxed after candidate results are visible.
   call, while the same scopes observe direct legacy calls. The source/capability boundary is the
   authority; it does not rely on a dynamic provider guard. The shadow route is deleted with the old
   lifecycle in WU7.
+  Legal array, tuple, function, object, mutual, union-wrapped, and generic recursive aliases retain
+  structural semantics in both source and product routes. Direct alias cycles remain typed
+  Unavailable. Regular recursion terminates through the existing relation cycle stack without
+  durable assumption-dependent writes; non-regular recursion reaches an explicit query budget.
+  `IDBValidKey` publishes the real `IDBCursor` members and matches the complete-source user ledger.
+  Cold/warm and forward/reverse relation order must not change the verdict.
 - **Touch points.** Checker type-group/class/value publication, query coordination, library semantic
   lowering, bridges/global object, event ownership, evaluator/relation/flow caches, and focused
   specs.
@@ -440,6 +454,9 @@ These conditions may not be relaxed after candidate results are visible.
   comparable lifecycles.
 - **Performance failures optimize the target model.** They do not authorize frozen semantics,
   sparse replay, or an unfair comparator.
+- **Recursive aliases are immutable lazy applications.** Alias declaration identity is
+  project-local, bodies publish outside the store behind an SCC terminal, and queries unfold one
+  outer layer. → [ADR-0024](../decisions/0024-represent-recursive-aliases-as-immutable-applications.md)
 
 ## Sequencing
 
@@ -575,3 +592,8 @@ numbers are invalid without `--no-smt`.
   emits zero rows, so WU4 lowering must wait for its spec-first implementation. Name-length span
   inference, later binder-topology re-resolution, and candidate or legacy oracle copying remain
   forbidden.
+- **2026-08-26 — recursive-alias design boundary.** Sound member-failure handling exposed the real
+  packaged `IDBValidKey` array recursion behind `IDBCursor`. Whole-SCC unavailability violates the
+  frozen observable contract, while mutable constructor shells violate stable `TypeId` meaning.
+  The approved design uses immutable alias templates, lazy applications, checker-owned atomic body
+  publication, and one-layer query projection. → [ADR-0024](../decisions/0024-represent-recursive-aliases-as-immutable-applications.md)
