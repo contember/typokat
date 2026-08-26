@@ -329,7 +329,19 @@ These conditions may not be relaxed after candidate results are visible.
   structural semantics in both source and product routes. Direct alias cycles remain typed
   Unavailable. Regular recursion terminates through the existing relation cycle stack without
   durable assumption-dependent writes; non-regular recursion reaches an explicit query budget.
-  `IDBValidKey` publishes the real `IDBCursor` members and matches the complete-source user ledger.
+  A documented unsupported signature member does not make an interface or object-signature group
+  Unavailable when the complete-source route soundly omits that same member. This exception does not
+  apply to class publication: class declaration SCCs retain their complete-surface atomicity
+  invariant. A retained member is supported only when its complete signature and every referenced
+  dependency lower without recovery. Otherwise the lowerer omits that member and stages the exact
+  complete-source incomplete record, including surface, source path, span, and content. It never
+  publishes a partial signature or substitutes a recovery `any`, `error`, `unknown`, or `never`.
+  All retained members and all incomplete records finalize before the declaration SCC becomes
+  atomically Ready. Type predicates remain backlog `50`, optional methods remain backlog `49`, and
+  polymorphic `this` type annotations remain backlog `75`; WU4 implements none of them. This omission
+  creates no owner, dependency, SCC-member, or demand edge, and request `ProductGroup` roots remain
+  observationally inert. `IDBCursor` publishes its real supported `key` and `continue` members while
+  preserving the recursive `IDBValidKey` semantics and the complete-source user ledger.
   Cold/warm and forward/reverse relation order must not change the verdict.
 - **Touch points.** Checker type-group/class/value publication, query coordination, library semantic
   lowering, bridges/global object, event ownership, evaluator/relation/flow caches, and focused
@@ -597,3 +609,10 @@ numbers are invalid without `--no-smt`.
   frozen observable contract, while mutable constructor shells violate stable `TypeId` meaning.
   The approved design uses immutable alias templates, lazy applications, checker-owned atomic body
   publication, and one-layer query projection. → [ADR-0024](../decisions/0024-represent-recursive-aliases-as-immutable-applications.md)
+- **2026-08-26 — WU4 deferred-member boundary.** Atomic lowering exposed documented deferred
+  interface members transitively reachable from `Array` and `IDBCursor`: type predicates (backlog
+  `50`), optional methods (`49`), and polymorphic `this` annotations (`75`). WU4 does not implement
+  those forms. It may omit one only when the complete-source route omits the same full member with
+  the exact staged incomplete record; every retained interface signature and dependency must lower
+  without recovery before atomic Ready. Class surfaces remain all-or-unavailable, omission creates
+  no scheduling edge, and `IDBCursor.key` / `continue` retain recursive `IDBValidKey` semantics.
