@@ -40,4 +40,5 @@ a commit message suffices.
 - [`0022`](0022-use-one-binder-authenticated-declaration-inventory.md) — use one binder-authenticated declaration inventory — accepted (2026-08-20)
 - [`0023`](0023-own-default-library-semantics-per-project.md) — own default-library semantics per project — proposed (2026-08-22)
 - [`0024`](0024-represent-recursive-aliases-as-immutable-applications.md) — represent recursive aliases as immutable applications — accepted (2026-08-26)
-- [`0025`](0025-rebaseline-library-records-after-immutable-aliases.md) — rebaseline the named library-record census after immutable recursive aliases — accepted (2026-08-27)
+- [`0025`](0025-rebaseline-library-records-after-immutable-aliases.md) — rebaseline the named library-record census after immutable recursive aliases — superseded by 0026 (2026-08-27)
+- [`0026`](0026-retain-library-outcomes-after-alias-evaluation.md) — retain named library outcomes after complete recursive-alias evaluation — accepted (2026-08-27)

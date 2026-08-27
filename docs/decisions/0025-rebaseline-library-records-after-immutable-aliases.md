@@ -1,7 +1,7 @@
 ---
 id: 0025
 title: Rebaseline library records after immutable recursive aliases
-status: accepted
+status: superseded by 0026
 date: 2026-08-27
 ---
 

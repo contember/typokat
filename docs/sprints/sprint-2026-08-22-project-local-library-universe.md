@@ -365,12 +365,12 @@ These conditions may not be relaxed after candidate results are visible.
   expands the product contract. File/name/offset special cases, static record tables,
   digest-dispatched behavior, fixture replay, and imports or calls into the provider,
   `library_compiler`, replay layers, their ledger types, or the legacy complete-source route are
-  forbidden by the capability audit. Exact acceptance uses ADR-0025's 410-row normalized
-  complete-source/ADR-0018 multiset (119 diagnostics and 291 incompletes), including path, owner,
-  span, code or surface id, and content. The transient 411-row result containing an `Awaited`
-  `TK2456` is forbidden. Separate controls prove that publication omission cannot
-  change the audit ledger, audit recovery cannot change published terminals or semantic probes, and
-  an ordinary-path fault cannot reach even audit construction.
+  forbidden by the capability audit. Exact acceptance uses ADR-0026's 558-row normalized
+  complete-source/ADR-0018 multiset (267 diagnostics and 291 incompletes), including path, owner,
+  span, code or surface id, and content. The under-evaluated 410/411-row results and every
+  alias-budget `TK2589` addition are forbidden. Separate controls prove that publication omission
+  cannot change the audit ledger, audit recovery cannot change published terminals or semantic
+  probes, and an ordinary-path fault cannot reach even audit construction.
 - **Touch points.** Checker type-group/class/value publication, query coordination, library semantic
   lowering, bridges/global object, event ownership, evaluator/relation/flow caches, and focused
   specs.
@@ -664,3 +664,10 @@ numbers are invalid without `--no-smt`.
   authority is therefore 410 rows (119 diagnostics / 291 incompletes), with no incomplete change.
   WU4 does not emulate resolved model-gap debt. →
   [ADR-0025](../decisions/0025-rebaseline-library-records-after-immutable-aliases.md)
+- **2026-08-27 — complete alias-evaluation correction.** M25 distribution, legal conditional
+  recursion, root-lazy controls, and a second named census disproved the 410-row interpretation.
+  No old diagnostic outcome disappeared: 19 `TK2344` rows changed only rendered detail, five
+  `TK2430` rows were temporarily replaced by budget `TK2589`, and one ordinary union alias added a
+  sixth budget row. The bounded planner fixes restore 558 outcomes with only the 19 same-code/site
+  rendering pairs. →
+  [ADR-0026](../decisions/0026-retain-library-outcomes-after-alias-evaluation.md)
