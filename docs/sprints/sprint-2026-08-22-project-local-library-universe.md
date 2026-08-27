@@ -671,3 +671,8 @@ numbers are invalid without `--no-smt`.
   sixth budget row. The bounded planner fixes restore 558 outcomes with only the 19 same-code/site
   rendering pairs. →
   [ADR-0026](../decisions/0026-retain-library-outcomes-after-alias-evaluation.md)
+- **2026-08-27 — alias-correct oracle rebaseline.** The 558-row library record authority retains
+  every code and site; 19 `TK2344` details changed in named remove/add pairs. Complete-source
+  semantic probe counts remain 2,982 per case, while their digests move because recursive aliases
+  now retain and evaluate immutable applications instead of recovery types. No user result, event,
+  source visit, contributor, product, or incomplete count changed.

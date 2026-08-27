@@ -39,7 +39,7 @@ use typokat_library_product::{
 const ORACLE_BYTES: &[u8] = include_bytes!(
     "../../../tests/cases/sr_project_local_library_candidate/semantic-demand-oracle.json"
 );
-const ORACLE_SHA256: &str = "4fea94b092cfdbeba4e6ab0c2e25a5fd55f704e067e1f8153e50e09d41593d7e";
+const ORACLE_SHA256: &str = "7c9cb807e2ade41b5eb550383ac805bf81bdd4352d9b6f9031bdd0c973c8da30";
 const PROFILE_IDENTITY: &str = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
 const TYPESCRIPT_REVISION: &str = "050880ce59e30b356b686bd3144efe24f875ebc8";
 const OFFICIAL_FRAME_PATH: &str = "conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatBetweenTupleAndArray.ts";
