@@ -343,34 +343,27 @@ These conditions may not be relaxed after candidate results are visible.
   observationally inert. `IDBCursor` publishes its real supported `key` and `continue` members while
   preserving the recursive `IDBValidKey` semantics and the complete-source user ledger.
   Cold/warm and forward/reverse relation order must not change the verdict.
-  `force_all` record parity uses a separate, branded, test-only `ForceAllRecordAudit`; it does not
-  reuse publication lowering with a mode flag. The audit receives only the immutable declaration
-  product and a narrow final project-local binder projection. It owns a new scratch `Store`,
-  interner, alias registry, query state, and relation/query caches and returns only normalized
-  library records, record provenance, a complete visit receipt, and audit counts. It cannot receive
-  any mutable publication reference or receive or return a publication terminal, durable cache,
-  publisher callback, `TypeId`, object surface, alias registry, semantic probe, or
-  complete-source/provider handle. Every audit record first carries an internally validated product
-  owner/key, recipe/member/signature key, and audit rule; normalization alone removes that
-  provenance. Audit-only `error` or `never` recovery may reproduce the complete-source record model
-  inside the scratch universe, but no audit identity or surface may enter a publication draft,
-  staged object, group or alias body, overlay, terminal, probe, relation cache, or demand/SCC event.
-  Pre/post controls prove unchanged publication store length and identities, alias registry, and
-  caches. Ordinary requests cannot construct the audit and perform zero audit work. The immutable
-  product must retain every syntax fact the audit needs; in particular, constructor type recipes
-  carry an explicit `abstract` bit through extraction, canonical encoding, digesting, and round-trip
-  validation. Positive `abstract new` and negative `new` recipes are unequal and encode
-  differently; a one-bit metamorphic change changes exactly the corresponding
-  `ClassDecoratorContext` default-incomplete record. Missing product evidence stops the audit and
-  expands the product contract. File/name/offset special cases, static record tables,
-  digest-dispatched behavior, fixture replay, and imports or calls into the provider,
-  `library_compiler`, replay layers, their ledger types, or the legacy complete-source route are
-  forbidden by the capability audit. Exact acceptance uses ADR-0026's 558-row normalized
-  complete-source/ADR-0018 multiset (267 diagnostics and 291 incompletes), including path, owner,
-  span, code or surface id, and content. The under-evaluated 410/411-row results and every
-  alias-budget `TK2589` addition are forbidden. Separate controls prove that publication omission
-  cannot change the audit ledger, audit recovery cannot change published terminals or semantic
-  probes, and an ordinary-path fault cannot reach even audit construction.
+  `force_all` record parity has one producer: the production publisher. Under test-only
+  `force_all`, the ordinary session demands every admitted product group through its existing
+  lowerer, SCC coordinator, interner, store, aliases, terminals, and durable cache. It schedules the
+  ordinary declaration validations for every Ready library group through the same `Pass`
+  obligation path used for augmentation-affected library roots. Semantic probes are projected from
+  those published terminals; no fresh semantic universe or second lowering run exists.
+  The lowerer stages one typed incomplete record at every unsupported site it visits, including
+  every site inside a member it then omits. Omission never truncates the record-producing member
+  walk, publishes a partial signature, or substitutes a recovery `any`, `error`, `unknown`, or
+  `never`. `force_all` returns the production-staged incompletes, production validation diagnostics,
+  and one terminal row per product group: Ready with its observable surface census, or Unavailable
+  with its typed reason. Exact sites remain grounded in the immutable product; constructor recipes
+  retain their authenticated `abstract` bit and targeted metamorphic witness.
+  No second evaluator, scratch `Store`, scratch interner, audit rule table, fixture replay, provider
+  call, or recovery type exists in `project_local/`. The boundary proves one semantic construction
+  owner and one recipe-lowering module, while behavior proves that ordinary and `force_all` requests
+  use the same publisher. Acceptance is ADR-0027's named, attributed comparison against ADR-0026's
+  558-row starting authority: retained rows are exact; every removal carries production evidence
+  from an omitted member, typed Unavailable terminal, or documented single-report collapse; every
+  added diagnostic has a named cause and divergence entry; any unattributed removal fails. The
+  reviewed result becomes ADR-0018's census before WU7 deletes the legacy producer.
 - **Touch points.** Checker type-group/class/value publication, query coordination, library semantic
   lowering, bridges/global object, event ownership, evaluator/relation/flow caches, and focused
   specs.
@@ -676,3 +669,10 @@ numbers are invalid without `--no-smt`.
   semantic probe counts remain 2,982 per case, while their digests move because recursive aliases
   now retain and evaluate immutable applications instead of recovery types. No user result, event,
   source visit, contributor, product, or incomplete count changed.
+- **2026-08-27 — production-owned census correction.** Read-only review proved that the scratch
+  force-all audit had become a second 3,476-line semantic evaluator and could stay green while the
+  production publisher emitted no records or published incorrect terminals. The 267 diagnostics
+  are principally relation-model outcomes over supported declarations, not a reason for recovery
+  semantics. WU4 deletes the audit, makes test-only `force_all` exercise the ordinary session and
+  validation path, and reviews an attributed named diff from the 558-row starting census. →
+  [ADR-0027](../decisions/0027-produce-library-census-from-the-project-publisher.md)
