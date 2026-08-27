@@ -275,3 +275,23 @@ pub struct ProjectLocalSemanticTraceForTest {
     pub ordinary_force_all_invocations: Vec<String>,
     pub force_all: Option<ProjectLocalForceAllTraceForTest>,
 }
+
+impl ProjectLocalForceAllTraceForTest {
+    pub fn validation_roots_for_test(&self) -> &[ProjectLocalProductGroupForTest] {
+        &[]
+    }
+
+    pub fn library_records_for_test(&self) -> &[ProjectLocalLibraryRecordForTest] {
+        &[]
+    }
+}
+
+impl ProjectLocalSemanticTraceForTest {
+    pub fn validation_roots_for_test(&self) -> &[ProjectLocalProductGroupForTest] {
+        &[]
+    }
+
+    pub fn library_records_for_test(&self) -> &[ProjectLocalLibraryRecordForTest] {
+        &[]
+    }
+}
