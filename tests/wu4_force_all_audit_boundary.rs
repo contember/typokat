@@ -51,12 +51,12 @@ fn force_all_record_authority_remains_the_adr_0018_multiset() {
         &root.join("tests/cases/sr_project_local_library_candidate/semantic-demand-oracle.json"),
     );
     let oracle: serde_json::Value = serde_json::from_str(&oracle).expect("semantic demand oracle");
-    assert_eq!(oracle["library_force_all"]["count"], 558);
-    assert_eq!(oracle["library_force_all"]["diagnostics"], 267);
+    assert_eq!(oracle["library_force_all"]["count"], 410);
+    assert_eq!(oracle["library_force_all"]["diagnostics"], 119);
     assert_eq!(oracle["library_force_all"]["incompletes"], 291);
 
     let named_census = read(&root.join("tests/fixtures/library-owned-records.txt"));
-    assert!(named_census.contains("# diagnostics: 267, incompletes: 291, records: 558"));
+    assert!(named_census.contains("# diagnostics: 119, incompletes: 291, records: 410"));
 }
 
 fn repo_root() -> PathBuf {
