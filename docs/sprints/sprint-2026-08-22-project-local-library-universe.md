@@ -365,9 +365,10 @@ These conditions may not be relaxed after candidate results are visible.
   expands the product contract. File/name/offset special cases, static record tables,
   digest-dispatched behavior, fixture replay, and imports or calls into the provider,
   `library_compiler`, replay layers, their ledger types, or the legacy complete-source route are
-  forbidden by the capability audit. Exact acceptance remains the unchanged 558-row normalized
-  complete-source/ADR-0018 multiset (267 diagnostics and 291 incompletes), including path, owner,
-  span, code or surface id, and content. Separate controls prove that publication omission cannot
+  forbidden by the capability audit. Exact acceptance uses ADR-0025's 410-row normalized
+  complete-source/ADR-0018 multiset (119 diagnostics and 291 incompletes), including path, owner,
+  span, code or surface id, and content. The transient 411-row result containing an `Awaited`
+  `TK2456` is forbidden. Separate controls prove that publication omission cannot
   change the audit ledger, audit recovery cannot change published terminals or semantic probes, and
   an ordinary-path fault cannot reach even audit construction.
 - **Touch points.** Checker type-group/class/value publication, query coordination, library semantic
@@ -655,3 +656,11 @@ numbers are invalid without `--no-smt`.
   `ForceAllRecordAudit`, retains the constructor modifier in the immutable product, and keeps the
   existing 558-row ADR-0018 authority unchanged. Audit recovery is permitted only inside the
   branded scratch model and cannot affect publication, probes, scheduling, or caches.
+- **2026-08-27 — immutable-alias census correction.** Named analysis proved that the 558-to-411
+  live complete-source change was not dropped audit work: immutable guarded alias applications
+  removed 97 `TK2430` and 51 `TK2344` false positives produced by the old recovery `error` frontier.
+  TypeScript 6.0.3 checks the pinned profile clean. The remaining added `Awaited` `TK2456` is a
+  conditional-recursion regression and must be fixed rather than pinned. The post-fix named
+  authority is therefore 410 rows (119 diagnostics / 291 incompletes), with no incomplete change.
+  WU4 does not emulate resolved model-gap debt. →
+  [ADR-0025](../decisions/0025-rebaseline-library-records-after-immutable-aliases.md)
