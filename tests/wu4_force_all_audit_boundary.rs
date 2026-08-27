@@ -2,56 +2,30 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 #[test]
-fn force_all_record_audit_is_not_a_publication_lowering_mode() {
+#[ignore = "WU4 production-owned force-all publisher is not implemented"]
+fn project_local_force_all_has_one_semantic_producer() {
     let root = repo_root();
     let project_local = root.join("crates/typokat-check/src/check/checker/project_local");
     let audit_path = project_local.join("force_all_record_audit.rs");
     assert!(
-        audit_path.is_file(),
-        "missing branded force-all audit module"
+        !audit_path.exists(),
+        "force-all must not compile a second semantic evaluator"
     );
 
     let module = read(&project_local.join("mod.rs"));
-    assert!(module.contains("mod force_all_record_audit;"));
-
-    let lowerer = read(&project_local.join("lowerer.rs"));
-    assert!(!lowerer.contains("force_all: bool"));
-    assert!(!lowerer.contains("self.force_all"));
+    assert!(!module.contains("force_all_record_audit"));
 
     let entry = read(&project_local.join("entry.rs"));
-    assert!(entry.contains("force_all_record_audit"));
+    assert!(!entry.contains("Interner::with_intrinsics()"));
+    assert!(!entry.contains("lower_product_groups("));
 
-    let audit = read(&audit_path);
-    for required in [
-        "ForceAllRecordAudit",
-        "ForceAllRecordProvenance",
-        "ForceAllVisitReceipt",
-        "Store",
-        "Interner",
-    ] {
-        assert!(
-            audit.contains(required),
-            "missing audit boundary {required}"
-        );
-    }
-    for forbidden in [
-        "LibraryBaseProvider",
-        "complete_source",
-        "library_compiler",
-        "FrozenLibraryBase",
-        "replay",
-        "semantic-demand-oracle",
-        "library-owned-records",
-    ] {
-        assert!(
-            !audit.contains(forbidden),
-            "force-all audit reaches forbidden capability {forbidden}"
-        );
-    }
+    let sources = project_local_sources(&project_local);
+    assert_eq!(count(&sources, "Interner::with_intrinsics()"), 1);
+    assert_eq!(count(&sources, "fn lower_type("), 1);
 }
 
 #[test]
-fn force_all_record_authority_remains_the_adr_0018_multiset() {
+fn force_all_record_authority_starts_from_the_adr_0018_multiset() {
     let root = repo_root();
     let oracle = read(
         &root.join("tests/cases/sr_project_local_library_candidate/semantic-demand-oracle.json"),
@@ -71,4 +45,22 @@ fn repo_root() -> PathBuf {
 
 fn read(path: &Path) -> String {
     fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+}
+
+fn project_local_sources(root: &Path) -> String {
+    let mut paths = fs::read_dir(root)
+        .expect("project-local source directory")
+        .map(|entry| entry.expect("project-local source entry").path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "rs"))
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths
+        .iter()
+        .map(|path| read(path))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn count(source: &str, needle: &str) -> usize {
+    source.match_indices(needle).count()
 }

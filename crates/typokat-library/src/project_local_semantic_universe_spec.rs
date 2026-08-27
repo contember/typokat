@@ -1770,6 +1770,44 @@ fn recursive_product_aliases_preserve_structural_semantics() {
 }
 
 #[test]
+#[ignore = "WU4 declared-member alias indirection is not implemented"]
+fn declared_member_signature_keeps_the_packaged_aria_mixin_surface() {
+    let provider = LibraryBaseProvider::new();
+    let product = provider.declaration_product().expect("declaration product");
+    let product_native = native_product_evidence(&product);
+    let inputs = case_inputs("array");
+    let native = mapped_native_evidence(&provider, &product, &inputs, &product_native);
+    let roots = case_demand_roots("array", &native);
+    let oracle = provider
+        .complete_source_black_box_oracle_for_test(&inputs)
+        .expect("complete-source ARIAMixin authority");
+    let expected = oracle
+        .force_all_semantic_probes
+        .global_types
+        .iter()
+        .find(|probe| probe.name == "ARIAMixin")
+        .expect("oracle ARIAMixin probe");
+    assert_eq!(expected.member_names.len(), 52);
+
+    let trace = candidate_trace(
+        &provider,
+        candidate_request("array", inputs, roots, true, None),
+    );
+    let actual = trace
+        .trace
+        .force_all
+        .as_ref()
+        .expect("force-all receipt")
+        .semantic_probes
+        .global_types
+        .iter()
+        .find(|probe| probe.name == "ARIAMixin")
+        .expect("candidate ARIAMixin probe");
+
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn real_idb_cursor_consumption_has_no_partial_ready_or_panic() {
     let provider = LibraryBaseProvider::new();
     let inputs = vec![input(
