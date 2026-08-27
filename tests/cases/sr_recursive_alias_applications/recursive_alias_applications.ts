@@ -39,6 +39,18 @@ const badStringTree: GenericRecursive<string> = [1]; // error[TK2322]: not assig
 const wrongNumberTree: GenericRecursive<number> = stringTree; // error[TK2322]: not assignable
 const wrongStringTree: GenericRecursive<string> = numberTree; // error[TK2322]: not assignable
 
+// Recursion in a conditional branch is productive. The check surface remains
+// the direct-cycle boundary; descending through the true branch must not report
+// TK2456 (the same guarded shape used by the default library's Awaited alias).
+type ConditionalRecursive<T> = T extends { value: infer U }
+	? ConditionalRecursive<U>
+	: T;
+declare const conditionalRecursive: ConditionalRecursive<{
+	value: { value: string };
+}>;
+const conditionalRecursiveView: string = conditionalRecursive;
+const conditionalRecursiveWrong: number = conditionalRecursive; // error[TK2322]: not assignable
+
 type NonRegular<T> = [T, NonRegular<T[]>];
 declare const nonRegular: NonRegular<string>;
 const nonRegularView: [string, NonRegular<string[]>] = nonRegular;
