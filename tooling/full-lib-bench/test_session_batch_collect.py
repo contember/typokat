@@ -118,31 +118,15 @@ class FakeLiveHost:
             raise AssertionError("collector changed fault runner identity")
         return record
 
-    def runner_linkage(
+    def final_attestation(
         self,
         candidate: dict[str, object],
         runners: dict[str, dict[str, object]],
     ) -> dict[str, object]:
-        self.calls.append(("runner_linkage", candidate["commit"]))
+        self.calls.append(("final_attestation", candidate["commit"]))
         return {
-            "candidate_commit": candidate["commit"],
-            "cold_candidate_commit": candidate["commit"],
-            "typokat": {
-                "single_binary_sha256": runners["typokat"]["binary_sha256"],
-                "batch_binary_sha256": runners["typokat"]["binary_sha256"],
-                "single_oracle_sha256": "3" * 64,
-                "cold_oracle_sha256": "3" * 64,
-            },
-            "tsgo": {
-                "single_binary_sha256": runners["tsgo"]["binary_sha256"],
-                "batch_binary_sha256": runners["tsgo"]["binary_sha256"],
-                "single_oracle_sha256": "4" * 64,
-                "cold_oracle_sha256": "4" * 64,
-                "upstream_revision": self.contract["tsgo"]["upstream_revision"],
-                "authenticated_cold_binary_sha256": self.contract["tsgo"][
-                    "cold_binary_sha256"
-                ],
-            },
+            "candidate": copy.deepcopy(candidate),
+            "runners": copy.deepcopy(runners),
         }
 
 
@@ -208,7 +192,7 @@ class SessionBatchLiveCollectorTests(unittest.TestCase):
                 ("run_fault", "typokat", "retain-cache", 10, 1 << 30),
                 ("run_fault", "tsgo", "reuse-checker", 10, 1 << 30),
                 ("run_fault", "tsgo", "retain-frame", 10, 1 << 30),
-                ("runner_linkage", "a" * 40),
+                ("final_attestation", "a" * 40),
             ],
         )
         evidence = result["evidence"]
@@ -219,7 +203,7 @@ class SessionBatchLiveCollectorTests(unittest.TestCase):
                 "negative_controls",
                 "projects",
                 "protocols",
-                "runner_linkage",
+                "final_attestation",
                 "runners",
                 "samples",
                 "schema",
@@ -233,7 +217,7 @@ class SessionBatchLiveCollectorTests(unittest.TestCase):
         self.assertEqual(set(evidence["runners"]), {"typokat", "tsgo"})
         self.assertEqual(set(evidence["protocols"]), {"typokat", "tsgo"})
         self.assertEqual(
-            evidence["runner_linkage"]["candidate_commit"], host.candidate["commit"]
+            evidence["final_attestation"]["candidate"], host.candidate
         )
         self.assertEqual(
             result["evidence_sha256"],
@@ -320,28 +304,47 @@ class SessionBatchLiveCollectorTests(unittest.TestCase):
             with self.assertRaisesRegex(batch.BatchContractError, message):
                 collect._collect_live_preflight(lifecycle, self.contract)
 
-    def test_preflight_validates_runner_linkage_instead_of_only_collecting_it(self) -> None:
+    def test_preflight_rechecks_candidate_and_runners_before_publish(self) -> None:
         for mutation, message in (
             (
-                lambda linkage: linkage["typokat"].update(
-                    single_binary_sha256="0" * 64
-                ),
-                "runner binary linkage",
+                lambda attestation: attestation["candidate"].update(commit="c" * 40),
+                "final candidate identity",
             ),
             (
-                lambda linkage: linkage.update(cold_candidate_commit="c" * 40),
-                "candidate commit",
+                lambda attestation: attestation["candidate"].update(tree="c" * 40),
+                "final candidate identity",
             ),
             (
-                lambda linkage: linkage["typokat"].update(
-                    single_binary_sha256="9" * 64,
-                    batch_binary_sha256="9" * 64,
+                lambda attestation: attestation["candidate"].update(dirty=True),
+                "final candidate identity",
+            ),
+            (
+                lambda attestation: attestation["runners"]["typokat"].update(
+                    source_sha256="9" * 64
                 ),
-                "built runner identity",
+                "final runner identity",
+            ),
+            (
+                lambda attestation: attestation["runners"]["typokat"].update(
+                    binary_sha256="9" * 64
+                ),
+                "final runner identity",
+            ),
+            (
+                lambda attestation: attestation["runners"]["tsgo"].update(
+                    source_sha256="9" * 64
+                ),
+                "final runner identity",
+            ),
+            (
+                lambda attestation: attestation["runners"]["tsgo"].update(
+                    binary_sha256="9" * 64
+                ),
+                "final runner identity",
             ),
         ):
             host = FakeLiveHost(self.contract)
-            original = host.runner_linkage
+            original = host.final_attestation
 
             def mismatched(
                 candidate: dict[str, object],
@@ -349,11 +352,11 @@ class SessionBatchLiveCollectorTests(unittest.TestCase):
                 *,
                 mutation=mutation,
             ) -> dict[str, object]:
-                linkage = original(candidate, runners)
-                mutation(linkage)
-                return linkage
+                attestation = original(candidate, runners)
+                mutation(attestation)
+                return attestation
 
-            host.runner_linkage = mismatched
+            host.final_attestation = mismatched
             with self.assertRaisesRegex(batch.BatchContractError, message):
                 collect._collect_live_preflight(host, self.contract)
 

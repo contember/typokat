@@ -749,6 +749,13 @@ numbers are invalid without `--no-smt`.
   itself under the recorded CPU lease and links every warmup, sample, control, concurrency, and
   allocation receipt to those identities. Each JSONL request carries the exact authenticated
   official-suite source bytes; a case id and fabricated semantic response cannot satisfy parity.
+- **2026-08-28 — WU6 preflight evidence correction.** The bounded one-frame live preflight does not
+  claim cold/batch linkage. The authenticated cold oracle contains no candidate commit or live
+  runner identity, so copying the current commit and oracle hash into a linkage receipt would be
+  fabricated evidence. The preflight instead re-authenticates the clean candidate, both runner
+  sources, and both runner binaries after all semantic and fault-control processes. The full live
+  orchestrator remains responsible for collecting current-candidate cold evidence and proving the
+  contract's cold/single/batch linkage before it can report `GO`.
 - **2026-08-28 — WU6 class-only oracle normalization.** Every frame result has explicit
   `parse_errors`, `diagnostics`, and `incompletes` lists. The committed scoreboard contains only a
   class/status witness for 42 parse-error and four unresolved eligible frames, so those normalize
