@@ -105,7 +105,8 @@ func TestDecodeSingleProjectRequestRejectsMalformedFiles(t *testing.T) {
 func TestSingleProjectModeRequiresExactlyOneRequestAndResponse(t *testing.T) {
 	t.Parallel()
 
-	raw := `{"case_id":"one","files":[{"path":"one.ts","source":"const marker = \"<&ž\";"}],"schema":1}`
+	raw := `{"case_id":"one","files":[{"path":"one.ts","source":"const marker = \"<&žLINE-SEPARATOR\";"}],"schema":1}`
+	raw = strings.ReplaceAll(raw, "LINE-SEPARATOR", "\u2028")
 	for name, input := range map[string]string{
 		"empty":        "",
 		"multiple":     raw + "\n" + raw + "\n",
