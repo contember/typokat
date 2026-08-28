@@ -303,7 +303,7 @@ class SessionBatchContractTests(unittest.TestCase):
 
         result = batch.collect_progressive_panels(red_runner, self.contract)
         self.assertEqual(launched, [1])
-        self.assertEqual(result["verdict"], "NO-GO")
+        self.assertEqual(result["verdict"], "PANEL-FAIL")
 
         launched.clear()
 
@@ -321,7 +321,26 @@ class SessionBatchContractTests(unittest.TestCase):
 
         result = batch.collect_progressive_panels(green_runner, self.contract)
         self.assertEqual(launched, [1, 32, 687])
-        self.assertEqual(result["verdict"], "GO")
+        self.assertEqual(result["verdict"], "PANEL-PASS")
+        self.assertNotEqual(result["verdict"], "GO")
+
+    def test_authoritative_oracle_authenticates_each_request_source(self) -> None:
+        authority = batch.load_authenticated_batch_oracles(self.contract)
+        evidence = raw_panel_evidence(1, 1.0, 100_000, 110_000)
+        apply_real_oracle(evidence, authority)
+        expected = batch.oracle_panel(authority, 1)
+        batch.recompute_panel(evidence, expected, self.contract)
+
+        forged = copy.deepcopy(evidence)
+        for sample in forged["samples"]:
+            sample["frames"][0]["raw_request"] = json.dumps(
+                {"schema": 1, "case_id": sample["frames"][0]["case_id"], "source": "let x = 1;"},
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            refresh_sample_streams(sample)
+        with self.assertRaisesRegex(batch.BatchContractError, "source"):
+            batch.recompute_panel(forged, expected, self.contract)
 
     def test_speed_and_memory_thresholds_are_strict(self) -> None:
         green = verified_panel(32, 1.1, 100_000, 100_000, self.contract)
@@ -490,6 +509,12 @@ class SessionBatchContractTests(unittest.TestCase):
         missing_init["frames"][0]["product_initializations"] = 0
         with self.assertRaisesRegex(batch.BatchContractError, "initialization"):
             batch.verify_route_intervals(missing_init, 687)
+
+        misplaced_init = copy.deepcopy(sample)
+        misplaced_init["frames"][0]["product_initializations"] = 0
+        misplaced_init["frames"][1]["product_initializations"] = 1
+        with self.assertRaisesRegex(batch.BatchContractError, "first frame"):
+            batch.verify_route_intervals(misplaced_init, 687)
 
         omitted = copy.deepcopy(sample)
         omitted["frames"].pop()

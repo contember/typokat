@@ -273,6 +273,13 @@ runner, and the feature-scoped typokat candidate runner implement this contract.
 is eligible before their source, binaries, profile, official-frame inventory, semantic controls,
 CPU lease, no-SMT affinity, environment, and address-space limit have been attested.
 
+The pure progressive-panel helper can report only `PANEL-PASS` or `PANEL-FAIL`. It cannot issue the
+WU6 `GO` verdict because supplied evidence cannot prove that a live measurement happened. Only the
+future live `run` orchestrator may issue `GO`, after it starts both authenticated binaries itself,
+captures execution conditions, and links runner, warmup, sample, control, concurrency, and
+allocation-probe identities. Every batch request must carry the exact authenticated official-suite
+source bytes; a case id plus precomputed semantic output is insufficient.
+
 ## Self-tests
 
 ```sh

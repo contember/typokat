@@ -743,3 +743,9 @@ numbers are invalid without `--no-smt`.
   frame handles and may not force GC or finalizers. TypeScript-Go is single-threaded, and its
   semantic oracle is read from Git blobs at the pinned TypeScript revision rather than trusted from
   the staged corpus copy. No candidate timing has run.
+- **2026-08-28 — WU6 live-authority boundary.** The pure panel verifier cannot report `GO` from a
+  caller-supplied evidence callback. It reports only `PANEL-PASS` / `PANEL-FAIL`. WU6 `GO` is
+  reserved for the live orchestrator that starts both source- and binary-authenticated runners
+  itself under the recorded CPU lease and links every warmup, sample, control, concurrency, and
+  allocation receipt to those identities. Each JSONL request carries the exact authenticated
+  official-suite source bytes; a case id and fabricated semantic response cannot satisfy parity.
