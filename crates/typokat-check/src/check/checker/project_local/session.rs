@@ -67,14 +67,16 @@ impl CheckerSession {
         programs: &[ProjectProgram<'ast>],
         clock: &SessionBenchClock,
     ) -> Result<SessionBenchCheckReceipt, CheckerSessionError> {
+        let mut lifecycle = OrdinarySessionBenchLifecycle;
+        let product = consume_session_bench_checker(self, &mut lifecycle);
         let binding_start_ns = clock.elapsed_ns();
         let (library_units, bound) =
-            bind_library_product_project_programs_unadmitted(&self.product, programs)
+            bind_library_product_project_programs_unadmitted(&product, programs)
                 .map_err(CheckerSessionError::Binding)?;
         let binding_end_ns = clock.elapsed_ns();
         let publication_start_ns = binding_end_ns;
         let semantic = run_ordinary_project_local_semantics_for_session_bench(
-            &self.product,
+            &product,
             library_units,
             bound,
             programs,
@@ -94,6 +96,41 @@ impl CheckerSession {
             session_weak_alive_after: semantic.session_weak_alive_after,
             cache_weak_alive_after: semantic.cache_weak_alive_after,
         })
+    }
+
+    /// Reject a benchmark-only lifecycle fault at the owned session boundary.
+    #[cfg(feature = "session-bench")]
+    #[doc(hidden)]
+    pub fn reject_fault_for_session_bench(
+        self,
+        fault: SessionBenchFault,
+    ) -> SessionBenchFaultReceipt {
+        let mut lifecycle = FaultedSessionBenchLifecycle::new(fault);
+        let product = consume_session_bench_checker(self, &mut lifecycle);
+        let shared_product_identity = product.profile_identity().to_owned();
+        let session = SessionCore::start();
+        let project_identity = session.project_identity();
+        let publisher_identity = session.publisher_identity();
+        let cache_identity = session.cache_identity();
+        let session_weak = Rc::downgrade(&session);
+        let cache_weak = session.cache_weak_with_policy(&mut lifecycle);
+        drop(session);
+        lifecycle.observe_retention(cache_weak.upgrade().is_some());
+        lifecycle.clear_retention();
+        SessionBenchFaultReceipt {
+            fault,
+            seam: lifecycle
+                .activated_seam()
+                .expect("supported session-bench fault reaches its owning lifecycle seam"),
+            fault_hook_activations: lifecycle.activations(),
+            rejected: lifecycle.rejected(),
+            shared_product_identity,
+            project_identity,
+            publisher_identity,
+            cache_identity,
+            session_weak_alive_after: session_weak.upgrade().is_some(),
+            cache_weak_alive_after: cache_weak.upgrade().is_some(),
+        }
     }
 
     /// Check a shadow project without admitting module export products.
@@ -145,6 +182,171 @@ pub struct SessionBenchCheckReceipt {
     pub cache_identity: u64,
     pub session_weak_alive_after: bool,
     pub cache_weak_alive_after: bool,
+}
+
+/// Lifecycle fault requests supported by the isolated-session benchmark.
+#[cfg(feature = "session-bench")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionBenchFault {
+    ReuseSession,
+    RetainCache,
+}
+
+/// The owning lifecycle seam that rejects a benchmark fault.
+#[cfg(feature = "session-bench")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionBenchFaultSeam {
+    SessionConsume,
+    CacheRelease,
+}
+
+#[cfg(feature = "session-bench")]
+trait SessionBenchLifecyclePolicy {
+    fn session_consumed(&mut self) {}
+    fn cache_releasing(&mut self, _cache: &Rc<DurableCache>) {}
+}
+
+#[cfg(feature = "session-bench")]
+struct OrdinarySessionBenchLifecycle;
+
+#[cfg(feature = "session-bench")]
+impl SessionBenchLifecyclePolicy for OrdinarySessionBenchLifecycle {}
+
+#[cfg(feature = "session-bench")]
+fn consume_session_bench_checker<Policy: SessionBenchLifecyclePolicy>(
+    session: CheckerSession,
+    policy: &mut Policy,
+) -> Arc<LibraryDeclarationProduct> {
+    policy.session_consumed();
+    session.product
+}
+
+#[cfg(feature = "session-bench")]
+struct FaultedSessionBenchLifecycle {
+    requested: SessionBenchFault,
+    activations: usize,
+    activated_seam: Option<SessionBenchFaultSeam>,
+    retained_cache: Option<Rc<DurableCache>>,
+    retention_observed: bool,
+}
+
+#[cfg(feature = "session-bench")]
+impl FaultedSessionBenchLifecycle {
+    const fn new(requested: SessionBenchFault) -> Self {
+        Self {
+            requested,
+            activations: 0,
+            activated_seam: None,
+            retained_cache: None,
+            retention_observed: false,
+        }
+    }
+
+    fn activate(&mut self, seam: SessionBenchFaultSeam) {
+        self.activations = self
+            .activations
+            .checked_add(1)
+            .expect("session-bench fault activation overflow");
+        self.activated_seam = Some(seam);
+    }
+
+    const fn activations(&self) -> usize {
+        self.activations
+    }
+
+    const fn activated_seam(&self) -> Option<SessionBenchFaultSeam> {
+        self.activated_seam
+    }
+
+    fn observe_retention(&mut self, retained: bool) {
+        self.retention_observed = retained;
+    }
+
+    fn clear_retention(&mut self) {
+        self.retained_cache = None;
+    }
+
+    const fn rejected(&self) -> bool {
+        match self.requested {
+            SessionBenchFault::ReuseSession => self.activations == 1,
+            SessionBenchFault::RetainCache => self.activations == 1 && self.retention_observed,
+        }
+    }
+}
+
+#[cfg(feature = "session-bench")]
+impl SessionBenchLifecyclePolicy for FaultedSessionBenchLifecycle {
+    fn session_consumed(&mut self) {
+        if self.requested == SessionBenchFault::ReuseSession {
+            self.activate(SessionBenchFaultSeam::SessionConsume);
+        }
+    }
+
+    fn cache_releasing(&mut self, cache: &Rc<DurableCache>) {
+        if self.requested == SessionBenchFault::RetainCache {
+            self.retained_cache = Some(Rc::clone(cache));
+            self.activate(SessionBenchFaultSeam::CacheRelease);
+        }
+    }
+}
+
+/// Authenticated rejection receipt from a real session lifecycle.
+#[cfg(feature = "session-bench")]
+#[doc(hidden)]
+pub struct SessionBenchFaultReceipt {
+    fault: SessionBenchFault,
+    seam: SessionBenchFaultSeam,
+    fault_hook_activations: usize,
+    rejected: bool,
+    shared_product_identity: String,
+    project_identity: u64,
+    publisher_identity: u64,
+    cache_identity: u64,
+    session_weak_alive_after: bool,
+    cache_weak_alive_after: bool,
+}
+
+#[cfg(feature = "session-bench")]
+impl SessionBenchFaultReceipt {
+    pub const fn fault(&self) -> SessionBenchFault {
+        self.fault
+    }
+
+    pub const fn seam(&self) -> SessionBenchFaultSeam {
+        self.seam
+    }
+
+    pub const fn fault_hook_activations(&self) -> usize {
+        self.fault_hook_activations
+    }
+
+    pub const fn rejected(&self) -> bool {
+        self.rejected
+    }
+
+    pub fn shared_product_identity(&self) -> &str {
+        &self.shared_product_identity
+    }
+
+    pub const fn project_identity(&self) -> u64 {
+        self.project_identity
+    }
+
+    pub const fn publisher_identity(&self) -> u64 {
+        self.publisher_identity
+    }
+
+    pub const fn cache_identity(&self) -> u64 {
+        self.cache_identity
+    }
+
+    pub const fn session_weak_alive_after(&self) -> bool {
+        self.session_weak_alive_after
+    }
+
+    pub const fn cache_weak_alive_after(&self) -> bool {
+        self.cache_weak_alive_after
+    }
 }
 
 #[derive(Debug)]
@@ -215,6 +417,15 @@ impl SessionCore {
 
     #[cfg(feature = "session-bench")]
     pub(super) fn cache_weak(&self) -> std::rc::Weak<DurableCache> {
+        self.cache_weak_with_policy(&mut OrdinarySessionBenchLifecycle)
+    }
+
+    #[cfg(feature = "session-bench")]
+    fn cache_weak_with_policy<Policy: SessionBenchLifecyclePolicy>(
+        &self,
+        policy: &mut Policy,
+    ) -> std::rc::Weak<DurableCache> {
+        policy.cache_releasing(&self.cache);
         Rc::downgrade(&self.cache)
     }
 

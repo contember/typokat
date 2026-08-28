@@ -4,7 +4,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::{self, BufRead, Write};
 use std::sync::Arc;
-use typokat_check::check::checker::project_local::{CheckerSession, SessionBenchClock};
+use typokat_check::check::checker::project_local::{
+    CheckerSession, SessionBenchClock, SessionBenchFault, SessionBenchFaultReceipt,
+    SessionBenchFaultSeam,
+};
 use typokat_core::span::LineIndex;
 use typokat_frontend::frontend::{
     run_prepared_project_frontend_with_parse_work, FileInput, PreparedProjectParseWork,
@@ -46,6 +49,28 @@ struct FrameRequest {
     schema: u8,
     case_id: String,
     source: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FaultRequest {
+    schema: u8,
+    fault: String,
+}
+
+#[derive(Serialize)]
+struct RejectedFaultReceipt<'a> {
+    schema: u8,
+    fault: &'static str,
+    fault_seam: &'static str,
+    fault_hook_activations: usize,
+    rejected: bool,
+    shared_product_identity: &'a str,
+    project_identity: String,
+    publisher_identity: String,
+    cache_identity: String,
+    session_weak_alive_after: bool,
+    cache_weak_alive_after: bool,
 }
 
 #[derive(Serialize)]
@@ -96,6 +121,52 @@ struct FrameReceipt {
 enum LifecycleDisposition {
     Semantic,
     ParseRejected,
+}
+
+enum RunDisposition {
+    Complete,
+    FaultRejected,
+}
+
+fn parse_fault(request: FaultRequest) -> Result<SessionBenchFault, String> {
+    if request.schema != 1 {
+        return Err("invalid fault request schema".to_owned());
+    }
+    match request.fault.as_str() {
+        "reuse-session" => Ok(SessionBenchFault::ReuseSession),
+        "retain-cache" => Ok(SessionBenchFault::RetainCache),
+        _ => Err("unsupported lifecycle fault".to_owned()),
+    }
+}
+
+fn fault_name(fault: SessionBenchFault) -> &'static str {
+    match fault {
+        SessionBenchFault::ReuseSession => "reuse-session",
+        SessionBenchFault::RetainCache => "retain-cache",
+    }
+}
+
+fn fault_seam_name(seam: SessionBenchFaultSeam) -> &'static str {
+    match seam {
+        SessionBenchFaultSeam::SessionConsume => "session-consume",
+        SessionBenchFaultSeam::CacheRelease => "cache-release",
+    }
+}
+
+fn rejected_fault_receipt(receipt: &SessionBenchFaultReceipt) -> RejectedFaultReceipt<'_> {
+    RejectedFaultReceipt {
+        schema: 1,
+        fault: fault_name(receipt.fault()),
+        fault_seam: fault_seam_name(receipt.seam()),
+        fault_hook_activations: receipt.fault_hook_activations(),
+        rejected: receipt.rejected(),
+        shared_product_identity: receipt.shared_product_identity(),
+        project_identity: receipt.project_identity().to_string(),
+        publisher_identity: receipt.publisher_identity().to_string(),
+        cache_identity: receipt.cache_identity().to_string(),
+        session_weak_alive_after: receipt.session_weak_alive_after(),
+        cache_weak_alive_after: receipt.cache_weak_alive_after(),
+    }
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -320,7 +391,7 @@ fn run_frame(
     })
 }
 
-fn run() -> Result<(), String> {
+fn run() -> Result<RunDisposition, String> {
     let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
     match arguments.as_slice() {
         [] => {}
@@ -329,7 +400,7 @@ fn run() -> Result<(), String> {
                 "{}",
                 serde_json::to_string(&protocol_info()?).map_err(|error| error.to_string())?
             );
-            return Ok(());
+            return Ok(RunDisposition::Complete);
         }
         _ => return Err("usage: typokat-session-batch [--protocol-info]".to_owned()),
     }
@@ -340,8 +411,26 @@ fn run() -> Result<(), String> {
     let shared_product_identity = product.profile_identity().to_owned();
     let stdin = io::stdin();
     let mut stdout = io::BufWriter::new(io::stdout().lock());
-    for (ordinal, line) in stdin.lock().lines().enumerate() {
+    let mut lines = stdin.lock().lines().enumerate();
+    while let Some((ordinal, line)) = lines.next() {
         let line = line.map_err(|error| error.to_string())?;
+        if let Ok(fault_request) = serde_json::from_str::<FaultRequest>(&line) {
+            if ordinal != 0 {
+                return Err("lifecycle fault must be the sole request".to_owned());
+            }
+            let fault = parse_fault(fault_request)?;
+            if let Some((_, trailing)) = lines.next() {
+                trailing.map_err(|error| error.to_string())?;
+                return Err("lifecycle fault must be the sole request".to_owned());
+            }
+            let receipt =
+                CheckerSession::new(Arc::clone(&product)).reject_fault_for_session_bench(fault);
+            serde_json::to_writer(&mut stdout, &rejected_fault_receipt(&receipt))
+                .map_err(|error| error.to_string())?;
+            stdout.write_all(b"\n").map_err(|error| error.to_string())?;
+            stdout.flush().map_err(|error| error.to_string())?;
+            return Ok(RunDisposition::FaultRejected);
+        }
         let request: FrameRequest =
             serde_json::from_str(&line).map_err(|error| error.to_string())?;
         let route_start = clock.elapsed_ns();
@@ -368,12 +457,16 @@ fn run() -> Result<(), String> {
         stdout.write_all(b"\n").map_err(|error| error.to_string())?;
         stdout.flush().map_err(|error| error.to_string())?;
     }
-    Ok(())
+    Ok(RunDisposition::Complete)
 }
 
 fn main() {
-    if let Err(error) = run() {
-        eprintln!("{error}");
-        std::process::exit(2);
+    match run() {
+        Ok(RunDisposition::Complete) => {}
+        Ok(RunDisposition::FaultRejected) => std::process::exit(2),
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
     }
 }

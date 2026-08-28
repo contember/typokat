@@ -39,4 +39,7 @@ pub use observation::{
 };
 pub use session::{CheckerSession, CheckerSessionError};
 #[cfg(feature = "session-bench")]
-pub use session::{SessionBenchCheckReceipt, SessionBenchClock};
+pub use session::{
+    SessionBenchCheckReceipt, SessionBenchClock, SessionBenchFault, SessionBenchFaultReceipt,
+    SessionBenchFaultSeam,
+};
