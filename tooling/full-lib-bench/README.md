@@ -268,6 +268,11 @@ allocator. They are not a cross-tool metric and cannot affect the timed speed or
 TypeScript outcomes are read from baseline blobs at the pinned TypeScript Git revision. The staged
 corpus copy and manifest alone are not accepted as the semantic authority.
 
+Every normalized semantic row has the same four fields: exit code, parse errors, diagnostics, and
+incompletes. The official scoreboard authenticates only the outcome class for its 42 parse-error
+and four unresolved eligible rows. Those rows therefore use the stable class tokens `parse-error`
+and `unresolved`; the runners do not publish unauthenticated parser/resolver message text.
+
 The session panel remains RED until `session_batch_bench.py`, the authenticated TypeScript-Go
 runner, and the feature-scoped typokat candidate runner implement this contract. No session timing
 is eligible before their source, binaries, profile, official-frame inventory, semantic controls,

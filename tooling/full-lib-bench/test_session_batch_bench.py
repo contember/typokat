@@ -196,6 +196,7 @@ class SessionBatchContractTests(unittest.TestCase):
             {
                 "case_id": "conformance/classes/members/accessibility/classPropertyAsPrivate.ts",
                 "exit_code": 1,
+                "parse_errors": [],
                 "diagnostics": [
                     "15:2341",
                     "16:2341",
@@ -210,6 +211,18 @@ class SessionBatchContractTests(unittest.TestCase):
                 "incompletes": [],
             },
         )
+        parse_row = next(
+            row for row in authority["typokat"] if row["exit_code"] == 2
+        )
+        self.assertEqual(parse_row["parse_errors"], ["parse-error"])
+        self.assertEqual(parse_row["incompletes"], [])
+        unresolved_row = next(
+            row
+            for row in authority["typokat"]
+            if row["incompletes"] == ["unresolved"]
+        )
+        self.assertEqual(unresolved_row["exit_code"], 3)
+        self.assertEqual(unresolved_row["parse_errors"], [])
         self.assertEqual(
             authority["tsgo"][0]["diagnostics"],
             [

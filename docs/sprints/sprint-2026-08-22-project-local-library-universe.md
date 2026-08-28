@@ -749,3 +749,8 @@ numbers are invalid without `--no-smt`.
   itself under the recorded CPU lease and links every warmup, sample, control, concurrency, and
   allocation receipt to those identities. Each JSONL request carries the exact authenticated
   official-suite source bytes; a case id and fabricated semantic response cannot satisfy parity.
+- **2026-08-28 — WU6 class-only oracle normalization.** Every frame result has explicit
+  `parse_errors`, `diagnostics`, and `incompletes` lists. The committed scoreboard contains only a
+  class/status witness for 42 parse-error and four unresolved eligible frames, so those normalize
+  to the stable tokens `parse-error` and `unresolved`. Runner-specific message text is not treated
+  as authenticated evidence.
