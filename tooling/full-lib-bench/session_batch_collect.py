@@ -287,9 +287,7 @@ class SystemLiveHost:
 
     def __init__(self, contract: dict[str, Any]) -> None:
         self.contract = contract
-        live_parent = ROOT / "target/wu6/session-batch-live"
-        live_parent.mkdir(parents=True, exist_ok=True)
-        self.live_root = Path(tempfile.mkdtemp(prefix="run-", dir=live_parent))
+        self.live_root = Path(tempfile.mkdtemp(prefix="typokat-wu6-", dir="/tmp"))
         self.live_root.chmod(0o700)
         self.system_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
         self.git_home = self.live_root / "git-home"
@@ -540,15 +538,27 @@ class SystemLiveHost:
             "PATH": f"{cargo.parent}:/usr/bin:/bin",
             "HOME": str(build_home),
             "RUSTUP_HOME": str(rustup_home),
+            "RUSTUP_TOOLCHAIN": "1.95.0-x86_64-unknown-linux-gnu",
             "CARGO_HOME": str(cargo_home),
             "CARGO_TARGET_DIR": str(target),
             "CARGO_BUILD_JOBS": "1",
             "CARGO_TERM_COLOR": "never",
             "CARGO_ENCODED_RUSTFLAGS": "",
             "RUSTFLAGS": "",
+            "RUSTC_WRAPPER": "",
+            "RUSTC_WORKSPACE_WRAPPER": "",
             "TYPOKAT_CANDIDATE_COMMIT": candidate["commit"],
         }
-        self._run_build(self.contract["typokat"]["build_argv"], ROOT, environment)
+        argv = [
+            *self.contract["typokat"]["build_argv"],
+            "--manifest-path",
+            str(ROOT / "Cargo.toml"),
+        ]
+        self._validate_cargo_configuration(self.live_root, cargo_home)
+        try:
+            self._run_build(argv, self.live_root, environment)
+        finally:
+            self._validate_cargo_configuration(self.live_root, cargo_home)
         if self.freeze_candidate() != candidate:
             _fail("candidate changed during typokat build")
         built = target / "release" / self.contract["typokat"]["runner_binary"]
@@ -560,6 +570,23 @@ class SystemLiveHost:
             "binary_sha256": binary_sha,
             "commit": candidate["commit"],
         }
+
+    def _validate_cargo_configuration(self, cwd: Path, cargo_home: Path) -> None:
+        candidates = [cargo_home / "config", cargo_home / "config.toml"]
+        for directory in (cwd, *cwd.parents):
+            candidates.extend(
+                (directory / ".cargo/config", directory / ".cargo/config.toml")
+            )
+        for candidate in candidates:
+            try:
+                candidate.lstat()
+            except FileNotFoundError:
+                continue
+            except OSError as error:
+                raise batch.BatchContractError(
+                    f"cannot authenticate Cargo configuration path {candidate}: {error}"
+                ) from error
+            _fail(f"Cargo configuration is present: {candidate}")
 
     def _build_tsgo(self, candidate: dict[str, Any]) -> dict[str, Any]:
         if self.freeze_candidate() != candidate:
