@@ -929,7 +929,15 @@ class SessionBatchLiveLinkageCollectorTests(unittest.TestCase):
             collect._collect_live_linkage(single_output, self.contract)
 
         batch_hash = FakeLinkageHost(self.contract)
-        batch_hash.smoke["typokat"]["executable_after_sha256"] = "8" * 64
+        original_batch = batch_hash.run_batch
+
+        def forged_batch(tool, runner, request_stream, **kwargs):
+            record = original_batch(tool, runner, request_stream, **kwargs)
+            if tool == "typokat":
+                record["executable_after_sha256"] = "8" * 64
+            return record
+
+        batch_hash.run_batch = forged_batch
         with self.assertRaisesRegex(batch.BatchContractError, "binary|runner|identity"):
             collect._collect_live_linkage(batch_hash, self.contract)
 
