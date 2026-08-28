@@ -218,7 +218,8 @@ NO-GO attempts remain evidence and are never overwritten by a later run.
 lifecycle. It does not compare a persistent typokat worker with repeated `tsgo` process startup.
 Both measured binaries start once per sample and process the same ordered frames in-process.
 
-The native comparator is built from the pinned TypeScript-Go revision. It creates a fresh Program,
+The native comparator is built from the pinned TypeScript-Go revision. It runs single-threaded and
+creates a fresh Program,
 checker, user parse/bind, project-global merge, semantic state, and diagnostic state for every
 frame. It may share the bound immutable library `SourceFile` values supported by TypeScript-Go's
 real project parse cache; TypeScript-Go binds such a cached source file once and its Program skips
@@ -256,6 +257,16 @@ and retained frame/cache state from the same binaries; the verifier requires tho
 observed and rejected. Separate 1/2/32 concurrent-session evidence must retain identical normalized
 outputs, distinct project-local identities, zero live sessions/caches after the run, and bounded
 RSS.
+
+Timed frame intervals cover product initialization, parse/prepare, binding, publication/check, and
+release as separate contiguous phases. Typokat additionally reports its materialized product-owner
+count and proves teardown with dead session/cache weak handles. TypeScript-Go reports zero retained
+runner-owned frame handles; forced GC or finalizers are forbidden because they would distort the
+comparison. Exact allocation-call counts come from a separate non-timing typokat run with a counting
+allocator. They are not a cross-tool metric and cannot affect the timed speed or RSS verdict.
+
+TypeScript outcomes are read from baseline blobs at the pinned TypeScript Git revision. The staged
+corpus copy and manifest alone are not accepted as the semantic authority.
 
 The session panel remains RED until `session_batch_bench.py`, the authenticated TypeScript-Go
 runner, and the feature-scoped typokat candidate runner implement this contract. No session timing

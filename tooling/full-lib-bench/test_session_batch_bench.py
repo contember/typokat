@@ -122,6 +122,34 @@ class SessionBatchContractTests(unittest.TestCase):
         self.assertIn("program_update", lifecycle["forbidden"])
         self.assertIn("cross_frame_semantic_cache", lifecycle["forbidden"])
         self.assertTrue(lifecycle["require_zero_retained_frames"])
+        self.assertEqual(
+            lifecycle["timed_phases"],
+            [
+                "product_initialization",
+                "parse_prepare",
+                "binding",
+                "publication_check",
+                "release",
+            ],
+        )
+        self.assertEqual(
+            lifecycle["typokat_teardown_proof"],
+            "session-and-cache-weak-handles-dead",
+        )
+        self.assertEqual(
+            lifecycle["tsgo_teardown_proof"],
+            "runner-retained-frame-handles-zero",
+        )
+        self.assertTrue(lifecycle["tsgo_single_threaded"])
+        self.assertEqual(
+            self.contract["allocation_probe"],
+            {
+                "timed": False,
+                "tool": "typokat",
+                "instrumentation": "counting-allocator",
+                "metric": "allocation_count",
+            },
+        )
 
     def test_protocol_info_requires_externally_recomputed_build_and_source_authentication(self) -> None:
         for tool in ("tsgo", "typokat"):
@@ -140,6 +168,7 @@ class SessionBatchContractTests(unittest.TestCase):
                 lambda value: value.update(program_per_frame=False),
                 lambda value: value.update(checker_per_frame=False),
                 lambda value: value.update(shared_user_sources=True),
+                lambda value: value.update(single_threaded=False),
                 lambda value: value.update(compiler_flags=[]),
             ):
                 candidate = copy.deepcopy(expected)
@@ -210,6 +239,12 @@ class SessionBatchContractTests(unittest.TestCase):
                     "tests/baselines/reference/classPropertyAsPrivate.errors.txt": b"wrong"
                 },
             )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(batch.BatchContractError, "Git.*baseline"):
+                batch.load_authenticated_batch_oracles(
+                    self.contract, git_cache_path=Path(temporary)
+                )
 
         one_frame = raw_panel_evidence(1, 1.0, 100_000, 110_000)
         apply_real_oracle(one_frame, authority)
@@ -464,9 +499,79 @@ class SessionBatchContractTests(unittest.TestCase):
             batch.verify_route_intervals(narrowed, 687)
 
         missing_metrics = copy.deepcopy(sample)
-        del missing_metrics["frames"][0]["allocation_count"]
-        with self.assertRaisesRegex(batch.BatchContractError, "allocation"):
+        del missing_metrics["frames"][0]["materialized_product_owner_count"]
+        with self.assertRaisesRegex(batch.BatchContractError, "owner"):
             batch.verify_route_intervals(missing_metrics, 687)
+
+        missing_parse = copy.deepcopy(sample)
+        del missing_parse["frames"][0]["phases"]["parse_prepare"]
+        with self.assertRaisesRegex(batch.BatchContractError, "phase"):
+            batch.verify_route_intervals(missing_parse, 687)
+
+    def test_allocation_probe_is_separate_from_timed_evidence(self) -> None:
+        receipt = {
+            "tool": "typokat",
+            "timed": False,
+            "instrumentation": "counting-allocator",
+            "allocation_count": 123,
+            "binary_sha256": "2" * 64,
+        }
+        batch.verify_allocation_probe(receipt, self.contract)
+        for mutation in (
+            lambda value: value.update(timed=True),
+            lambda value: value.update(allocation_count=0),
+            lambda value: value.update(instrumentation="none"),
+        ):
+            broken = copy.deepcopy(receipt)
+            mutation(broken)
+            with self.assertRaises(batch.BatchContractError):
+                batch.verify_allocation_probe(broken, self.contract)
+
+    def test_abba_statistics_use_p95_walls_and_real_block_bootstrap(self) -> None:
+        samples = []
+        pid = 1
+        for block in range(15):
+            for slot, (tool, wall) in enumerate(
+                (
+                    ("typokat", 10 + block),
+                    ("tsgo", 15 + block * 2),
+                    ("tsgo", 16 + block * 2),
+                    ("typokat", 11 + block),
+                )
+            ):
+                samples.append(
+                    {
+                        "block": block,
+                        "slot": slot,
+                        "tool": tool,
+                        "pid": pid,
+                        "start_ns": 0,
+                        "end_ns": wall,
+                    }
+                )
+                pid += 1
+        observed = batch.recompute_abba_statistics(samples, self.contract)
+        cold_blocks = [
+            [
+                {"tool": sample["tool"], "wall_seconds": sample["end_ns"]}
+                for sample in samples[block * 4 : block * 4 + 4]
+            ]
+            for block in range(15)
+        ]
+        typokat = [sample["end_ns"] for sample in samples if sample["tool"] == "typokat"]
+        tsgo = [sample["end_ns"] for sample in samples if sample["tool"] == "tsgo"]
+        self.assertEqual(
+            observed["p95_ratio"],
+            cold.percentile(tsgo, 0.95) / cold.percentile(typokat, 0.95),
+        )
+        self.assertEqual(
+            observed["bootstrap_lower_95"],
+            cold.bootstrap_block_speedup_lower(
+                cold_blocks,
+                self.contract["bootstrap_resamples"],
+                self.contract["bootstrap_seed"],
+            ),
+        )
 
     def test_concurrent_1_2_32_sessions_are_isolated_deterministic_and_bounded(self) -> None:
         evidence = concurrency_evidence()
@@ -595,6 +700,7 @@ def protocol_info(tool: str) -> dict[str, object]:
         "checker_per_frame": True,
         "shared_user_sources": False,
         "incremental": False,
+        "single_threaded": True,
         "compiler_flags": [
             "--strict",
             "--target",
@@ -714,18 +820,25 @@ def raw_panel_evidence(
                     "route_start_ns": start,
                     "route_end_ns": end,
                     "product_initializations": 1 if tool == "typokat" and ordinal == 0 else 0,
-                    "semantic_owner_count": 10,
-                    "allocation_count": 100,
                     "phases": {
                         "product_initialization": {"start_ns": start, "end_ns": init_end},
+                        "parse_prepare": {"start_ns": init_end, "end_ns": init_end},
                         "binding": {"start_ns": init_end, "end_ns": binding_end},
                         "publication_check": {
                             "start_ns": binding_end,
                             "end_ns": publication_end,
                         },
-                        "teardown": {"start_ns": publication_end, "end_ns": end},
+                        "release": {"start_ns": publication_end, "end_ns": end},
                     },
                 }
+                if tool == "typokat":
+                    frame.update(
+                        materialized_product_owner_count=10,
+                        session_weak_alive_after=False,
+                        cache_weak_alive_after=False,
+                    )
+                else:
+                    frame["retained_frame_handles"] = 0
                 request = json.dumps(
                     {"schema": 1, "case_id": frame["case_id"], "source": "let value = 1;"},
                     sort_keys=True,

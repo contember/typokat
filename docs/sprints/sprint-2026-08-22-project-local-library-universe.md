@@ -406,7 +406,9 @@ These conditions may not be relaxed after candidate results are visible.
      real architecture permits.
   Authenticate the runner source, binary, exact flags, file inventory, per-frame isolation, output,
   and memory. Add 1-, 32-, and 687-project panels. Instrument typokat product initialization,
-  project binding, semantic owners materialized, checking, teardown, allocations, and peak RSS.
+  user parse/prepare, project binding, typokat materialized product owners, checking, release, and
+  peak RSS. Record exact typokat allocation calls only in a separate non-timing instrumented run;
+  allocation counting must not alter the timed comparison.
   Profile and optimize only the project-local product/binder/query path; do not revive frozen
   semantics or sparse replay.
 - **Acceptance / witness.** Before timing, typokat, `tsc`, and the pinned `tsgo` comparator agree on
@@ -733,3 +735,11 @@ numbers are invalid without `--no-smt`.
   agreement set. The full official corpus uses the committed typokat scoreboard and pinned
   TypeScript baselines as separate ordered outcome authorities; it does not falsely require the
   research checker's known coverage gaps to equal TypeScript-Go.
+- **2026-08-28 — WU6 measurable-runner correction.** Runner-seam review found three fields that
+  could not be observed fairly under the first RED schema. Timed receipts now include a distinct
+  parse/prepare phase. Exact allocation calls move to a separate non-timing typokat counting-
+  allocator receipt; RSS remains the cross-tool memory gate. Teardown proof is tool-specific:
+  typokat requires dead session/cache weak handles, while TypeScript-Go requires zero runner-owned
+  frame handles and may not force GC or finalizers. TypeScript-Go is single-threaded, and its
+  semantic oracle is read from Git blobs at the pinned TypeScript revision rather than trusted from
+  the staged corpus copy. No candidate timing has run.

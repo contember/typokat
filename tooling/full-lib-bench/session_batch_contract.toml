@@ -38,6 +38,8 @@ cold_oracle_sha256 = "1b1297705791cd4702e3512561b5312c56477d63f8f4e5c14011562a74
 typokat_batch_oracle_relative_path = "tooling/official-suite/scoreboard.txt"
 typokat_batch_oracle_sha256 = "d3071df89d689e5d3da43a03cd74b9c7f6c91732699303a8ad33c3131af3575f"
 tsgo_batch_oracle = "pinned-typescript-baselines"
+typescript_git_cache_relative_path = "tooling/official-suite/.tools/typescript.git"
+typescript_baseline_authority = "git-blob-at-official-revision"
 batch_oracle_rule = "ordered-normalized-frame-outcomes"
 require_tsc_and_tsgo_cross_tool_agreement = true
 require_typokat_cross_tool_agreement = true
@@ -74,6 +76,17 @@ tsgo_shared = ["bound_immutable_library_source_files"]
 per_frame = ["user_parse", "user_bind", "program", "checker", "project_global_merge", "semantic_state", "diagnostics"]
 forbidden = ["incremental_program", "program_update", "checker_reuse", "user_source_reuse", "cross_frame_semantic_cache"]
 require_zero_retained_frames = true
+timed_phases = ["product_initialization", "parse_prepare", "binding", "publication_check", "release"]
+typokat_teardown_proof = "session-and-cache-weak-handles-dead"
+tsgo_teardown_proof = "runner-retained-frame-handles-zero"
+typokat_owner_metric = "materialized_product_owner_count"
+tsgo_single_threaded = true
+
+[allocation_probe]
+timed = false
+tool = "typokat"
+instrumentation = "counting-allocator"
+metric = "allocation_count"
 
 [sampling]
 schedule = "A,B,B,A"
