@@ -1238,6 +1238,7 @@ dependencies = [
  "oxc_parser",
  "oxc_span",
  "rustc-hash 2.1.2",
+ "rustix",
  "sha2",
  "smallvec",
  "typokat-binder",

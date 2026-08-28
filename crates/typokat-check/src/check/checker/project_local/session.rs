@@ -18,8 +18,6 @@ use std::fmt;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-#[cfg(feature = "session-bench")]
-use std::time::Instant;
 use typokat_library_product::LibraryDeclarationProduct;
 
 static NEXT_IDENTITY: AtomicU64 = AtomicU64::new(1);
@@ -147,23 +145,29 @@ impl CheckerSession {
     }
 }
 
-/// Monotonic process-local clock shared by all benchmark frame receipts.
+/// Linux monotonic clock shared by all benchmark process receipts.
 #[cfg(feature = "session-bench")]
 #[doc(hidden)]
-pub struct SessionBenchClock {
-    origin: Instant,
-}
+pub struct SessionBenchClock;
 
 #[cfg(feature = "session-bench")]
 impl SessionBenchClock {
     pub fn start() -> Self {
-        Self {
-            origin: Instant::now(),
-        }
+        Self
     }
 
     pub fn elapsed_ns(&self) -> u64 {
-        u64::try_from(self.origin.elapsed().as_nanos()).unwrap_or(u64::MAX)
+        let now = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
+        u64::try_from(now.tv_sec)
+            .expect("CLOCK_MONOTONIC seconds are nonnegative")
+            .checked_mul(1_000_000_000)
+            .and_then(|seconds| {
+                seconds.checked_add(
+                    u64::try_from(now.tv_nsec)
+                        .expect("CLOCK_MONOTONIC nanoseconds are nonnegative"),
+                )
+            })
+            .expect("CLOCK_MONOTONIC nanosecond timestamp overflow")
     }
 }
 
