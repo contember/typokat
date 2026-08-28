@@ -85,6 +85,7 @@ func TestDecodeSingleProjectRequestRejectsMalformedFiles(t *testing.T) {
 		"empty case":          `{"schema":1,"case_id":"","files":[{"path":"a.ts","source":""}]}`,
 		"empty files":         `{"schema":1,"case_id":"case","files":[]}`,
 		"duplicate path":      `{"schema":1,"case_id":"case","files":[{"path":"a.ts","source":""},{"path":"a.ts","source":""}]}`,
+		"reordered path":      `{"schema":1,"case_id":"case","files":[{"path":"b.ts","source":""},{"path":"a.ts","source":""}]}`,
 		"parent path":         `{"schema":1,"case_id":"case","files":[{"path":"../a.ts","source":""}]}`,
 		"absolute path":       `{"schema":1,"case_id":"case","files":[{"path":"/a.ts","source":""}]}`,
 		"dot path":            `{"schema":1,"case_id":"case","files":[{"path":"./a.ts","source":""}]}`,
@@ -109,6 +110,7 @@ func TestSingleProjectModeRequiresExactlyOneRequestAndResponse(t *testing.T) {
 		"empty":        "",
 		"multiple":     raw + "\n" + raw + "\n",
 		"noncanonical": `{"schema":1,"case_id":"one","files":[{"path":"one.ts","source":"export {};"}]}` + "\n",
+		"unterminated": raw,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -135,6 +137,9 @@ func TestSingleProjectModeRequiresExactlyOneRequestAndResponse(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[0]), &response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
+	if got, want := lines[0], canonicalJSON(t, response); got != want {
+		t.Fatalf("response is not canonical JSON:\n got: %s\nwant: %s", got, want)
+	}
 	wantKeys := []string{
 		"case_id", "checker_identity", "file_count", "program_identity",
 		"retained_frame_handles", "retained_frame_state", "schema", "semantic",
@@ -143,6 +148,17 @@ func TestSingleProjectModeRequiresExactlyOneRequestAndResponse(t *testing.T) {
 	if got := sortedKeys(response); !equalStrings(got, wantKeys) {
 		t.Fatalf("response keys = %#v, want %#v", got, wantKeys)
 	}
+}
+
+func canonicalJSON(t *testing.T, value any) string {
+	t.Helper()
+	var output bytes.Buffer
+	encoder := json.NewEncoder(&output)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		t.Fatalf("encode canonical JSON: %v", err)
+	}
+	return strings.TrimSuffix(output.String(), "\n")
 }
 
 func minimalTestLibraries() *sharedLibraries {
