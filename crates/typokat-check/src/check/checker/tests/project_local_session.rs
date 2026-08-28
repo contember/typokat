@@ -4,7 +4,10 @@ use crate::binder::namespace::{
     source_file_kind, CompilationUnit, ModuleBindingContext, SourceUnitKey,
 };
 use crate::binder::product::{project_library_declaration_product, LibraryProductSource};
-use crate::check::checker::project_local::{observation_storage_counts_for_test, CheckerSession};
+use crate::check::checker::project_local::{
+    observation_storage_counts_for_test, CheckerSession, ObservationEventKindForTest,
+    ObservationScopeForTest,
+};
 use crate::frontend::{run_prepared_project_frontend, FileInput};
 use crate::source::{CompilationOrigin, LibraryFileOrdinal};
 use oxc_allocator::Allocator;
@@ -54,6 +57,7 @@ fn extract_library_product(source: &str) -> LibraryDeclarationProduct {
 #[test]
 fn checker_session_owns_product_binding_and_returns_real_check_results() {
     let product = Arc::new(extract_library_product("interface Box<T> { value: T }\n"));
+    let observation = ObservationScopeForTest::start();
     let run = run_prepared_project_frontend(
         vec![FileInput {
             name: USER_PATH.to_owned(),
@@ -87,6 +91,46 @@ fn checker_session_owns_product_binding_and_returns_real_check_results() {
         diagnostic.message,
         "Type 'string' is not assignable to type 'number'"
     );
+
+    let receipt = observation.finish();
+    assert_eq!(
+        receipt
+            .events
+            .iter()
+            .filter(|event| matches!(
+                event.kind,
+                ObservationEventKindForTest::SessionCreated { .. }
+            ))
+            .count(),
+        1,
+        "ordinary checking creates exactly one semantic session"
+    );
+    assert_eq!(
+        receipt
+            .events
+            .iter()
+            .filter(|event| matches!(
+                event.kind,
+                ObservationEventKindForTest::SessionDropped { .. }
+            ))
+            .count(),
+        1,
+        "ordinary checking drops exactly one semantic session"
+    );
+    assert!(receipt
+        .events
+        .iter()
+        .all(|event| !matches!(event.kind, ObservationEventKindForTest::ReceiptBuilt)));
+    assert_eq!(receipt.session_weak.len(), 1);
+    assert_eq!(receipt.cache_weak.len(), 1);
+    assert!(receipt
+        .session_weak
+        .iter()
+        .all(|witness| !witness.upgraded_at_finish));
+    assert!(receipt
+        .cache_weak
+        .iter()
+        .all(|witness| !witness.upgraded_at_finish));
 }
 
 #[test]
