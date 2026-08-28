@@ -775,3 +775,18 @@ numbers are invalid without `--no-smt`.
   binary. That artifact pins every source, argv, stdout, stderr, return code, binary/profile
   identity, and normalized outcome. The batch runner must reproduce it and may not generate or
   bless it. No candidate timing has run.
+- **2026-08-28 — WU6 live preflight passed.** The bounded collector ran under a two-vCPU no-SMT
+  lease at clean candidate `2306b8ab84594944ff11b3b1c229c9e05a64758a` and returned only
+  `PREFLIGHT-PASS`. The retained local artifact is
+  `target/wu6/session-preflight-2306b8ab.json` (file SHA-256 `ddfcd768ed620606ebe70393e8b39b5a70813d116321d982a98c67133b7f02d2`,
+  canonical evidence SHA-256 `bd9c41fccdcb42d2a7f0e8e569be0c9dc9a91a12f356f3aa4941999b9c3b98d2`).
+  It authenticates the typokat runner (`95cbb210da3d862735bb0bd5bae9399da117e85265996f97f55df3239e00c091`),
+  the TypeScript-Go runner (`eab171db92b071545523a5af3b2086b5ad4915ebb72ee6a5f934277dca40b20c`),
+  both exact source hashes, the 82-file profile, the first separate semantic oracle for each tool,
+  dead typokat session/cache weak handles, zero TypeScript-Go retained frame handles, all four
+  fault controls, 1 GiB child limits, and final candidate/source/binary re-attestation. An earlier
+  diagnostic pass exposed machine-global `sccache`; the accepted run instead used direct pinned
+  Rust 1.95.0 compilation from a private non-home cwd and rejected every Cargo configuration
+  discovery path before and after build. Independent review recomputed the evidence and passed.
+  This is not WU6 `GO`: cold linkage, progressive panels, concurrency, allocation evidence, and
+  performance gates remain uncollected. No candidate timing has run.
