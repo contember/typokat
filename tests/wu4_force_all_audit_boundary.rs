@@ -2,7 +2,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 #[test]
-#[ignore = "WU4 production-owned force-all publisher is not implemented"]
 fn project_local_force_all_has_one_semantic_producer() {
     let root = repo_root();
     let project_local = root.join("crates/typokat-check/src/check/checker/project_local");
