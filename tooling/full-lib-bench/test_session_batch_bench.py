@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
@@ -323,6 +324,7 @@ class SessionBatchContractTests(unittest.TestCase):
         self.assertEqual(result["verdict"], "GO")
 
     def test_speed_and_memory_thresholds_are_strict(self) -> None:
+        green = verified_panel(32, 1.1, 100_000, 100_000, self.contract)
         self.assertFalse(
             batch.panel_passes(
                 verified_panel(32, 1.0, 100_000, 100_000, self.contract), self.contract
@@ -337,6 +339,12 @@ class SessionBatchContractTests(unittest.TestCase):
             batch.panel_passes(
                 verified_panel(32, 1.000_001, 100_000, 100_000, self.contract), self.contract
             )
+        )
+        self.assertFalse(
+            batch.panel_passes(replace(green, p95_ratio=1.0), self.contract)
+        )
+        self.assertFalse(
+            batch.panel_passes(replace(green, bootstrap_lower_95=1.0), self.contract)
         )
 
         over_limit = verified_panel(32, 1.1, 524_288, 600_000, self.contract)
@@ -624,6 +632,10 @@ class SessionBatchContractTests(unittest.TestCase):
             typokat_duration_ns=12_000_000_000,
         )
         self.assertTrue(batch.panel_passes(candidate, self.contract))
+        self.assertLess(
+            candidate.typokat_route_wall_ns,
+            self.contract["current_typokat_baseline"]["wall_us"] * 1000,
+        )
         too_slow = verified_panel(
             687,
             1.2,
@@ -633,6 +645,10 @@ class SessionBatchContractTests(unittest.TestCase):
             typokat_duration_ns=13_000_000_000,
         )
         self.assertFalse(batch.panel_passes(too_slow, self.contract))
+        self.assertGreaterEqual(
+            too_slow.typokat_route_wall_ns,
+            self.contract["current_typokat_baseline"]["wall_us"] * 1000,
+        )
         too_large = verified_panel(
             687,
             1.2,
