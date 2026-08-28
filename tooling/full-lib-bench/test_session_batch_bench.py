@@ -409,6 +409,12 @@ class SessionBatchContractTests(unittest.TestCase):
             program_identity=None,
             checker_identity=None,
             semantic_identity=None,
+            semantic={
+                "exit_code": 2,
+                "parse_errors": ["parse-error"],
+                "diagnostics": [],
+                "incompletes": [],
+            },
         )
         batch.validate_lifecycle_receipts([*frames, parse_rejected], 33)
 
@@ -417,10 +423,63 @@ class SessionBatchContractTests(unittest.TestCase):
         with self.assertRaisesRegex(batch.BatchContractError, "parse-rejected.*identity"):
             batch.validate_lifecycle_receipts([*frames, fabricated], 33)
 
+        false_rejection = copy.deepcopy(parse_rejected)
+        false_rejection["semantic"] = {
+            "exit_code": 0,
+            "parse_errors": [],
+            "diagnostics": [],
+            "incompletes": [],
+        }
+        with self.assertRaisesRegex(batch.BatchContractError, "parse-rejected.*semantic"):
+            batch.validate_lifecycle_receipts([*frames, false_rejection], 33)
+
+        mislabeled_semantic = copy.deepcopy(frames)
+        mislabeled_semantic[-1]["semantic"] = {
+            "exit_code": 2,
+            "parse_errors": ["parse-error"],
+            "diagnostics": [],
+            "incompletes": [],
+        }
+        with self.assertRaisesRegex(batch.BatchContractError, "semantic.*parse"):
+            batch.validate_lifecycle_receipts(mislabeled_semantic, 32)
+
         missing = copy.deepcopy(frames)
         missing[-1]["semantic_identity"] = None
         with self.assertRaisesRegex(batch.BatchContractError, "semantic identity"):
             batch.validate_lifecycle_receipts(missing, 32)
+
+    def test_parse_rejected_route_requires_absent_session_receipts(self) -> None:
+        evidence = raw_panel_evidence(1, 1.0, 100_000, 110_000)
+        sample = next(row for row in evidence["samples"] if row["tool"] == "typokat")
+        frame = sample["frames"][0]
+        frame.update(
+            lifecycle_disposition="parse-rejected",
+            program_identity=None,
+            checker_identity=None,
+            semantic_identity=None,
+            materialized_product_owner_count=None,
+            session_weak_alive_after=None,
+            cache_weak_alive_after=None,
+            semantic={
+                "exit_code": 2,
+                "parse_errors": ["parse-error"],
+                "diagnostics": [],
+                "incompletes": [],
+            },
+        )
+        batch.validate_lifecycle_receipts(sample["frames"], 1)
+        batch.verify_route_intervals(sample, 1)
+
+        for field, value in (
+            ("materialized_product_owner_count", 0),
+            ("session_weak_alive_after", False),
+            ("cache_weak_alive_after", False),
+        ):
+            with self.subTest(field=field):
+                fabricated = copy.deepcopy(sample)
+                fabricated["frames"][0][field] = value
+                with self.assertRaisesRegex(batch.BatchContractError, "parse-rejected.*session"):
+                    batch.verify_route_intervals(fabricated, 1)
 
     def test_next_panel_is_blocked_until_every_prior_gate_passes(self) -> None:
         green = verified_panel(1, 1.0, 100_000, 110_000, self.contract)
@@ -953,6 +1012,12 @@ def frame_receipt(index: int) -> dict[str, object]:
         "semantic_identity": f"semantic-{index}",
         "shared_product_identity": "shared-product",
         "retained_frame_state": 0,
+        "semantic": {
+            "exit_code": 0,
+            "parse_errors": [],
+            "diagnostics": [],
+            "incompletes": [],
+        },
     }
 
 
@@ -1155,6 +1220,16 @@ def apply_real_oracle(evidence: dict[str, object], authority: dict[str, object])
             frame["semantic"] = {
                 key: value for key, value in oracle.items() if key != "case_id"
             }
+            if sample["tool"] == "typokat" and frame["semantic"]["parse_errors"]:
+                frame.update(
+                    lifecycle_disposition="parse-rejected",
+                    program_identity=None,
+                    checker_identity=None,
+                    semantic_identity=None,
+                    materialized_product_owner_count=None,
+                    session_weak_alive_after=None,
+                    cache_weak_alive_after=None,
+                )
             frame["raw_request"] = json.dumps(
                 {"schema": 1, "case_id": frame["case_id"], "source": source},
                 sort_keys=True,
