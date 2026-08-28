@@ -17,6 +17,7 @@ mod modifiers;
 mod narrowing;
 mod product_project_structure;
 mod project_local_lowerer;
+mod project_local_session;
 mod project_local_validation;
 mod publication;
 mod statements;

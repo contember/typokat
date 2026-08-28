@@ -684,3 +684,18 @@ numbers are invalid without `--no-smt`.
   production lifecycle, only opt-in verification builds expose `LibraryRecordCensus` and enable
   its test inspection stack. →
   [ADR-0029](../decisions/0029-gate-the-library-record-census-behind-an-opt-in-feature.md)
+- **2026-08-28 — WU5 lifecycle inventory and compatibility boundary.** The current tree has three
+  semantic routes: frozen shared, sparse/fallback, and complete-source standalone; only the
+  project-local candidate already owns binder and meaning per project. WU5 introduces one
+  high-level `CheckerSession` in `typokat-check` that consumes an `Arc<LibraryDeclarationProduct>`,
+  owns product binding and one project-local semantic session, and returns real `CheckResult`
+  values. The driver remains the non-published owner of parsing, workers, and report assembly.
+  Frozen/sparse and complete-source implementations remain test-only comparison controls until WU6;
+  WU7 performs the production dispatch switch and deletion. Public check signatures remain stable
+  through that switch. GitHub code search found no indexed consumer of `LibraryBaseProvider`,
+  `FrozenLibraryBase`, or `typokat_library` outside this repository, so the low-level public and
+  documentation-hidden lifecycle API will be removed as an intentional pre-1.0 break in WU7, not
+  wrapped permanently. Initialization precedence remains per public operation: repeated
+  `check_source` / `check_files` / `check_project` acquire the immutable product before parsing,
+  while standalone and Bundler checks reject user parse/inventory errors before product
+  acquisition. Clean projects enter the same session in every mode; only its creation point differs.
