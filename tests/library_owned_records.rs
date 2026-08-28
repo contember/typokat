@@ -1,12 +1,11 @@
 //! The named pin for the library's own records (ADR-0018).
 //!
-//! Compiling the pinned 82-file profile reports diagnostics and incomplete surfaces against the
-//! library itself. They are not user-facing errors — they are typokat's own model gaps against a
-//! library the real `tsc` checks clean — so nothing retains them: the frozen base carries none
-//! and every ordinary check pays nothing for them. That makes this file their sole witness, and
-//! it is a named `(code, site)` multiset rather than a count and a digest, because a digest only
-//! ever says that something moved. Backlog `98` is what that costs: an eight-diagnostic delta
-//! drifted for 102 commits behind a hash.
+//! The production publisher reports diagnostics and incomplete surfaces against the pinned
+//! 82-file profile. They are not user-facing errors — they are typokat's own model gaps against a
+//! library the real `tsc` checks clean — so ordinary checks retain none of them. This file is their
+//! named `(code, site)` multiset authority rather than a count and a digest, because a digest only
+//! ever says that something moved. Backlog `98` records what the older hash-only pin cost: an
+//! eight-diagnostic delta drifted for 102 commits.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -20,8 +19,8 @@ const PIN_PATH: &str = "tests/fixtures/library-owned-records.txt";
 /// Rewrite the pin instead of failing. Deliberate, and never set in CI.
 const BLESS: &str = "TYPOKAT_BLESS_LIBRARY_RECORDS";
 
-const PINNED_DIAGNOSTICS: usize = 267;
-const PINNED_INCOMPLETES: usize = 291;
+const PINNED_DIAGNOSTICS: usize = 322;
+const PINNED_INCOMPLETES: usize = 387;
 const FULL_LIBRARY_CLEAN: &str =
     include_str!("../tooling/full-lib-bench/workloads/fast-clean/main.ts");
 
@@ -109,7 +108,7 @@ fn every_pinned_entry_names_a_code_and_a_site() {
 
 /// No library-owned record reaches a user's output on the production driver path.
 ///
-/// The library contributes 698 records on the way to the base; a user check must see none of
+/// The production census contains 709 library-owned records; a user check must see none of
 /// them, and must still see its own.
 #[test]
 fn no_library_owned_record_reaches_user_output() {
@@ -167,7 +166,7 @@ fn no_library_owned_record_reaches_user_output() {
 /// The same proof at the process boundary: the CLI prints nothing for a clean file.
 ///
 /// The source requires declarations absent from the retired minimal prelude, so silence also proves
-/// that this process boundary reached the full production base whose 698 records stay internal.
+/// that this process boundary reached the full production library whose 709 records stay internal.
 #[test]
 fn the_cli_prints_no_record_for_a_clean_file() {
     let probe = std::env::temp_dir().join(format!(

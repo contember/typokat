@@ -327,6 +327,10 @@ fn escape(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::check::checker::library_compiler::{
+        CompleteSourceRouteWorkForTest, CompleteSourceRouteWorkScopeForTest,
+    };
+    use crate::compiler::LibraryCompilerWorkScopeForTest;
     use crate::diagnostics::{Diagnostic, IncompleteSurface};
     use crate::span::Span;
 
@@ -459,5 +463,32 @@ mod tests {
         let rendered = census(vec![diagnostic_entry(source, 17, "A")]).render();
         assert!(rendered.contains("# diagnostics: 1, incompletes: 0, records: 1\n"));
         assert!(rendered.contains("# profile: probe\n"));
+    }
+
+    #[test]
+    fn packaged_census_uses_the_production_publisher_without_legacy_work() {
+        let complete_source_scope = CompleteSourceRouteWorkScopeForTest::start();
+        let legacy_compiler_scope = LibraryCompilerWorkScopeForTest::start();
+        let census = LibraryRecordCensus::compile_packaged_profile().expect("packaged census");
+        let legacy_compiler_work = legacy_compiler_scope.finish();
+        let complete_source_work = complete_source_scope.finish();
+
+        assert_eq!(
+            (
+                census.entries().len(),
+                census.diagnostics(),
+                census.incompletes(),
+                complete_source_work,
+                legacy_compiler_work,
+            ),
+            (
+                709,
+                322,
+                387,
+                CompleteSourceRouteWorkForTest::default(),
+                Default::default(),
+            ),
+            "the census must come from the production publisher without legacy work",
+        );
     }
 }
