@@ -276,8 +276,8 @@ fn project_local_shadow_preserves_each_explicit_routes_pre_cutover_contract() {
             );
             assert_eq!(
                 standalone_acquisitions.get(),
-                0,
-                "blocking explicit notices precede product acquisition",
+                1,
+                "explicit notices are reported alongside semantic results",
             );
 
             let repeated_control =
