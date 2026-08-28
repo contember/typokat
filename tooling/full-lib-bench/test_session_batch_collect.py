@@ -21,15 +21,20 @@ import session_batch_bench as batch
 import session_batch_collect as collect
 from test_session_batch_bench import (
     apply_real_oracle,
+    make_cold_process,
+    make_single_project_process,
     protocol_info,
     raw_panel_evidence,
     refresh_sample_streams,
+    refresh_single_project_response,
+    single_project_evidence,
 )
 
 
 class FakeLiveHost:
     def __init__(self, contract: dict[str, object]) -> None:
         self.contract = contract
+        self._next_pid = 40_000
         self.candidate = {
             "commit": "a" * 40,
             "tree": "b" * 40,
@@ -133,6 +138,188 @@ class FakeLiveHost:
         return {
             "candidate": copy.deepcopy(candidate),
             "runners": copy.deepcopy(runners),
+        }
+
+
+class FakeLinkageHost:
+    def __init__(self, contract: dict[str, object]) -> None:
+        self.contract = contract
+        self.candidate = {"commit": "a" * 40, "tree": "b" * 40, "dirty": False}
+        pure = single_project_evidence(contract)
+        self.typokat_cold_build = copy.deepcopy(pure["typokat_cold_build"])
+        self.cold_binaries = {
+            "typokat": {
+                "tool": "typokat",
+                "path": self.typokat_cold_build["binary_path"],
+                "binary_sha256": self.typokat_cold_build["binary_sha256"],
+                "candidate_commit": self.candidate["commit"],
+                "candidate_tree": self.candidate["tree"],
+                "source_identity_sha256": self.typokat_cold_build[
+                    "source_identity_sha256"
+                ],
+            },
+            "tsgo": {
+                "tool": "tsgo",
+                "path": pure["tools"]["tsgo"]["cold_binary_path"],
+                "binary_sha256": pure["tools"]["tsgo"][
+                    "authenticated_cold_binary_sha256"
+                ],
+                "upstream_revision": contract["tsgo"]["upstream_revision"],
+            },
+        }
+        self.single_processes = {
+            tool: [self._live_record(row) for row in pure["tools"][tool]["processes"]]
+            for tool in ("typokat", "tsgo")
+        }
+        self.cold_processes = {
+            tool: [self._live_record(row) for row in pure["tools"][tool]["cold_processes"]]
+            for tool in ("typokat", "tsgo")
+        }
+        authority = batch.load_authenticated_batch_oracles(contract)
+        smoke = raw_panel_evidence(1, 2.0, 100_000, 150_000)
+        apply_real_oracle(smoke, authority)
+        for sample in smoke["samples"]:
+            sample["frames"][0]["shared_product_identity"] = contract["profile"][
+                "length_framed_sha256"
+            ]
+            refresh_responses(sample)
+        self.smoke = {
+            tool: copy.deepcopy(next(row for row in smoke["samples"] if row["tool"] == tool))
+            for tool in ("typokat", "tsgo")
+        }
+        self.calls: list[tuple[object, ...]] = []
+
+    def _live_record(self, record: dict[str, object]) -> dict[str, object]:
+        current = copy.deepcopy(record)
+        pid = getattr(self, "_next_pid", 40_000)
+        self._next_pid = pid + 1
+        current.update(pid=pid, start_ns=pid * 1_000, end_ns=pid * 1_000 + 100)
+        return current
+
+    def freeze_candidate(self) -> dict[str, object]:
+        self.calls.append(("freeze_candidate",))
+        return copy.deepcopy(self.candidate)
+
+    def build_runner(self, tool: str, candidate: dict[str, object]) -> dict[str, object]:
+        self.calls.append(("build_runner", tool, candidate["commit"], candidate["tree"]))
+        binary = "2" * 64 if tool == "typokat" else "3" * 64
+        source = "4" * 64 if tool == "typokat" else "5" * 64
+        commit = (
+            candidate["commit"]
+            if tool == "typokat"
+            else self.contract["tsgo"]["upstream_revision"]
+        )
+        runner = {
+            "tool": tool,
+            "path": f"/tmp/{tool}-linkage-runner",
+            "source_sha256": source,
+            "binary_sha256": binary,
+            "commit": commit,
+        }
+        for process in self.single_processes[tool]:
+            process["executable_before_sha256"] = binary
+            process["executable_after_sha256"] = binary
+        self.smoke[tool]["executable_before_sha256"] = binary
+        self.smoke[tool]["executable_after_sha256"] = binary
+        return runner
+
+    def protocol_info(
+        self, tool: str, runner: dict[str, object]
+    ) -> dict[str, object]:
+        self.calls.append(("protocol_info", tool, runner["binary_sha256"]))
+        info = protocol_info(tool)
+        info.update(
+            source_sha256=runner["source_sha256"],
+            binary_sha256=runner["binary_sha256"],
+            upstream_revision=runner["commit"],
+        )
+        return info
+
+    def build_cold_typokat(
+        self, candidate: dict[str, object]
+    ) -> dict[str, object]:
+        self.calls.append(("build_cold_typokat", candidate["commit"], candidate["tree"]))
+        return copy.deepcopy(self.cold_binaries["typokat"])
+
+    def authenticate_cold_tsgo(self) -> dict[str, object]:
+        self.calls.append(("authenticate_cold_tsgo",))
+        return copy.deepcopy(self.cold_binaries["tsgo"])
+
+    def run_batch(
+        self,
+        tool: str,
+        runner: dict[str, object],
+        request_stream: str,
+        *,
+        timeout_seconds: int,
+        address_space_limit_bytes: int,
+    ) -> dict[str, object]:
+        self.calls.append(("run_batch", tool, timeout_seconds, address_space_limit_bytes))
+        record = copy.deepcopy(self.smoke[tool])
+        if record["request_stream"] != request_stream:
+            raise AssertionError("linkage smoke request differs")
+        if record["executable_before_sha256"] != runner["binary_sha256"]:
+            raise AssertionError("linkage smoke runner differs")
+        return record
+
+    def run_cold(
+        self,
+        tool: str,
+        row: str,
+        cold_binary: dict[str, object],
+        *,
+        timeout_seconds: int,
+        address_space_limit_bytes: int,
+    ) -> dict[str, object]:
+        self.calls.append(("run_cold", tool, row, timeout_seconds, address_space_limit_bytes))
+        expected = self.cold_binaries[tool]
+        if cold_binary != expected:
+            raise AssertionError("collector changed authenticated cold binary")
+        matches = [item for item in self.cold_processes[tool] if item["case_id"] == row]
+        return copy.deepcopy(matches[0]) if matches else None
+
+    def run_single_project(
+        self,
+        tool: str,
+        row: str,
+        runner: dict[str, object],
+        request_stream: str,
+        *,
+        timeout_seconds: int,
+        address_space_limit_bytes: int,
+    ) -> dict[str, object]:
+        self.calls.append(
+            ("run_single_project", tool, row, timeout_seconds, address_space_limit_bytes)
+        )
+        matches = [item for item in self.single_processes[tool] if item["case_id"] == row]
+        if not matches:
+            return None
+        record = matches[0]
+        if record["request_stream"] != request_stream:
+            raise AssertionError("collector changed canonical single-project request")
+        if record["executable_before_sha256"] != runner["binary_sha256"]:
+            raise AssertionError("collector changed single-project runner")
+        return copy.deepcopy(record)
+
+    def final_linkage_attestation(
+        self,
+        candidate: dict[str, object],
+        runners: dict[str, dict[str, object]],
+        cold: dict[str, dict[str, object]],
+    ) -> dict[str, object]:
+        self.calls.append(
+            ("final_linkage_attestation", candidate["commit"], candidate["tree"])
+        )
+        return {
+            "candidate": copy.deepcopy(candidate),
+            "runners": copy.deepcopy(runners),
+            "cold": copy.deepcopy(cold),
+            "profile": {
+                "file_count": self.contract["profile"]["file_count"],
+                "length_framed_sha256": self.contract["profile"][
+                    "length_framed_sha256"
+                ],
+            },
         }
 
 
@@ -544,6 +731,220 @@ class SessionBatchLiveCollectorTests(unittest.TestCase):
         refresh_responses(initialization.samples["typokat"])
         with self.assertRaisesRegex(batch.BatchContractError, "initialization"):
             collect._collect_live_preflight(initialization, self.contract)
+
+
+class SessionBatchLiveLinkageCollectorTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.contract = batch.verify_contract()
+
+    def test_public_linkage_collector_is_non_injectable_and_publishes_canonical_new_file(
+        self,
+    ) -> None:
+        signature = inspect.signature(collect.collect_live_linkage)
+        self.assertEqual(list(signature.parameters), ["output"])
+        self.assertEqual(signature.parameters["output"].kind, inspect.Parameter.KEYWORD_ONLY)
+
+        host = FakeLinkageHost(self.contract)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "linkage.json"
+            with mock.patch.object(collect, "SystemLiveHost", return_value=host) as constructor:
+                result = collect.collect_live_linkage(output=output)
+                with self.assertRaisesRegex(batch.BatchContractError, "exists"):
+                    collect.collect_live_linkage(output=output)
+                constructor.assert_called_once()
+                self.assertEqual(
+                    output.read_bytes(),
+                    json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
+                    + b"\n",
+                )
+
+        self.assertEqual(result["verdict"], "LINKAGE-PASS")
+        self.assertNotIn(result["verdict"], {"GO", "PASS"})
+        self.assertEqual(
+            result["evidence_sha256"],
+            hashlib.sha256(
+                json.dumps(
+                    result["evidence"], sort_keys=True, separators=(",", ":")
+                ).encode()
+            ).hexdigest(),
+        )
+
+    def test_private_linkage_flow_owns_exact_live_sequence_and_recomputation(self) -> None:
+        host = FakeLinkageHost(self.contract)
+        with mock.patch.object(
+            batch,
+            "recompute_single_project_linkage",
+            wraps=batch.recompute_single_project_linkage,
+        ) as recompute:
+            result = collect._collect_live_linkage(host, self.contract)
+        recompute.assert_called_once()
+
+        rows = self.contract["single_project"]["rows"]
+        expected_calls = [
+            ("freeze_candidate",),
+            ("build_runner", "typokat", "a" * 40, "b" * 40),
+            ("build_runner", "tsgo", "a" * 40, "b" * 40),
+            ("protocol_info", "typokat", "2" * 64),
+            ("protocol_info", "tsgo", "3" * 64),
+            ("build_cold_typokat", "a" * 40, "b" * 40),
+            ("authenticate_cold_tsgo",),
+            ("run_batch", "typokat", 10, 1 << 30),
+            ("run_batch", "tsgo", 10, 1 << 30),
+        ]
+        for tool in ("typokat", "tsgo"):
+            expected_calls.extend(
+                ("run_cold", tool, row, 60, 1 << 30) for row in rows
+            )
+            expected_calls.extend(
+                ("run_single_project", tool, row, 60, 1 << 30) for row in rows
+            )
+        expected_calls.append(("final_linkage_attestation", "a" * 40, "b" * 40))
+        self.assertEqual(host.calls, expected_calls)
+
+        self.assertEqual(result["verdict"], "LINKAGE-PASS")
+        self.assertNotEqual(result["verdict"], "GO")
+        evidence = result["evidence"]
+        self.assertEqual(
+            set(evidence),
+            {
+                "batch_smoke", "candidate", "cold_binaries", "cold_processes",
+                "final_attestation", "protocols", "recomputation", "runners",
+                "schema", "single_project_processes",
+            },
+        )
+        self.assertEqual(evidence["recomputation"]["verdict"], "LINKAGE-RECOMPUTED")
+        self.assertNotIn(evidence["recomputation"]["verdict"], {"GO", "PASS"})
+        self.assertEqual(evidence["candidate"], host.candidate)
+        self.assertEqual(evidence["final_attestation"]["candidate"], host.candidate)
+        self.assertEqual(
+            evidence["final_attestation"]["profile"],
+            {
+                "file_count": 82,
+                "length_framed_sha256": self.contract["profile"][
+                    "length_framed_sha256"
+                ],
+            },
+        )
+        self.assertEqual(
+            evidence["final_attestation"]["runners"], evidence["runners"]
+        )
+        self.assertEqual(
+            evidence["final_attestation"]["cold"], evidence["cold_binaries"]
+        )
+        self.assertEqual(
+            [row["case_id"] for row in evidence["cold_processes"]["typokat"]],
+            rows,
+        )
+        self.assertEqual(
+            [row["case_id"] for row in evidence["single_project_processes"]["tsgo"]],
+            rows,
+        )
+        file_counts = self.contract["single_project"]["file_counts"]
+        for tool in ("typokat", "tsgo"):
+            runner_hash = evidence["runners"][tool]["binary_sha256"]
+            smoke = evidence["batch_smoke"][tool]
+            self.assertEqual(smoke["executable_before_sha256"], runner_hash)
+            self.assertIs(type(smoke["pid"]), int)
+            self.assertLess(smoke["start_ns"], smoke["end_ns"])
+            self.assertTrue(smoke["process_group_empty"])
+            self.assertEqual(smoke["address_space_limit_bytes"], 1 << 30)
+            for expected_count, record in zip(
+                file_counts, evidence["single_project_processes"][tool], strict=True
+            ):
+                request = json.loads(record["request_stream"])
+                self.assertEqual(len(request["files"]), expected_count)
+                self.assertEqual(
+                    record["request_stream"],
+                    json.dumps(request, sort_keys=True, separators=(",", ":")) + "\n",
+                )
+                self.assertEqual(record["executable_before_sha256"], runner_hash)
+            for record in (
+                *evidence["cold_processes"][tool],
+                *evidence["single_project_processes"][tool],
+            ):
+                self.assertIs(type(record["pid"]), int)
+                self.assertLess(record["start_ns"], record["end_ns"])
+                self.assertTrue(record["process_group_empty"])
+                self.assertEqual(record["address_space_limit_bytes"], 1 << 30)
+                self.assertEqual(record["timeout_seconds"], 60)
+
+    def test_linkage_rechecks_every_final_identity_before_pass(self) -> None:
+        mutations = {
+            "candidate-commit": lambda value: value["candidate"].update(commit="c" * 40),
+            "candidate-tree": lambda value: value["candidate"].update(tree="c" * 40),
+            "runner-source": lambda value: value["runners"]["typokat"].update(
+                source_sha256="8" * 64
+            ),
+            "runner-binary": lambda value: value["runners"]["tsgo"].update(
+                binary_sha256="8" * 64
+            ),
+            "cold-path": lambda value: value["cold"]["typokat"].update(path="/tmp/other"),
+            "cold-hash": lambda value: value["cold"]["typokat"].update(
+                binary_sha256="8" * 64
+            ),
+            "cold-source": lambda value: value["cold"]["typokat"].update(
+                source_identity_sha256="8" * 64
+            ),
+            "tsgo-binary": lambda value: value["cold"]["tsgo"].update(
+                binary_sha256="8" * 64
+            ),
+            "profile-digest": lambda value: value["profile"].update(
+                length_framed_sha256="8" * 64
+            ),
+            "profile-count": lambda value: value["profile"].update(file_count=81),
+        }
+        for label, mutation in mutations.items():
+            host = FakeLinkageHost(self.contract)
+            original = host.final_linkage_attestation
+
+            def forged(candidate, runners, cold, *, mutation=mutation):
+                value = original(candidate, runners, cold)
+                mutation(value)
+                return value
+
+            host.final_linkage_attestation = forged
+            with self.subTest(label=label), self.assertRaises(batch.BatchContractError):
+                collect._collect_live_linkage(host, self.contract)
+
+    def test_linkage_fails_closed_on_missing_or_changed_live_process_evidence(self) -> None:
+        missing = FakeLinkageHost(self.contract)
+        missing.single_processes["typokat"].pop()
+        with self.assertRaises(batch.BatchContractError):
+            collect._collect_live_linkage(missing, self.contract)
+
+        cold_output = FakeLinkageHost(self.contract)
+        cold_output.cold_processes["typokat"][1]["stderr"] = cold_output.cold_processes[
+            "typokat"
+        ][1]["stderr"].replace("(4,7)", "(4,8)", 1)
+        with self.assertRaises(batch.BatchContractError):
+            collect._collect_live_linkage(cold_output, self.contract)
+
+        single_output = FakeLinkageHost(self.contract)
+        record = single_output.single_processes["tsgo"][1]
+        response = json.loads(record["response_stream"])
+        response["semantic"]["diagnostics"][0] = "fast-errors/main.ts:4:8:2322"
+        refresh_single_project_response(record, response)
+        with self.assertRaises(batch.BatchContractError):
+            collect._collect_live_linkage(single_output, self.contract)
+
+        batch_hash = FakeLinkageHost(self.contract)
+        batch_hash.smoke["typokat"]["executable_after_sha256"] = "8" * 64
+        with self.assertRaisesRegex(batch.BatchContractError, "binary|runner|identity"):
+            collect._collect_live_linkage(batch_hash, self.contract)
+
+        missing_pid = FakeLinkageHost(self.contract)
+        del missing_pid.cold_processes["tsgo"][0]["pid"]
+        with self.assertRaisesRegex(batch.BatchContractError, "pid|process|live"):
+            collect._collect_live_linkage(missing_pid, self.contract)
+
+        retained = FakeLinkageHost(self.contract)
+        record = retained.single_processes["typokat"][0]
+        response = json.loads(record["response_stream"])
+        response["session_weak_alive_after"] = True
+        refresh_single_project_response(record, response)
+        with self.assertRaisesRegex(batch.BatchContractError, "session|state|alive"):
+            collect._collect_live_linkage(retained, self.contract)
 
 
 if __name__ == "__main__":
