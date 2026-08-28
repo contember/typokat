@@ -85,6 +85,6 @@ fn checker_session_owns_product_binding_and_returns_real_check_results() {
     assert_eq!(diagnostic.code.as_str(), "TK2322");
     assert_eq!(
         diagnostic.message,
-        "Type 'string' is not assignable to type 'number'."
+        "Type 'string' is not assignable to type 'number'"
     );
 }
