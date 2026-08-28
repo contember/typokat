@@ -1,5 +1,6 @@
 use super::*;
 use crate::check::checker::type_groups::PublishedTypeGroup;
+use typokat_types::alias_semantics::PublishedAliasTerminal;
 
 const DECLARATION_RECEIPT_LIBRARY: [InjectedLibrarySource<'static>; 2] = [
         InjectedLibrarySource {
@@ -1097,6 +1098,7 @@ const PRODUCT_SEMANTIC_LIBRARY: &str = r#"
         interface Function { functionMarker: string; }
         interface CallableFunction extends Function { callableMarker: number; }
         interface SeamWitness { value: number; }
+        type SeamAlias<T> = { value: T; };
         declare class SeamBase { base: string; }
         declare class SeamCtorBase { protected constructor(); }
         declare class SeamInheritedCtor extends SeamCtorBase {}
@@ -1509,8 +1511,13 @@ fn failed_conditional_alias_recovery_leaves_no_pending_reservation() {
             type FailedAwaited<T> =
                 T extends typeof unsupportedValue ? FailedAwaited<T> : T;
         "#;
-    let failure = strict_interner_state_failure("FailedAwaited", source, "FailedAwaited");
-    assert!(failure.is_none(), "{failure:#?}");
+    let state = compile_reservation_fixture("FailedAwaited.d.ts", source);
+    let terminals = state.published_types.aliases().owned_terminals();
+    let [(_, PublishedAliasTerminal::Ready(surface))] = terminals.as_slice() else {
+        panic!("failed library alias retains one ready compatibility terminal")
+    };
+    assert_eq!(surface.body(), state.interner.well_known().error);
+    assert!(state.interner.strict_terminal_state_for_test().is_ok());
 }
 
 #[test]
@@ -3036,7 +3043,7 @@ fn owned_runtime_product_parts_reject_empty_and_gapped_source_prefixes() {
 
 #[rustfmt::skip]
 #[test]
-    fn owned_runtime_product_parts_reject_group_and_counter_collisions() {
+fn owned_runtime_product_parts_reject_group_and_counter_collisions() {
         let mut groups = compile_semantic_product_parts();
         groups.published_types.groups.pop();
         assert_product_restore_error(
@@ -3080,6 +3087,61 @@ fn owned_runtime_product_parts_reject_empty_and_gapped_source_prefixes() {
             "product published type-group name does not match the binder",
         );
     }
+
+#[test]
+fn owned_runtime_product_parts_reject_malformed_alias_rows_and_ownership() {
+    let mut invalid_body = compile_semantic_product_parts();
+    let (_, terminal) = invalid_body
+        .published_types
+        .aliases
+        .iter_mut()
+        .find(|(_, terminal)| matches!(terminal, PublishedAliasTerminal::Ready(_)))
+        .expect("ready alias publication");
+    let PublishedAliasTerminal::Ready(surface) = terminal else {
+        unreachable!("selected ready alias")
+    };
+    *surface = typokat_types::alias_semantics::PublishedAliasSurface::new(
+        surface.alias(),
+        surface.template(),
+        surface.type_params().to_vec(),
+        TypeId(u32::MAX),
+    );
+    assert_product_restore_error(
+        invalid_body,
+        "product published alias surface has an invalid reference",
+    );
+
+    let mut invalid_parameters = compile_semantic_product_parts();
+    let (_, terminal) = invalid_parameters
+        .published_types
+        .aliases
+        .iter_mut()
+        .find(|(_, terminal)| matches!(terminal, PublishedAliasTerminal::Ready(_)))
+        .expect("ready alias publication");
+    let PublishedAliasTerminal::Ready(surface) = terminal else {
+        unreachable!("selected ready alias")
+    };
+    *surface = typokat_types::alias_semantics::PublishedAliasSurface::new(
+        surface.alias(),
+        surface.template(),
+        vec![TypeParamId(u32::MAX)],
+        surface.body(),
+    );
+    assert_product_restore_error(
+        invalid_parameters,
+        "product published alias surface has an invalid reference",
+    );
+
+    let mut missing_owner = compile_semantic_product_parts();
+    missing_owner
+        .published_types
+        .aliases
+        .retain(|(_, terminal)| !matches!(terminal, PublishedAliasTerminal::Ready(_)));
+    assert_product_restore_error(
+        missing_owner,
+        "product alias type group has no ready alias publication",
+    );
+}
 
 #[rustfmt::skip]
 #[test]

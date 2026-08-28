@@ -231,7 +231,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("sr_project_local_library_candidate", false),
     // ADR-0024 recursive alias applications. The spec commit keeps this RED corpus
     // disabled; the implementation commit enables it with the shared alias model.
-    ("sr_recursive_alias_applications", false),
+    ("sr_recursive_alias_applications", true),
     // Completeness-accounting sprint (2026-07-10) — surface-accounting corpus
     // (backlog 73). ENABLED by WU3 (expression child slots), WU4 (statement
     // containers), and WU5 (annotation / signature / class-member accounting): the

@@ -8,6 +8,9 @@ use crate::types::repr::{
     Visibility,
 };
 use crate::types::DerivationEdge;
+use typokat_types::alias_semantics::{
+    PublishedAliasSurface, PublishedAliasTerminal, PublishedAliases,
+};
 
 fn published(
     class: ClassId,
@@ -133,6 +136,29 @@ impl PublishedClassLookup for ObservedPublishedClasses {
     }
 }
 
+struct PublishedAliasLookup {
+    classes: PublishedClasses,
+    aliases: PublishedAliases,
+}
+
+impl PublishedClassLookup for PublishedAliasLookup {
+    fn published_class(&self, class: ClassId) -> DemandOutcome<&PublishedClassSurface> {
+        self.classes.published_class(class)
+    }
+
+    fn require_class(&self, class: ClassId) -> DemandOutcome<()> {
+        self.classes.require(class)
+    }
+
+    fn publication_identity(&self) -> &Arc<()> {
+        self.aliases.identity()
+    }
+
+    fn published_alias(&self, alias: AliasId) -> Option<&PublishedAliasTerminal> {
+        self.aliases.terminal(alias)
+    }
+}
+
 fn library_object_context_for_test(
     interner: &mut Interner,
     object: TypeId,
@@ -216,7 +242,7 @@ fn optional_property(name: &str, ty: TypeId) -> PropertyType {
 }
 
 #[test]
-fn planner_bounds_one_successive_instantiation_root_before_provenance_explodes() {
+fn planner_keeps_successive_instantiation_relation_root_lazy() {
     let mut interner = Interner::with_intrinsics();
     let wk = interner.well_known();
     let parameter = TypeParamId(91_001);
@@ -240,15 +266,236 @@ fn planner_bounds_one_successive_instantiation_root_before_provenance_explodes()
         SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
             .is_assignable(source, target);
 
-    assert!(matches!(
-        outcome,
-        RelationOutcome::Exhausted(Exhaustion::EvaluationBudget)
-    ));
-    assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
+    assert!(matches!(outcome, RelationOutcome::Yes));
+    assert_eq!(
+        state.durable_lengths(),
+        (0, MAX_CLASS_PROJECTION_EXPANSIONS + 1, 0, 1, 0)
+    );
     assert!(
         interner.derivation_storage_counts_for_test().1
             <= MAX_CLASS_PROJECTION_EXPANSIONS * MAX_CLASS_PROJECTION_EXPANSIONS
     );
+}
+
+#[test]
+fn relation_root_evaluates_a_conditional_alias_body_before_relating() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let alias = AliasId(91_101);
+    let parameter = TypeParamId(91_101);
+    let parameter_type = interner.intern_type_param(parameter, "T");
+    let template = interner.intern_alias_template(alias);
+    let inferred = interner.intern_infer(0);
+    let recurse_with_inferred =
+        interner.intern_instantiation(template, vec![(parameter, inferred)]);
+    let extends_type = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", inferred)],
+        ..ObjectType::default()
+    });
+    let body = interner.intern_conditional(ConditionalType {
+        check: parameter_type,
+        extends_ty: extends_type,
+        true_branch: recurse_with_inferred,
+        false_branch: parameter_type,
+        infer_count: 1,
+        distributive: true,
+        poisoned: false,
+    });
+    let aliases = PublishedAliases::from_terminals(FxHashMap::from_iter([(
+        alias,
+        PublishedAliasTerminal::Ready(PublishedAliasSurface::new(
+            alias,
+            template,
+            vec![parameter],
+            body,
+        )),
+    )]))
+    .expect("valid alias publication");
+    let published = PublishedAliasLookup {
+        classes: PublishedClasses::empty(),
+        aliases,
+    };
+    let nested_value = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", wk.string)],
+        ..ObjectType::default()
+    });
+    let application = interner.intern_instantiation(template, vec![(parameter, nested_value)]);
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    let outcome =
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .is_assignable(application, wk.string);
+    assert!(
+        matches!(outcome, RelationOutcome::Yes),
+        "{outcome:?}; application={application:?}; template={template:?}; body={body:?}; nested={nested_value:?}"
+    );
+}
+
+#[test]
+fn malformed_alias_publication_is_rejected_before_same_id_and_warm_cache_paths() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let alias = AliasId(91_102);
+    let other_alias = AliasId(91_103);
+    let template = interner.intern_alias_template(alias);
+    let other_template = interner.intern_alias_template(other_alias);
+    let application = interner.intern_instantiation(template, Vec::new());
+    let aliases = PublishedAliases::from_terminals(FxHashMap::from_iter([(
+        alias,
+        PublishedAliasTerminal::Ready(PublishedAliasSurface::new(
+            alias,
+            other_template,
+            Vec::new(),
+            wk.string,
+        )),
+    )]))
+    .expect("registry key and surface identity agree");
+    let published = PublishedAliasLookup {
+        classes: PublishedClasses::empty(),
+        aliases,
+    };
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    state.savepoint();
+    assert_eq!(
+        publication_exhaustion(&interner, &[application], &published, &mut state),
+        Some(Exhaustion::EvaluationInvalidNode { ty: application })
+    );
+    assert_eq!(state.alias_publication_len_for_test(), 1);
+    state.rollback();
+    assert_eq!(state.alias_publication_len_for_test(), 0);
+
+    for _ in 0..2 {
+        assert!(matches!(
+            SemanticQueryCoordinator::new(
+                &mut interner,
+                &published,
+                &mut state,
+                &mut next_type_param,
+            )
+            .is_assignable(application, application),
+            RelationOutcome::Exhausted(Exhaustion::EvaluationInvalidNode { ty })
+                if ty == application
+        ));
+        assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
+    }
+    assert_eq!(state.alias_publication_len_for_test(), 1);
+
+    let other_publication = PublishedAliasLookup {
+        classes: PublishedClasses::empty(),
+        aliases: PublishedAliases::empty(),
+    };
+    assert!(matches!(
+        SemanticQueryCoordinator::new(
+            &mut interner,
+            &other_publication,
+            &mut state,
+            &mut next_type_param,
+        )
+        .demand(wk.string),
+        DemandOutcome::Ready(_)
+    ));
+    assert_eq!(state.alias_publication_len_for_test(), 0);
+}
+
+#[test]
+fn malformed_alias_body_and_parameters_fail_preflight_without_indexing() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let parameter = TypeParamId(91_104);
+    let _parameter_type = interner.intern_type_param(parameter, "T");
+    let alias = AliasId(91_104);
+    let template = interner.intern_alias_template(alias);
+    let application = interner.intern_instantiation(template, vec![(parameter, wk.string)]);
+
+    for surface in [
+        PublishedAliasSurface::new(alias, template, vec![parameter], TypeId(u32::MAX)),
+        PublishedAliasSurface::new(alias, template, vec![parameter, parameter], wk.string),
+    ] {
+        let aliases = PublishedAliases::from_terminals(FxHashMap::from_iter([(
+            alias,
+            PublishedAliasTerminal::Ready(surface),
+        )]))
+        .expect("registry key and surface identity agree");
+        let published = PublishedAliasLookup {
+            classes: PublishedClasses::empty(),
+            aliases,
+        };
+        let mut state = SemanticQueryState::default();
+        let mut next_type_param = 0;
+        assert!(matches!(
+            SemanticQueryCoordinator::new(
+                &mut interner,
+                &published,
+                &mut state,
+                &mut next_type_param,
+            )
+            .is_assignable(application, wk.string),
+            RelationOutcome::Exhausted(Exhaustion::EvaluationInvalidNode { ty })
+                if ty == application
+        ));
+        assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
+    }
+}
+
+#[test]
+fn relation_only_alias_runaway_exhaustion_is_cold_warm_and_order_stable() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let count = MAX_ALIAS_PROJECTION_EXPANSIONS + 1;
+    let aliases = (0..count)
+        .map(|index| {
+            let ordinal = u32::try_from(index).expect("focused alias count fits u32");
+            AliasId(92_000 + ordinal)
+        })
+        .collect::<Vec<_>>();
+    let templates = aliases
+        .iter()
+        .map(|alias| interner.intern_alias_template(*alias))
+        .collect::<Vec<_>>();
+    let applications = templates
+        .iter()
+        .map(|template| interner.intern_instantiation(*template, Vec::new()))
+        .collect::<Vec<_>>();
+    let terminals = aliases
+        .iter()
+        .enumerate()
+        .map(|(index, alias)| {
+            let body = applications.get(index + 1).copied().unwrap_or(wk.string);
+            (
+                *alias,
+                PublishedAliasTerminal::Ready(PublishedAliasSurface::new(
+                    *alias,
+                    templates[index],
+                    Vec::new(),
+                    body,
+                )),
+            )
+        })
+        .collect::<FxHashMap<_, _>>();
+    let published = PublishedAliasLookup {
+        classes: PublishedClasses::empty(),
+        aliases: PublishedAliases::from_terminals(terminals).expect("valid alias chain"),
+    };
+    let root = applications[0];
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    for (source, target) in [(root, wk.number), (root, wk.number), (wk.number, root)] {
+        assert!(matches!(
+            SemanticQueryCoordinator::new(
+                &mut interner,
+                &published,
+                &mut state,
+                &mut next_type_param,
+            )
+            .is_assignable(source, target),
+            RelationOutcome::Exhausted(Exhaustion::AliasProjectionBudget)
+        ));
+        assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
+    }
 }
 
 fn object_with_irrelevant_recursive_computations(
@@ -1991,6 +2238,42 @@ fn planner_bounds_successive_evaluator_results_as_one_query() {
         DemandOutcome::Exhausted(Exhaustion::EvaluationBudget)
     ));
     assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
+}
+
+#[test]
+fn planner_allows_more_than_budget_independent_shallow_evaluations() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let mut roots = Vec::new();
+    for index in 0..=DEFAULT_STEP_BUDGET {
+        let selected = interner.intern_literal(LiteralValue::String(index.to_string()));
+        roots.push(interner.intern_conditional(ConditionalType {
+            check: wk.number,
+            extends_ty: wk.number,
+            true_branch: selected,
+            false_branch: wk.never,
+            infer_count: 0,
+            distributive: false,
+            poisoned: false,
+        }));
+    }
+    let published = PublishedClasses::empty();
+    let projection_memo = FxHashMap::default();
+    let evaluation_memo = FxHashMap::default();
+
+    let transaction = ProjectionPlanner::new(
+        &mut interner,
+        &published,
+        &projection_memo,
+        &evaluation_memo,
+        0,
+        false,
+        None,
+    )
+    .plan(&roots);
+
+    assert!(!transaction.planning_tainted);
+    assert_eq!(transaction.pending_evaluator_writes.len(), roots.len());
 }
 
 #[test]

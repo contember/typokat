@@ -22,6 +22,7 @@ use oxc_allocator::Allocator;
 use oxc_parser::Parser;
 use oxc_span::SourceType;
 use rustc_hash::FxHashSet;
+use typokat_types::alias_semantics::{PublishedAliasTerminal, PublishedAliasUnavailable};
 
 #[derive(Debug)]
 struct ReservedClassInterfaceHeaders {
@@ -377,7 +378,8 @@ fn free_type_params(store: &Store, root: TypeId) -> FxHashSet<TypeParamId> {
             | TypeTag::Enum
             | TypeTag::EnumMember
             | TypeTag::Infer
-            | TypeTag::MappedValue => {}
+            | TypeTag::MappedValue
+            | TypeTag::AliasTemplate => {}
         }
     }
 
@@ -418,6 +420,50 @@ fn assert_published_types_are_owner_closed(
             assert_closed(*ty);
         }
     }
+}
+
+#[test]
+fn unsupported_user_alias_body_never_publishes_a_ready_error_body() {
+    let source = "\
+type UnsupportedAlias<T> = T extends typeof unsupportedValue ? T : never;
+declare const value: UnsupportedAlias<string>;
+const incompatible: number = value;
+";
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+    assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+    let mut interner = Interner::with_intrinsics();
+
+    let result = check_program_with_publication_inspector(
+        &mut interner,
+        &parsed.program,
+        |binder, environment, interner| {
+            let group = binder
+                .type_groups
+                .iter()
+                .find(|group| group.name == "UnsupportedAlias")
+                .expect("unsupported user alias group");
+            assert!(matches!(
+                environment.groups().get(group.id),
+                Some(PublishedTypeGroupTerminal::Unavailable(_))
+            ));
+            let terminals = environment.aliases().owned_terminals();
+            assert!(terminals.iter().any(|(_, terminal)| matches!(
+                terminal,
+                PublishedAliasTerminal::Unavailable(PublishedAliasUnavailable::UnsupportedBody)
+            )));
+            assert!(!terminals.iter().any(|(_, terminal)| matches!(
+                terminal,
+                PublishedAliasTerminal::Ready(surface)
+                    if surface.body() == interner.well_known().error
+            )));
+        },
+    );
+
+    assert!(result
+        .incomplete
+        .iter()
+        .any(|incomplete| incomplete.id == "annotation-lower/type-query/typeof"));
 }
 
 #[test]
