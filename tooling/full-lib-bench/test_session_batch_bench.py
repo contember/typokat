@@ -690,6 +690,91 @@ class SessionBatchContractTests(unittest.TestCase):
             with self.subTest(label=label), self.assertRaises(batch.BatchContractError):
                 batch.verify_runner_linkage(broken, self.contract)
 
+    def test_single_project_linkage_recomputes_exact_raw_cold_projects(self) -> None:
+        evidence = single_project_evidence(self.contract)
+        receipt = batch.verify_single_project_linkage(evidence, self.contract)
+
+        self.assertEqual(
+            receipt,
+            {
+                "verdict": "LINKAGE-PASS",
+                "candidate_commit": "a" * 40,
+                "rows": ["fast-clean", "fast-errors", "collision", "fanout"],
+                "file_counts": [1, 1, 2, 32],
+                "oracle_sha256": single_project_oracle_sha256(self.contract),
+            },
+        )
+        self.assertNotEqual(receipt["verdict"], "GO")
+
+    def test_single_project_linkage_rejects_file_inventory_forgery(self) -> None:
+        mutations = {
+            "dropped": lambda files: files.pop(),
+            "reordered": lambda files: files.reverse(),
+            "duplicated": lambda files: files.__setitem__(1, copy.deepcopy(files[0])),
+            "renamed": lambda files: files[0].update(path="collision/renamed.ts"),
+            "concatenated": lambda files: (
+                files[0].update(source=files[0]["source"] + files[1]["source"]),
+                files[1].update(source=""),
+            ),
+        }
+        for label, mutate in mutations.items():
+            evidence = single_project_evidence(self.contract)
+            process = single_project_process(evidence, "typokat", "collision")
+            request = json.loads(process["request_stream"])
+            mutate(request["files"])
+            refresh_single_project_request(process, request)
+            with self.subTest(label=label), self.assertRaises(batch.BatchContractError):
+                batch.verify_single_project_linkage(evidence, self.contract)
+
+    def test_single_project_linkage_rejects_row_and_semantic_forgery(self) -> None:
+        missing = single_project_evidence(self.contract)
+        missing["tools"]["typokat"]["processes"].pop()
+        with self.assertRaisesRegex(batch.BatchContractError, "row|cardinality"):
+            batch.verify_single_project_linkage(missing, self.contract)
+
+        reordered = single_project_evidence(self.contract)
+        reordered["tools"]["tsgo"]["processes"].reverse()
+        with self.assertRaisesRegex(batch.BatchContractError, "row|order"):
+            batch.verify_single_project_linkage(reordered, self.contract)
+
+        for label, diagnostic in (
+            ("path", "renamed/main.ts:4:7:2322"),
+            ("column", "fast-errors/main.ts:4:8:2322"),
+        ):
+            evidence = single_project_evidence(self.contract)
+            process = single_project_process(evidence, "typokat", "fast-errors")
+            response = json.loads(process["response_stream"])
+            response["semantic"]["diagnostics"][0] = diagnostic
+            refresh_single_project_response(process, response)
+            refresh_single_project_claimed_oracle(evidence, "typokat")
+            with self.subTest(label=label), self.assertRaisesRegex(
+                batch.BatchContractError, "oracle|semantic|diagnostic"
+            ):
+                batch.verify_single_project_linkage(evidence, self.contract)
+
+    def test_single_project_linkage_requires_raw_data_and_same_runner(self) -> None:
+        no_raw_request = single_project_evidence(self.contract)
+        process = single_project_process(no_raw_request, "typokat", "fast-clean")
+        del process["request_stream"]
+        with self.assertRaises(batch.BatchContractError):
+            batch.verify_single_project_linkage(no_raw_request, self.contract)
+
+        no_raw_response = single_project_evidence(self.contract)
+        process = single_project_process(no_raw_response, "tsgo", "fast-clean")
+        del process["response_stream"]
+        with self.assertRaises(batch.BatchContractError):
+            batch.verify_single_project_linkage(no_raw_response, self.contract)
+
+        different_binary = single_project_evidence(self.contract)
+        different_binary["tools"]["typokat"]["batch_binary_sha256"] = "f" * 64
+        with self.assertRaisesRegex(batch.BatchContractError, "binary"):
+            batch.verify_single_project_linkage(different_binary, self.contract)
+
+        go_claim = single_project_evidence(self.contract)
+        go_claim["verdict"] = "GO"
+        with self.assertRaisesRegex(batch.BatchContractError, "GO|verdict"):
+            batch.verify_single_project_linkage(go_claim, self.contract)
+
     def test_raw_frame_outputs_drive_oracles_and_lifecycle_controls(self) -> None:
         evidence = raw_panel_evidence(1, 1.0, 100_000, 110_000)
         expected = expected_oracles(evidence)
@@ -985,6 +1070,167 @@ class SessionBatchContractTests(unittest.TestCase):
             red[key] = bad_value
             with self.assertRaises(batch.BatchContractError):
                 batch.validate_timing_preconditions(red, self.contract)
+
+
+def single_project_oracle_sha256(contract: dict[str, object]) -> str:
+    del contract
+    oracle = cold.load_oracles()["rows"]
+    rows = [
+        {
+            "case_id": case_id,
+            "semantic": {
+                "exit_code": oracle[case_id]["exit"],
+                "parse_errors": [],
+                "diagnostics": oracle[case_id]["diagnostics"],
+                "incompletes": [],
+            },
+        }
+        for case_id in ("fast-clean", "fast-errors", "collision", "fanout")
+    ]
+    return hashlib.sha256(
+        json.dumps(rows, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def single_project_evidence(contract: dict[str, object]) -> dict[str, object]:
+    oracle_digest = single_project_oracle_sha256(contract)
+    evidence = {
+        "schema": 1,
+        "verdict": "LINKAGE-PASS",
+        "candidate_commit": "a" * 40,
+        "cold_candidate_commit": "a" * 40,
+        "tools": {},
+    }
+    for tool, binary in (("typokat", "2" * 64), ("tsgo", "3" * 64)):
+        tool_evidence = {
+            "runner_source_sha256": ("4" if tool == "typokat" else "5") * 64,
+            "revision": (
+                "a" * 40
+                if tool == "typokat"
+                else contract["tsgo"]["upstream_revision"]
+            ),
+            "single_binary_sha256": binary,
+            "batch_binary_sha256": binary,
+            "single_oracle_sha256": oracle_digest,
+            "cold_oracle_sha256": oracle_digest,
+            "authenticated_cold_binary_sha256": (
+                None if tool == "typokat" else contract["tsgo"]["cold_binary_sha256"]
+            ),
+            "processes": [
+                make_single_project_process(tool, case_id, binary, ordinal, contract)
+                for ordinal, case_id in enumerate(contract["single_project"]["rows"])
+            ],
+        }
+        evidence["tools"][tool] = tool_evidence
+    return evidence
+
+
+def make_single_project_process(
+    tool: str,
+    case_id: str,
+    binary_sha256: str,
+    ordinal: int,
+    contract: dict[str, object],
+) -> dict[str, object]:
+    locked = cold.workload_lock()[case_id]
+    files = [
+        {
+            "path": entry.path,
+            "source": (cold.WORKLOADS / entry.path).read_text(encoding="utf-8"),
+        }
+        for entry in locked
+    ]
+    request = {"schema": 1, "case_id": case_id, "files": files}
+    oracle = cold.load_oracles()["rows"][case_id]
+    response = {
+        "schema": 1,
+        "tool": tool,
+        "case_id": case_id,
+        "file_count": len(files),
+        "semantic": {
+            "exit_code": oracle["exit"],
+            "parse_errors": [],
+            "diagnostics": list(oracle["diagnostics"]),
+            "incompletes": [],
+        },
+        "shared_product_identity": contract["profile"]["length_framed_sha256"],
+        "program_identity": f"{tool}-program-{ordinal}",
+        "checker_identity": f"{tool}-checker-{ordinal}",
+        "semantic_identity": f"{tool}-semantic-{ordinal}",
+        "retained_frame_state": 0,
+    }
+    if tool == "typokat":
+        response.update(
+            session_weak_alive_after=False,
+            cache_weak_alive_after=False,
+        )
+    else:
+        response["retained_frame_handles"] = 0
+    request_stream = json.dumps(request, sort_keys=True, separators=(",", ":")) + "\n"
+    response_stream = json.dumps(response, sort_keys=True, separators=(",", ":")) + "\n"
+    return {
+        "tool": tool,
+        "case_id": case_id,
+        "arguments": [contract["single_project"]["mode_argument"]],
+        "returncode": 0,
+        "stdout": response_stream,
+        "stderr": "",
+        "stdout_complete": True,
+        "stderr_complete": True,
+        "timed_out": False,
+        "process_group_empty": True,
+        "executable_before_sha256": binary_sha256,
+        "executable_after_sha256": binary_sha256,
+        "address_space_limit_bytes": contract["child_address_space_limit_bytes"],
+        "timeout_seconds": contract["single_project"]["timeout_seconds"],
+        "request_stream": request_stream,
+        "response_stream": response_stream,
+        "request_stream_sha256": hashlib.sha256(request_stream.encode()).hexdigest(),
+        "response_stream_sha256": hashlib.sha256(response_stream.encode()).hexdigest(),
+    }
+
+
+def single_project_process(
+    evidence: dict[str, object], tool: str, case_id: str
+) -> dict[str, object]:
+    return next(
+        process
+        for process in evidence["tools"][tool]["processes"]
+        if process["case_id"] == case_id
+    )
+
+
+def refresh_single_project_request(
+    process: dict[str, object], request: dict[str, object]
+) -> None:
+    raw = json.dumps(request, sort_keys=True, separators=(",", ":")) + "\n"
+    process["request_stream"] = raw
+    process["request_stream_sha256"] = hashlib.sha256(raw.encode()).hexdigest()
+
+
+def refresh_single_project_response(
+    process: dict[str, object], response: dict[str, object]
+) -> None:
+    raw = json.dumps(response, sort_keys=True, separators=(",", ":")) + "\n"
+    process["stdout"] = raw
+    process["response_stream"] = raw
+    process["response_stream_sha256"] = hashlib.sha256(raw.encode()).hexdigest()
+
+
+def refresh_single_project_claimed_oracle(
+    evidence: dict[str, object], tool: str
+) -> None:
+    rows = [
+        {
+            "case_id": process["case_id"],
+            "semantic": json.loads(process["response_stream"])["semantic"],
+        }
+        for process in evidence["tools"][tool]["processes"]
+    ]
+    digest = hashlib.sha256(
+        json.dumps(rows, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    evidence["tools"][tool]["single_oracle_sha256"] = digest
 
 
 def protocol_info(tool: str) -> dict[str, object]:
