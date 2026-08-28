@@ -304,6 +304,13 @@ class SessionBatchLiveCollectorTests(unittest.TestCase):
             with self.assertRaisesRegex(batch.BatchContractError, message):
                 collect._collect_live_preflight(lifecycle, self.contract)
 
+        for tool in ("typokat", "tsgo"):
+            profile = FakeLiveHost(self.contract)
+            profile.samples[tool]["frames"][0]["shared_product_identity"] = "0" * 64
+            refresh_responses(profile.samples[tool])
+            with self.assertRaisesRegex(batch.BatchContractError, "shared product identity"):
+                collect._collect_live_preflight(profile, self.contract)
+
     def test_preflight_rechecks_candidate_and_runners_before_publish(self) -> None:
         for mutation, message in (
             (
