@@ -21,13 +21,13 @@ func TestSingleProjectChecksOrderedCrossFileProgram(t *testing.T) {
 		Schema: protocolSchema,
 		CaseID: "cross-file",
 		Files: []singleProjectFile{
-			{Path: "pkg/value.ts", Source: "export const value: number = 1; // ž\n"},
 			{
 				Path: "pkg/use.ts",
 				Source: "import { value } from \"./value\";\n" +
 					"const result: string = value;\n\n\n\n\n\n\n\n" +
 					"const later: string = value;\n",
 			},
+			{Path: "pkg/value.ts", Source: "export const value: number = 1; // ž\n"},
 		},
 	}
 
