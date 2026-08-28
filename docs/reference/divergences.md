@@ -176,6 +176,16 @@ and validated the same way.
   truthfully includes the published `[Symbol.toStringTag]: "ArrayBuffer"` member. Its code and site
   are unchanged.
   <!-- div: id=lib/generic-iterator-heritage-variance dir=over scope=s-assignability owner=../backlog/75-scope-surface-tail.md witness=../../tests/fixtures/library-owned-records.txt -->
+- **Production library constraint validation adds 21 `TK2344` rows (over-report).** The
+  production-owned full-profile census checks supported generic applications through the ordinary
+  constraint relation, while TypeScript 6.0.3 accepts them through stronger generic-bound
+  reasoning. Backlog `37` owns that constraint-approximation gap.
+  <!-- div: id=lib/production-generic-constraint-census dir=over scope=a-generic-constraints owner=../backlog/37-constraint-approximation-deferred-args.md witness=../../tests/fixtures/library-owned-records.txt -->
+- **Production library heritage validation adds 34 `TK2430` rows (over-report).** The rows are
+  ordinary relation outcomes over supported interface surfaces, principally method variance and
+  overload-set compatibility where TypeScript 6.0.3 accepts the pinned profile. Backlog `75` owns
+  this remaining semantic-surface relation tail.
+  <!-- div: id=lib/production-heritage-relation-census dir=over scope=s-assignability owner=../backlog/75-scope-surface-tail.md witness=../../tests/fixtures/library-owned-records.txt -->
 - **Library-local iterator constructor name is normalized (cosmetic).** In an external module,
   `IteratorObjectConstructor` is correctly absent from the global type space. TypeScript 6.0.3
   reports suggestion-bearing `TS2552`; typokat reports the ordinary unresolved-name `TK2304`.

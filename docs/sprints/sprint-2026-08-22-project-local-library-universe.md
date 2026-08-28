@@ -676,3 +676,7 @@ numbers are invalid without `--no-smt`.
   semantics. WU4 deletes the audit, makes test-only `force_all` exercise the ordinary session and
   validation path, and reviews an attributed named diff from the 558-row starting census. →
   [ADR-0027](../decisions/0027-produce-library-census-from-the-project-publisher.md)
+- **2026-08-28 — production census rebaseline.** The production publisher reports 709 named rows
+  (`322` diagnostics, `387` incompletes), a reviewed `558 - 8 + 159` diff, and terminal receipt
+  `3,406 / 3,377 / 29`; the 709-row multiset becomes the sole authority. →
+  [ADR-0028](../decisions/0028-rebaseline-the-production-owned-library-census.md)

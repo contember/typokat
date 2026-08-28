@@ -1,7 +1,7 @@
 ---
 id: 0027
 title: Produce the library census from the project publisher
-status: accepted
+status: superseded by 0028
 date: 2026-08-27
 ---
 

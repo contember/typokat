@@ -42,4 +42,5 @@ a commit message suffices.
 - [`0024`](0024-represent-recursive-aliases-as-immutable-applications.md) — represent recursive aliases as immutable applications — accepted (2026-08-26)
 - [`0025`](0025-rebaseline-library-records-after-immutable-aliases.md) — rebaseline the named library-record census after immutable recursive aliases — superseded by 0026 (2026-08-27)
 - [`0026`](0026-retain-library-outcomes-after-alias-evaluation.md) — retain named library outcomes after complete recursive-alias evaluation — accepted (2026-08-27)
-- [`0027`](0027-produce-library-census-from-the-project-publisher.md) — produce the library census from the project-local production publisher — accepted (2026-08-27)
+- [`0027`](0027-produce-library-census-from-the-project-publisher.md) — produce the library census from the project-local production publisher — superseded by 0028 (2026-08-27)
+- [`0028`](0028-rebaseline-the-production-owned-library-census.md) — rebaseline the production-owned library census — accepted (2026-08-28)
