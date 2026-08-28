@@ -11,6 +11,7 @@ use crate::check::checker::project_local::{ObservationEventKindForTest, Observat
 use crate::frontend::{FileInput, ProjectRoot};
 use crate::library::{LibraryBaseProvider, LibraryInitError};
 use std::cell::Cell;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -173,6 +174,55 @@ fn project_local_shadow_preserves_operation_specific_initialization_precedence()
     .expect("Bundler reports malformed user input before product acquisition");
     assert_eq!(bundler_calls.get(), 0);
     assert_eq!(bundler.reports[0].output.parse_errors.len(), 1);
+}
+
+#[test]
+fn project_local_shadow_activates_supported_default_reexports_before_the_notice_gate() {
+    let project_directory = typokat_core::test_support::repository_root()
+        .join("tests/cases/b15_default_module_slots/22c_source_default_as_default");
+    let inputs = ["barrel.ts", "consumer.ts", "source.ts"]
+        .into_iter()
+        .map(|name| {
+            let path = project_directory.join(name);
+            FileInput {
+                name: path.to_string_lossy().into_owned(),
+                source: fs::read_to_string(path).expect("read default-reexport witness"),
+            }
+        })
+        .collect::<Vec<_>>();
+    let roots = inputs
+        .iter()
+        .map(|input| ProjectRoot {
+            identity: input.name.clone(),
+            path: PathBuf::from(&input.name),
+            exists: true,
+        })
+        .collect();
+    let provider = LibraryBaseProvider::new();
+    let acquisitions = Cell::new(0);
+    let run = check_project_local_shadow_for_test(
+        inputs,
+        ProjectLocalShadowRouteForTest::Bundler {
+            project_directory,
+            roots,
+        },
+        || {
+            acquisitions.set(acquisitions.get() + 1);
+            provider.declaration_product_for_shadow()
+        },
+    )
+    .expect("supported default re-export reaches the project-local session");
+
+    assert_eq!(acquisitions.get(), 1);
+    assert!(run.inventory.notices.is_empty(), "{:#?}", run.inventory);
+    assert_eq!(
+        run.reports
+            .iter()
+            .flat_map(|report| &report.output.diagnostics)
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>(),
+        ["TK2322"],
+    );
 }
 
 #[test]
