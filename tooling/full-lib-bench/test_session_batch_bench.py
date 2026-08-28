@@ -106,6 +106,18 @@ class SessionBatchContractTests(unittest.TestCase):
         self.assertTrue(
             self.contract["runner_linkage"]["require_tsgo_single_mode_match_cold_binary"]
         )
+        self.assertEqual(
+            self.contract["single_project"],
+            {
+                "mode_argument": "--single-project",
+                "rows": ["fast-clean", "fast-errors", "collision", "fanout"],
+                "file_counts": [1, 1, 2, 32],
+                "request_schema": 1,
+                "normalization": "relative-path:line:column:code",
+                "timeout_seconds": 60,
+                "require_exact_ordered_files": True,
+            },
+        )
 
     def test_lifecycle_contract_allows_only_immutable_products_to_cross_frames(self) -> None:
         lifecycle = self.contract["lifecycle"]

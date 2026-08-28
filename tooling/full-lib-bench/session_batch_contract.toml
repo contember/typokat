@@ -119,6 +119,15 @@ tsgo = ["reuse-checker", "retain-frame"]
 typokat = ["reuse-session", "retain-cache"]
 require_same_binary = true
 
+[single_project]
+mode_argument = "--single-project"
+rows = ["fast-clean", "fast-errors", "collision", "fanout"]
+file_counts = [1, 1, 2, 32]
+request_schema = 1
+normalization = "relative-path:line:column:code"
+timeout_seconds = 60
+require_exact_ordered_files = true
+
 [runner_linkage]
 require_same_runner_binary_for_single_and_batch = true
 require_single_mode_cross_tool_oracles = true
