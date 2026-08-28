@@ -1415,6 +1415,7 @@ pub struct ProjectSourceBindingRow {
 pub struct BoundProjectBinder {
     pub binder: Binder,
     library_product_map: Option<crate::binder::namespace::LibraryProductBinderMap>,
+    binder_external_effects: BTreeMap<UserRecordTicket, CandidateEffects>,
     pub module_scopes: Vec<ScopeId>,
     pub module_placeholders: Vec<Vec<ImportPlaceholder>>,
     pub project_sources: Vec<ProjectSourceBindingRow>,
@@ -2604,6 +2605,7 @@ where
                     source_reexports,
                     module_index: unit_index,
                     diagnostic_disposition: ExternalDiagnosticDisposition::Emit,
+                    admission: SourceReexportAdmission::LegacyUnadmitted,
                 },
             )
             .map_err(|error| match error {
@@ -4413,6 +4415,31 @@ pub fn bind_library_product_project_programs(
     )
 }
 
+/// Bind a prepared project while preserving the legacy unadmitted module surface.
+#[cfg(any(test, feature = "test-utils"))]
+pub(in crate::check::checker) fn bind_library_product_project_programs_unadmitted_for_test(
+    product: &typokat_library_product::LibraryDeclarationProduct,
+    units: &[ProjectProgram<'_>],
+) -> Result<
+    (
+        Vec<crate::binder::bind::LibraryBinderUnit>,
+        BoundProjectBinder,
+    ),
+    LibraryProductProjectBindingError,
+> {
+    let instantiated = ProjectBinderBuilder::from_library_declaration_product(product)
+        .map_err(LibraryProductProjectBindingError::InvalidProduct)?;
+    bind_library_product_project_programs_with_builder_and_admission(
+        units,
+        instantiated,
+        ProjectModuleAdmission {
+            source_reexports: None,
+            default_module: None,
+        },
+        AuthoritativeProjectBinderFinish::ProductUnadmittedForTest,
+    )
+}
+
 #[cfg(any(test, feature = "test-utils"))]
 pub fn bind_library_product_project_programs_perturbed_for_test(
     product: &typokat_library_product::LibraryDeclarationProduct,
@@ -4480,29 +4507,70 @@ fn bind_library_product_project_programs_with_builder<'ast>(
     ),
     LibraryProductProjectBindingError,
 > {
+    let source_reexport_plan = build_validated_source_reexport_plan(source_reexports, units)
+        .map_err(|error| LibraryProductProjectBindingError::Binding(error.message().to_owned()))?;
+    let default_module_plan = build_validated_default_module_plan(default_modules, units)
+        .map_err(|error| LibraryProductProjectBindingError::Binding(error.message().to_owned()))?;
+    bind_library_product_project_programs_with_builder_and_admission(
+        units,
+        (builder, library_units),
+        ProjectModuleAdmission {
+            source_reexports: Some(&source_reexport_plan),
+            default_module: Some(&default_module_plan),
+        },
+        AuthoritativeProjectBinderFinish::Product,
+    )
+}
+
+fn bind_library_product_project_programs_with_builder_and_admission<'ast>(
+    units: &[ProjectProgram<'ast>],
+    (builder, library_units): (
+        ProjectBinderBuilder<'ast>,
+        Vec<crate::binder::bind::LibraryBinderUnit>,
+    ),
+    admission: ProjectModuleAdmission<'_>,
+    finish: AuthoritativeProjectBinderFinish,
+) -> Result<
+    (
+        Vec<crate::binder::bind::LibraryBinderUnit>,
+        BoundProjectBinder,
+    ),
+    LibraryProductProjectBindingError,
+> {
     let manifests = units
         .iter()
         .map(|unit| SourceDeclarationManifest::build(unit.program))
         .collect::<Vec<_>>();
     let source_offset = builder.project_source_offset();
-    let lexical_events = LexicalReservations::<UserRecordTicket>::default();
+    let mut binding_event_store = EventStore::default();
+    let mut lexical_events = LexicalReservations::<UserRecordTicket>::default();
+    for (slot, (unit, manifest)) in units.iter().zip(&manifests).enumerate() {
+        debug_assert_eq!(unit.unit_slot.index(), slot);
+        lexical_events
+            .reserve_user_continuation_program_with_declaration_manifest(
+                unit.module_ordinal,
+                unit.unit_slot,
+                unit.program,
+                manifest,
+                unit.compilation_unit.binding,
+                &mut binding_event_store,
+            )
+            .map_err(|error| {
+                LibraryProductProjectBindingError::Binding(format!(
+                    "project binding lexical reservation failed: {error:?}"
+                ))
+            })?;
+    }
     let mut external_effects = BTreeMap::<UserRecordTicket, CandidateEffects>::new();
-    let source_reexport_plan = build_validated_source_reexport_plan(source_reexports, units)
-        .map_err(|error| LibraryProductProjectBindingError::Binding(error.message().to_owned()))?;
-    let default_module_plan = build_validated_default_module_plan(default_modules, units)
-        .map_err(|error| LibraryProductProjectBindingError::Binding(error.message().to_owned()))?;
-    let bound = bind_authoritative_project_core_with_module_admission(
+    let mut bound = bind_authoritative_project_core_with_module_admission(
         builder,
         units,
         &manifests,
-        ProjectModuleAdmission {
-            source_reexports: Some(&source_reexport_plan),
-            default_module: Some(&default_module_plan),
-        },
+        admission,
         source_offset,
         &lexical_events,
         &mut external_effects,
-        AuthoritativeProjectBinderFinish::Product,
+        finish,
     )
     .map_err(|error| match error {
         ProjectBindingCoreError::Structural(error) => {
@@ -4513,6 +4581,7 @@ fn bind_library_product_project_programs_with_builder<'ast>(
             LibraryProductProjectBindingError::Binding(error)
         }
     })?;
+    bound.binder_external_effects = external_effects;
     Ok((library_units, bound))
 }
 
@@ -4557,13 +4626,48 @@ enum AuthoritativeProjectBinderFinish {
     #[cfg(any(test, feature = "test-utils"))]
     DeclarationOracle,
     Product,
+    #[cfg(any(test, feature = "test-utils"))]
+    ProductUnadmittedForTest,
     Continuation,
+}
+
+impl AuthoritativeProjectBinderFinish {
+    const fn rejects_structural_diagnostics(self) -> bool {
+        let rejects = false;
+        #[cfg(any(test, feature = "test-utils"))]
+        let rejects = rejects || matches!(self, Self::DeclarationOracle);
+        rejects
+    }
+
+    const fn source_reexport_admission(self) -> SourceReexportAdmission {
+        let required = matches!(self, Self::Product);
+        #[cfg(any(test, feature = "test-utils"))]
+        let required = required || matches!(self, Self::DeclarationOracle);
+        if required {
+            SourceReexportAdmission::Required
+        } else {
+            SourceReexportAdmission::LegacyUnadmitted
+        }
+    }
+
+    const fn finishes_library_product_project(self) -> bool {
+        let finishes = matches!(self, Self::Product);
+        #[cfg(any(test, feature = "test-utils"))]
+        let finishes = finishes || matches!(self, Self::ProductUnadmittedForTest);
+        finishes
+    }
 }
 
 #[derive(Clone, Copy)]
 enum ExternalDiagnosticDisposition {
     Emit,
     RejectTyped,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SourceReexportAdmission {
+    Required,
+    LegacyUnadmitted,
 }
 
 enum ProjectBindingCoreError<ReportingError> {
@@ -4704,11 +4808,7 @@ where
     let mut module_scopes = Vec::with_capacity(units.len());
     let mut module_placeholders = Vec::with_capacity(units.len());
     let mut exports: Vec<ExportSurface> = Vec::with_capacity(units.len());
-    let reject_structural_diagnostics = matches!(finish, AuthoritativeProjectBinderFinish::Product);
-    #[cfg(any(test, feature = "test-utils"))]
-    let reject_structural_diagnostics = reject_structural_diagnostics
-        || matches!(finish, AuthoritativeProjectBinderFinish::DeclarationOracle);
-    let diagnostic_disposition = if reject_structural_diagnostics {
+    let diagnostic_disposition = if finish.rejects_structural_diagnostics() {
         ExternalDiagnosticDisposition::RejectTyped
     } else {
         ExternalDiagnosticDisposition::Emit
@@ -4751,6 +4851,7 @@ where
                 source_reexports,
                 module_index: unit_index,
                 diagnostic_disposition,
+                admission: finish.source_reexport_admission(),
             },
         )?;
         if let Some(default_export) = default_module
@@ -4768,27 +4869,31 @@ where
         exports.push(surface);
     }
     let final_module = module_scopes.last().copied();
-    let (binder, library_product_map) = match finish {
-        #[cfg(any(test, feature = "test-utils"))]
-        AuthoritativeProjectBinderFinish::Fresh => {
-            (builder.finish(final_module.unwrap_or(ScopeId(0))), None)
+    let (binder, library_product_map) = if finish.finishes_library_product_project() {
+        let (binder, map) = builder
+            .finish_library_product_project(final_module)
+            .map_err(|error| ProjectBindingCoreError::Binding(error.to_string()))?;
+        (binder, Some(map))
+    } else {
+        match finish {
+            #[cfg(any(test, feature = "test-utils"))]
+            AuthoritativeProjectBinderFinish::Fresh => {
+                (builder.finish(final_module.unwrap_or(ScopeId(0))), None)
+            }
+            #[cfg(any(test, feature = "test-utils"))]
+            AuthoritativeProjectBinderFinish::DeclarationOracle => {
+                (builder.finish(final_module.unwrap_or(ScopeId(0))), None)
+            }
+            AuthoritativeProjectBinderFinish::Continuation => (
+                builder
+                    .finish_frozen_library_continuation(final_module)
+                    .map_err(|error| ProjectBindingCoreError::Binding(error.to_owned()))?,
+                None,
+            ),
+            AuthoritativeProjectBinderFinish::Product => unreachable!(),
+            #[cfg(any(test, feature = "test-utils"))]
+            AuthoritativeProjectBinderFinish::ProductUnadmittedForTest => unreachable!(),
         }
-        #[cfg(any(test, feature = "test-utils"))]
-        AuthoritativeProjectBinderFinish::DeclarationOracle => {
-            (builder.finish(final_module.unwrap_or(ScopeId(0))), None)
-        }
-        AuthoritativeProjectBinderFinish::Product => {
-            let (binder, map) = builder
-                .finish_library_product_project(final_module)
-                .map_err(|error| ProjectBindingCoreError::Binding(error.to_string()))?;
-            (binder, Some(map))
-        }
-        AuthoritativeProjectBinderFinish::Continuation => (
-            builder
-                .finish_frozen_library_continuation(final_module)
-                .map_err(|error| ProjectBindingCoreError::Binding(error.to_owned()))?,
-            None,
-        ),
     };
     let mut project_sources = units
         .iter()
@@ -4823,6 +4928,7 @@ where
     Ok(BoundProjectBinder {
         binder,
         library_product_map,
+        binder_external_effects: BTreeMap::new(),
         module_scopes,
         module_placeholders,
         project_sources,
@@ -5451,9 +5557,10 @@ pub(in crate::check::checker) fn check_bound_project_local_programs<'a, 'ast>(
         binder,
         module_scopes,
         module_placeholders,
+        binder_external_effects,
         ..
     } = bound;
-    let mut external_effects: BTreeMap<UserRecordTicket, CandidateEffects> = BTreeMap::new();
+    let mut external_effects = binder_external_effects;
     let mut declaration_fragment_batch =
         decls::inventory::CanonicalFragmentAuthenticationBatch::default();
     let declaration_inventories = module_scopes
@@ -6026,10 +6133,7 @@ where
                 .source_reexports
                 .and_then(|plan| plan.declaration(projection.module_index, export.span.start))
             else {
-                if matches!(
-                    projection.diagnostic_disposition,
-                    ExternalDiagnosticDisposition::RejectTyped
-                ) {
+                if projection.admission == SourceReexportAdmission::Required {
                     return Err(ProjectBindingCoreError::Structural(
                         ProjectDeclarationStructuralError::MissingSourceReexportAdmission {
                             module_ordinal,
@@ -6161,6 +6265,7 @@ struct SourceReexportProjectionContext<'a, 'e> {
     source_reexports: Option<&'a ValidatedSourceReexportPlan<'e>>,
     module_index: usize,
     diagnostic_disposition: ExternalDiagnosticDisposition,
+    admission: SourceReexportAdmission,
 }
 
 fn collect_declaration_export<Ticket: UserReportingOwner>(

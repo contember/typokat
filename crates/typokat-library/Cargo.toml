@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [features]
+project-local-driver-shadow = []
 library-record-census = [
     "typokat-binder/test-utils",
     "typokat-check/test-utils",

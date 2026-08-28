@@ -17,6 +17,10 @@ use crate::frontend::{
     AccountedProjectProduct, AuxiliarySourceInput, DeferredProjectFrontendError, FileInput,
     ProjectFrontendRun, ProjectModuleInventory, ProjectProgram, ProjectResolutionMode, ProjectRoot,
 };
+#[cfg(test)]
+use crate::frontend::{
+    run_prepared_project_frontend_with_resolution_mode, PreparedProjectPolicyForTest,
+};
 use crate::library::{
     FrozenLibraryBase, LibraryBaseProvider, LibraryInitError, RoutedLibraryProject,
     RoutedPrivateExecution, RoutedPrivateLibraryProject,
@@ -173,6 +177,112 @@ pub struct FileReport {
 pub struct ProjectCheckRun {
     pub reports: Vec<FileReport>,
     pub inventory: ProjectModuleInventory,
+}
+
+#[cfg(test)]
+enum ProjectLocalShadowRouteForTest {
+    RepeatedProject,
+    Standalone,
+    Bundler {
+        project_directory: PathBuf,
+        roots: Vec<ProjectRoot>,
+    },
+}
+
+#[cfg(test)]
+fn check_project_local_shadow_for_test<Acquire>(
+    inputs: Vec<FileInput>,
+    route: ProjectLocalShadowRouteForTest,
+    acquire: Acquire,
+) -> Result<ProjectCheckRun, DriverError>
+where
+    Acquire: FnOnce() -> Result<
+        Arc<typokat_library_product::LibraryDeclarationProduct>,
+        Arc<LibraryInitError>,
+    >,
+{
+    let (resolution_mode, policy, product, mut acquire) = match route {
+        ProjectLocalShadowRouteForTest::RepeatedProject => (
+            ProjectResolutionMode::ExplicitFileList,
+            PreparedProjectPolicyForTest::RepeatedProject,
+            Some(acquire()?),
+            None,
+        ),
+        ProjectLocalShadowRouteForTest::Standalone => (
+            ProjectResolutionMode::ExplicitFileList,
+            PreparedProjectPolicyForTest::StandaloneExplicit,
+            None,
+            Some(acquire),
+        ),
+        ProjectLocalShadowRouteForTest::Bundler {
+            project_directory,
+            roots,
+        } => (
+            ProjectResolutionMode::BundlerProject {
+                project_directory,
+                roots,
+            },
+            PreparedProjectPolicyForTest::Bundler,
+            None,
+            Some(acquire),
+        ),
+    };
+    if inputs.is_empty() {
+        return Ok(ProjectCheckRun {
+            reports: Vec::new(),
+            inventory: ProjectModuleInventory::default(),
+        });
+    }
+    let run = run_prepared_project_frontend_with_resolution_mode(
+        inputs,
+        resolution_mode,
+        policy,
+        move |programs, source_reexports, default_modules| {
+            let product = match product {
+                Some(product) => Ok(product),
+                None => {
+                    let acquire = acquire
+                        .take()
+                        .expect("project-local shadow acquisition is consumed once");
+                    acquire()
+                }
+            };
+            let project_units_by_slot = programs
+                .iter()
+                .map(|program| program.module_ordinal.index())
+                .collect::<Vec<_>>();
+            let results = product.map_err(DriverError::from).and_then(|product| {
+                let session = crate::check::checker::project_local::CheckerSession::new(product);
+                let checked = match policy {
+                    PreparedProjectPolicyForTest::RepeatedProject
+                    | PreparedProjectPolicyForTest::StandaloneExplicit => {
+                        session.check_project_programs_unadmitted_for_test(programs)
+                    }
+                    PreparedProjectPolicyForTest::Bundler => {
+                        session.check_project_programs(programs, source_reexports, default_modules)
+                    }
+                };
+                checked.map_err(|error| {
+                    check_failure(format!("project-local project check failed: {error}"))
+                })
+            });
+            (project_units_by_slot, results)
+        },
+    );
+    if let Some(error) = run.preparation_error {
+        return Err(check_failure(format!("project inventory failed: {error}")));
+    }
+    let inventory = run.inventory;
+    let mut reports = match run.product {
+        None => parse_reports_from_frontend_run(run.inputs, run.parse_errors),
+        Some((project_units_by_slot, results)) => {
+            let results = results?;
+            assemble_project_reports(run.inputs, run.parse_errors, project_units_by_slot, results)
+                .map_err(|error| check_failure(error.message().to_owned()))?
+        }
+    };
+    attach_project_notices(&mut reports, &inventory.notices);
+    Ok(ProjectCheckRun { reports, inventory })
 }
 
 /// Check many files in parallel, with an independent allocator/interner per file.

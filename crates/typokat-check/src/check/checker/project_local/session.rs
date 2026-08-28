@@ -4,6 +4,8 @@ use super::cache::DurableCache;
 use super::entry::run_ordinary_project_local_semantics;
 use super::observation;
 use super::project_local_pass_port::Interner;
+#[cfg(any(test, feature = "test-utils"))]
+use crate::check::checker::bind_library_product_project_programs_unadmitted_for_test;
 use crate::check::checker::{
     bind_library_product_project_programs, CheckResult, LibraryProductProjectBindingError,
 };
@@ -48,6 +50,19 @@ impl CheckerSession {
             default_modules,
         )
         .map_err(CheckerSessionError::Binding)?;
+        run_ordinary_project_local_semantics(&self.product, library_units, bound, programs)
+            .map_err(|error| CheckerSessionError::Semantic(error.to_string()))
+    }
+
+    /// Check a shadow project without admitting module export products.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn check_project_programs_unadmitted_for_test<'ast>(
+        self,
+        programs: &[ProjectProgram<'ast>],
+    ) -> Result<Vec<CheckResult>, CheckerSessionError> {
+        let (library_units, bound) =
+            bind_library_product_project_programs_unadmitted_for_test(&self.product, programs)
+                .map_err(CheckerSessionError::Binding)?;
         run_ordinary_project_local_semantics(&self.product, library_units, bound, programs)
             .map_err(|error| CheckerSessionError::Semantic(error.to_string()))
     }

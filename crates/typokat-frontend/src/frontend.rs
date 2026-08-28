@@ -872,6 +872,7 @@ pub struct ParseOnlyProjectRun {
 pub struct PreparedProjectRun<Product> {
     pub inputs: Vec<FileInput>,
     pub parse_errors: Vec<Vec<String>>,
+    pub inventory: ProjectModuleInventory,
     pub preparation_error: Option<ProjectInventoryError>,
     pub product: Option<Product>,
 }
@@ -890,8 +891,41 @@ pub fn run_prepared_project_frontend<Product>(
         &DefaultModuleCandidates,
     ) -> Product,
 ) -> PreparedProjectRun<Product> {
-    run_prepared_project_frontend_with_parse_work(
+    run_prepared_project_frontend_with_parse_work_inner(
         inputs,
+        ProjectResolutionMode::ExplicitFileList,
+        PreparedProjectPolicy::PreparedProject,
+        |units, source_reexports, default_modules, _| {
+            consume(units, source_reexports, default_modules)
+        },
+    )
+}
+
+/// Preparation policy for the project-local driver shadow.
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PreparedProjectPolicyForTest {
+    RepeatedProject,
+    StandaloneExplicit,
+    Bundler,
+}
+
+/// Parse and account one project under the selected shadow policy.
+#[cfg(any(test, feature = "test-utils"))]
+pub fn run_prepared_project_frontend_with_resolution_mode<Product>(
+    inputs: Vec<FileInput>,
+    resolution_mode: ProjectResolutionMode,
+    policy: PreparedProjectPolicyForTest,
+    consume: impl for<'ast> FnOnce(
+        &[ProjectProgram<'ast>],
+        &AdmittedSourceReexports,
+        &DefaultModuleCandidates,
+    ) -> Product,
+) -> PreparedProjectRun<Product> {
+    run_prepared_project_frontend_with_parse_work_inner(
+        inputs,
+        resolution_mode,
+        PreparedProjectPolicy::from(policy),
         |units, source_reexports, default_modules, _| {
             consume(units, source_reexports, default_modules)
         },
@@ -901,6 +935,47 @@ pub fn run_prepared_project_frontend<Product>(
 /// Parse a prepared project and expose the parser-entry receipt to its AST owner.
 pub fn run_prepared_project_frontend_with_parse_work<Product>(
     inputs: Vec<FileInput>,
+    consume: impl for<'ast> FnOnce(
+        &[ProjectProgram<'ast>],
+        &AdmittedSourceReexports,
+        &DefaultModuleCandidates,
+        PreparedProjectParseWork,
+    ) -> Product,
+) -> PreparedProjectRun<Product> {
+    run_prepared_project_frontend_with_parse_work_inner(
+        inputs,
+        ProjectResolutionMode::ExplicitFileList,
+        PreparedProjectPolicy::PreparedProject,
+        consume,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum PreparedProjectPolicy {
+    PreparedProject,
+    #[cfg(any(test, feature = "test-utils"))]
+    RepeatedProject,
+    #[cfg(any(test, feature = "test-utils"))]
+    StandaloneExplicit,
+    #[cfg(any(test, feature = "test-utils"))]
+    Bundler,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl From<PreparedProjectPolicyForTest> for PreparedProjectPolicy {
+    fn from(policy: PreparedProjectPolicyForTest) -> Self {
+        match policy {
+            PreparedProjectPolicyForTest::RepeatedProject => Self::RepeatedProject,
+            PreparedProjectPolicyForTest::StandaloneExplicit => Self::StandaloneExplicit,
+            PreparedProjectPolicyForTest::Bundler => Self::Bundler,
+        }
+    }
+}
+
+fn run_prepared_project_frontend_with_parse_work_inner<Product>(
+    inputs: Vec<FileInput>,
+    resolution_mode: ProjectResolutionMode,
+    policy: PreparedProjectPolicy,
     consume: impl for<'ast> FnOnce(
         &[ProjectProgram<'ast>],
         &AdmittedSourceReexports,
@@ -924,66 +999,165 @@ pub fn run_prepared_project_frontend_with_parse_work<Product>(
     let rejected = parsed
         .iter()
         .any(|parsed| parsed.panicked || !parsed.diagnostics.is_empty());
-    let (preparation_error, product) = if rejected {
-        (None, None)
+    let (inventory, preparation_error, product) = if rejected {
+        (
+            ProjectModuleInventory {
+                parse_errors: structured_parse_error_identities(&inputs, &parsed),
+                ..ProjectModuleInventory::default()
+            },
+            None,
+            None,
+        )
     } else {
         let programs = parsed
             .iter()
             .map(|parsed| &parsed.program)
             .collect::<Vec<_>>();
-        match account_project_modules(
-            &inputs,
-            &programs,
-            &ProjectResolutionMode::ExplicitFileList,
-            SourceReexportAccounting::PreparedProject,
-            DefaultCandidateAccounting::CollectCandidate,
-        ) {
-            Ok(mut plan) => match certified_default_module_candidates(&inputs, &plan) {
-                Ok(default_modules) => match candidate_original_order(&inputs, &default_modules) {
-                    Ok(order) => match activate_default_module_inventory(
-                        &inputs,
-                        &plan.source_reexports,
-                        &default_modules,
-                        &mut plan.inventory,
-                    ) {
-                        Ok(()) => match finalize_admitted_source_reexports_in_order(
+        match policy {
+            #[cfg(any(test, feature = "test-utils"))]
+            PreparedProjectPolicy::RepeatedProject => {
+                let units = resolved_project_programs(&inputs, &programs);
+                let admitted = AdmittedSourceReexports::empty();
+                let default_modules = empty_default_module_candidates(&units);
+                (
+                    ProjectModuleInventory::default(),
+                    None,
+                    Some(consume(&units, &admitted, &default_modules, parse_work)),
+                )
+            }
+            #[cfg(any(test, feature = "test-utils"))]
+            PreparedProjectPolicy::StandaloneExplicit => {
+                match account_project_modules(
+                    &inputs,
+                    &programs,
+                    &resolution_mode,
+                    SourceReexportAccounting::FrozenUnsupported,
+                    DefaultCandidateAccounting::FrozenUnsupported,
+                ) {
+                    Ok(plan) => {
+                        let AccountedModulePlan {
+                            inventory,
+                            paths,
+                            raw_imports,
+                            source_reexports,
+                            admitted_source_reexports: _,
+                            default_module_authority: _,
+                        } = plan;
+                        let units = project_programs_from_accounted_imports_with_reexports(
                             &inputs,
-                            &plan.paths,
-                            &plan.source_reexports,
-                            order,
-                        ) {
-                            Ok(finalized) => {
-                                let units = project_programs_from_accounted_imports_in_order(
+                            &programs,
+                            paths,
+                            raw_imports,
+                            &source_reexports.dependency_edges,
+                        );
+                        let admitted = AdmittedSourceReexports::empty();
+                        let default_modules = empty_default_module_candidates(&units);
+                        (
+                            inventory,
+                            None,
+                            Some(consume(&units, &admitted, &default_modules, parse_work)),
+                        )
+                    }
+                    Err(error) => (ProjectModuleInventory::default(), Some(error), None),
+                }
+            }
+            _ => {
+                let source_reexport_accounting = match policy {
+                    PreparedProjectPolicy::PreparedProject => {
+                        SourceReexportAccounting::PreparedProject
+                    }
+                    #[cfg(any(test, feature = "test-utils"))]
+                    PreparedProjectPolicy::Bundler => SourceReexportAccounting::AdmitBundler,
+                    #[cfg(any(test, feature = "test-utils"))]
+                    PreparedProjectPolicy::RepeatedProject
+                    | PreparedProjectPolicy::StandaloneExplicit => unreachable!(),
+                };
+                match account_project_modules(
+                    &inputs,
+                    &programs,
+                    &resolution_mode,
+                    source_reexport_accounting,
+                    DefaultCandidateAccounting::CollectCandidate,
+                ) {
+                    Ok(mut plan) => match certified_default_module_candidates(&inputs, &plan) {
+                        Ok(default_modules) => {
+                            match candidate_original_order(&inputs, &default_modules) {
+                                Ok(order) => match activate_default_module_inventory(
                                     &inputs,
-                                    &programs,
-                                    plan.paths,
-                                    plan.raw_imports,
-                                    &finalized.order,
-                                );
-                                let admitted = AdmittedSourceReexports {
-                                    declarations: finalized.admitted,
-                                };
-                                (
-                                    None,
-                                    Some(consume(&units, &admitted, &default_modules, parse_work)),
-                                )
+                                    &plan.source_reexports,
+                                    &default_modules,
+                                    &mut plan.inventory,
+                                ) {
+                                    #[cfg(any(test, feature = "test-utils"))]
+                                    Ok(())
+                                        if matches!(policy, PreparedProjectPolicy::Bundler)
+                                            && plan.inventory.blocks_semantics() =>
+                                    {
+                                        (plan.inventory, None, None)
+                                    }
+                                    Ok(()) => match finalize_admitted_source_reexports_in_order(
+                                        &inputs,
+                                        &plan.paths,
+                                        &plan.source_reexports,
+                                        order,
+                                    ) {
+                                        Ok(finalized) => {
+                                            let units =
+                                                project_programs_from_accounted_imports_in_order(
+                                                    &inputs,
+                                                    &programs,
+                                                    plan.paths,
+                                                    plan.raw_imports,
+                                                    &finalized.order,
+                                                );
+                                            let admitted = AdmittedSourceReexports {
+                                                declarations: finalized.admitted,
+                                            };
+                                            (
+                                                plan.inventory,
+                                                None,
+                                                Some(consume(
+                                                    &units,
+                                                    &admitted,
+                                                    &default_modules,
+                                                    parse_work,
+                                                )),
+                                            )
+                                        }
+                                        Err(error) => (plan.inventory, Some(error), None),
+                                    },
+                                    Err(error) => (plan.inventory, Some(error), None),
+                                },
+                                Err(error) => (plan.inventory, Some(error), None),
                             }
-                            Err(error) => (Some(error), None),
-                        },
-                        Err(error) => (Some(error), None),
+                        }
+                        Err(error) => (plan.inventory, Some(error), None),
                     },
-                    Err(error) => (Some(error), None),
-                },
-                Err(error) => (Some(error), None),
-            },
-            Err(error) => (Some(error), None),
+                    Err(error) => (ProjectModuleInventory::default(), Some(error), None),
+                }
+            }
         }
     };
     PreparedProjectRun {
         inputs,
         parse_errors,
+        inventory,
         preparation_error,
         product,
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn empty_default_module_candidates(units: &[ProjectProgram<'_>]) -> DefaultModuleCandidates {
+    DefaultModuleCandidates {
+        imports: Vec::new(),
+        exports: Vec::new(),
+        dependency_order: units
+            .iter()
+            .map(|unit| unit.normalized_path.clone())
+            .collect(),
+        dependency_edges: Vec::new(),
+        first_cycle: None,
     }
 }
 

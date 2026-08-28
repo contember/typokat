@@ -125,6 +125,10 @@ pub struct LibraryBaseProvider {
             Arc<super::declaration_product::LibraryDeclarationProductBuildError>,
         >,
     >,
+    #[cfg(feature = "project-local-driver-shadow")]
+    shadow_declaration_product: OnceLock<
+        Result<Arc<typokat_library_product::LibraryDeclarationProduct>, Arc<LibraryInitError>>,
+    >,
     attempts: AtomicU64,
     publications: AtomicU64,
     compile_us: AtomicU64,
@@ -238,6 +242,8 @@ impl LibraryBaseProvider {
         Self {
             result: OnceLock::new(),
             declaration_product: OnceLock::new(),
+            #[cfg(feature = "project-local-driver-shadow")]
+            shadow_declaration_product: OnceLock::new(),
             attempts: AtomicU64::new(0),
             publications: AtomicU64::new(0),
             compile_us: AtomicU64::new(0),
@@ -266,6 +272,37 @@ impl LibraryBaseProvider {
                         .saturating_add(1),
                 );
                 super::declaration_product::build_packaged_declaration_product().map_err(Arc::new)
+            })
+            .clone()
+    }
+
+    #[cfg(feature = "project-local-driver-shadow")]
+    #[doc(hidden)]
+    pub fn declaration_product_for_shadow(
+        &self,
+    ) -> Result<Arc<typokat_library_product::LibraryDeclarationProduct>, Arc<LibraryInitError>>
+    {
+        self.shadow_declaration_product
+            .get_or_init(|| {
+                self.declaration_product().map_err(|error| {
+                    let (stage, cause) = match error.as_ref() {
+                        super::declaration_product::LibraryDeclarationProductBuildError::Profile(
+                            _,
+                        ) => (
+                            LibraryInitStage::ProfileLoad,
+                            LibraryInitCause::ProfileRejected {
+                                message: error.to_string(),
+                            },
+                        ),
+                        _ => (
+                            LibraryInitStage::Compile,
+                            LibraryInitCause::CompilationFailed {
+                                message: error.to_string(),
+                            },
+                        ),
+                    };
+                    Arc::new(LibraryInitError::new(stage, cause))
+                })
             })
             .clone()
     }

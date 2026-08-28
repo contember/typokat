@@ -1281,6 +1281,7 @@ dependencies = [
  "typokat-diagnostics",
  "typokat-frontend",
  "typokat-library",
+ "typokat-library-product",
  "typokat-relate",
  "typokat-types",
 ]

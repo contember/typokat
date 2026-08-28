@@ -19,6 +19,8 @@ typokat-core = { workspace = true, features = ["test-utils"] }
 typokat-relate = { workspace = true, features = ["test-utils"] }
 typokat-types = { workspace = true, features = ["test-utils"] }
 typokat-frontend = { workspace = true, features = ["test-utils"] }
+typokat-library = { workspace = true, features = ["project-local-driver-shadow"] }
+typokat-library-product.workspace = true
 
 [lints]
 workspace = true
