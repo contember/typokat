@@ -683,6 +683,15 @@ class SessionBatchContractTests(unittest.TestCase):
             typokat_duration_ns=12_000_000_000,
         )
         self.assertFalse(batch.panel_passes(too_large, self.contract))
+        equal_old_peak = verified_panel(
+            687,
+            1.2,
+            self.contract["current_typokat_baseline"]["peak_rss_bytes"] // 1024,
+            150_000,
+            self.contract,
+            typokat_duration_ns=12_000_000_000,
+        )
+        self.assertFalse(batch.panel_passes(equal_old_peak, self.contract))
 
         one_outlier_raw = raw_panel_evidence(
             687, 1.2, 100_000, 150_000, typokat_duration_ns=12_000_000_000
@@ -949,12 +958,13 @@ def apply_real_oracle(evidence: dict[str, object], authority: dict[str, object])
     for sample in evidence["samples"]:
         for ordinal, frame in enumerate(sample["frames"]):
             oracle = authority[sample["tool"]][ordinal]
+            source = authority["frames"][ordinal]["source"]
             frame["case_id"] = oracle["case_id"]
             frame["semantic"] = {
                 key: value for key, value in oracle.items() if key != "case_id"
             }
             frame["raw_request"] = json.dumps(
-                {"schema": 1, "case_id": frame["case_id"], "source": "let value = 1;"},
+                {"schema": 1, "case_id": frame["case_id"], "source": source},
                 sort_keys=True,
                 separators=(",", ":"),
             )
