@@ -49,13 +49,21 @@ fn single_project_checks_one_real_ordered_multi_file_project() {
         "files": [
             {
                 "path": "a.ts",
-                "source": "export const value = \"text\";\n",
+                "source": "export const value = \"text\"; // ž\n",
             },
             {
                 "path": "b.ts",
                 "source": concat!(
                     "import { value } from \"./a\";\n",
                     "const wrong: number = value;\n",
+                    "\n",
+                    "\n",
+                    "\n",
+                    "\n",
+                    "\n",
+                    "\n",
+                    "\n",
+                    "const wrong_late: number = value;\n",
                 ),
             },
         ],
@@ -112,7 +120,7 @@ fn single_project_checks_one_real_ordered_multi_file_project() {
     assert_eq!(
         receipt["semantic"],
         json!({
-            "diagnostics": ["b.ts:2:7:2322"],
+            "diagnostics": ["b.ts:2:7:2322", "b.ts:10:7:2322"],
             "exit_code": 1,
             "incompletes": [],
             "parse_errors": [],
@@ -126,7 +134,14 @@ fn single_project_checks_one_real_ordered_multi_file_project() {
     assert!(identities
         .iter()
         .all(|identity| identity.is_some_and(|value| !value.is_empty())));
-    assert_eq!(identities.into_iter().flatten().collect::<BTreeSet<_>>().len(), 3);
+    assert_eq!(
+        identities
+            .into_iter()
+            .flatten()
+            .collect::<BTreeSet<_>>()
+            .len(),
+        3
+    );
 }
 
 #[test]
@@ -162,7 +177,15 @@ fn single_project_rejects_empty_unsafe_duplicate_or_reordered_paths() {
         &(canonical(&json!({"case_id": "case", "files": [], "schema": 1})) + "\n"),
         "single-project file list is empty",
     );
-    for path in ["", "/a.ts", "../a.ts", "./a.ts", "a/../b.ts", "a\\b.ts", "a.js"] {
+    for path in [
+        "",
+        "/a.ts",
+        "../a.ts",
+        "./a.ts",
+        "a/../b.ts",
+        "a\\b.ts",
+        "a.js",
+    ] {
         assert_rejected(
             &(canonical(&json!({
                 "case_id": "case",
