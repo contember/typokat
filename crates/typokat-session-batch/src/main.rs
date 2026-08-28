@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, Read, Write};
 use std::sync::Arc;
 use typokat_check::check::checker::project_local::{
     CheckerSession, SessionBenchClock, SessionBenchFault, SessionBenchFaultReceipt,
@@ -56,6 +56,21 @@ struct FrameRequest {
 struct FaultRequest {
     schema: u8,
     fault: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SingleProjectFile {
+    path: String,
+    source: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SingleProjectRequest {
+    schema: u8,
+    case_id: String,
+    files: Vec<SingleProjectFile>,
 }
 
 #[derive(Serialize)]
@@ -117,6 +132,22 @@ struct FrameReceipt {
 }
 
 #[derive(Serialize)]
+struct SingleProjectReceipt {
+    schema: u8,
+    tool: &'static str,
+    case_id: String,
+    file_count: usize,
+    semantic: FrameSemantic,
+    shared_product_identity: String,
+    program_identity: String,
+    checker_identity: String,
+    semantic_identity: String,
+    retained_frame_state: u8,
+    session_weak_alive_after: bool,
+    cache_weak_alive_after: bool,
+}
+
+#[derive(Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum LifecycleDisposition {
     Semantic,
@@ -171,6 +202,45 @@ fn rejected_fault_receipt(receipt: &SessionBenchFaultReceipt) -> RejectedFaultRe
 
 fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+fn write_canonical_json(output: &mut String, value: &serde_json::Value) -> Result<(), String> {
+    match value {
+        serde_json::Value::Array(values) => {
+            output.push('[');
+            for (index, value) in values.iter().enumerate() {
+                if index != 0 {
+                    output.push(',');
+                }
+                write_canonical_json(output, value)?;
+            }
+            output.push(']');
+        }
+        serde_json::Value::Object(values) => {
+            output.push('{');
+            let mut entries = values.iter().collect::<Vec<_>>();
+            entries.sort_by_key(|(key, _)| *key);
+            for (index, (key, value)) in entries.into_iter().enumerate() {
+                if index != 0 {
+                    output.push(',');
+                }
+                output.push_str(&serde_json::to_string(key).map_err(|error| error.to_string())?);
+                output.push(':');
+                write_canonical_json(output, value)?;
+            }
+            output.push('}');
+        }
+        scalar => {
+            output.push_str(&serde_json::to_string(scalar).map_err(|error| error.to_string())?);
+        }
+    }
+    Ok(())
+}
+
+fn canonical_json(value: &serde_json::Value) -> Result<String, String> {
+    let mut output = String::new();
+    write_canonical_json(&mut output, value)?;
+    Ok(output)
 }
 
 fn protocol_info() -> Result<ProtocolInfo, String> {
@@ -242,6 +312,187 @@ fn normalized_semantic(
         diagnostics,
         incompletes,
     }
+}
+
+fn normalized_project_semantic(
+    inputs: &[FileInput],
+    parse_errors: &[Vec<String>],
+    results: &[typokat_check::check::CheckResult],
+) -> Result<FrameSemantic, String> {
+    let parse_errors = if parse_errors.iter().any(|errors| !errors.is_empty()) {
+        vec!["parse-error".to_owned()]
+    } else {
+        Vec::new()
+    };
+    let mut diagnostics = Vec::new();
+    for result in results {
+        let input = inputs
+            .get(result.module_ordinal.index())
+            .ok_or_else(|| "single-project result module ordinal is invalid".to_owned())?;
+        let lines = LineIndex::new(&input.source);
+        for diagnostic in &result.diagnostics {
+            let position = lines.line_col(diagnostic.span.start);
+            let code = diagnostic.code.as_str().trim_start_matches("TK");
+            let code = code
+                .parse::<u32>()
+                .map_err(|_| "single-project diagnostic code is not numeric".to_owned())?;
+            diagnostics.push((input.name.clone(), position.line, position.column, code));
+        }
+    }
+    diagnostics.sort();
+    let diagnostics = diagnostics
+        .into_iter()
+        .map(|(path, line, column, code)| format!("{path}:{line}:{column}:{code}"))
+        .collect::<Vec<_>>();
+    let incompletes = if results.iter().any(|result| !result.incomplete.is_empty()) {
+        vec!["unresolved".to_owned()]
+    } else {
+        Vec::new()
+    };
+    let exit_code = if !incompletes.is_empty() {
+        3
+    } else if !parse_errors.is_empty() {
+        2
+    } else if !diagnostics.is_empty() {
+        1
+    } else {
+        0
+    };
+    Ok(FrameSemantic {
+        exit_code,
+        parse_errors,
+        diagnostics,
+        incompletes,
+    })
+}
+
+fn safe_single_project_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.starts_with('/')
+        && !path.contains('\\')
+        && path.ends_with(".ts")
+        && path.split('/').all(|component| {
+            !component.is_empty()
+                && component != "."
+                && component != ".."
+                && component.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_')
+                })
+        })
+}
+
+fn parse_single_project_request(input: &str) -> Result<SingleProjectRequest, String> {
+    let Some(line) = input.strip_suffix('\n') else {
+        return Err("single-project mode requires exactly one canonical JSON request".to_owned());
+    };
+    if line.is_empty() || line.contains(['\n', '\r']) {
+        return Err("single-project mode requires exactly one canonical JSON request".to_owned());
+    }
+    let value: serde_json::Value = serde_json::from_str(line)
+        .map_err(|error| format!("invalid single-project request: {error}"))?;
+    if canonical_json(&value)? != line {
+        return Err("single-project request is not canonical".to_owned());
+    }
+    let request: SingleProjectRequest = serde_json::from_value(value)
+        .map_err(|error| format!("invalid single-project request: {error}"))?;
+    if request.schema != 1 || request.case_id.is_empty() {
+        return Err("invalid single-project request schema or case identity".to_owned());
+    }
+    if request.files.is_empty() {
+        return Err("single-project file list is empty".to_owned());
+    }
+    if request
+        .files
+        .iter()
+        .any(|file| !safe_single_project_path(&file.path))
+    {
+        return Err("single-project file path is unsafe".to_owned());
+    }
+    if request
+        .files
+        .windows(2)
+        .any(|files| files[0].path >= files[1].path)
+    {
+        return Err("single-project file paths must be strictly ordered and unique".to_owned());
+    }
+    Ok(request)
+}
+
+fn run_single_project() -> Result<(), String> {
+    let mut input = String::new();
+    io::stdin()
+        .read_to_string(&mut input)
+        .map_err(|error| error.to_string())?;
+    let request = parse_single_project_request(&input)?;
+    let file_count = request.files.len();
+    let case_id = request.case_id;
+    let inputs = request
+        .files
+        .into_iter()
+        .map(|file| FileInput {
+            name: file.path,
+            source: file.source,
+        })
+        .collect::<Vec<_>>();
+    let clock = SessionBenchClock::start();
+    let product = LibraryBaseProvider::new().declaration_product_for_session_bench()?;
+    let shared_product_identity = product.profile_identity().to_owned();
+    let prepared = run_prepared_project_frontend_with_parse_work(
+        inputs,
+        |programs, _source_reexports, _default_modules, parse_work| {
+            let result = CheckerSession::new(product)
+                .check_project_programs_for_session_bench(programs, &clock);
+            (parse_work, result)
+        },
+    );
+    let typokat_frontend::frontend::PreparedProjectRun {
+        inputs,
+        parse_errors,
+        inventory,
+        preparation_error,
+        product: checked,
+    } = prepared;
+    if let Some(error) = preparation_error {
+        return Err(error.to_string());
+    }
+    if parse_errors.iter().any(|errors| !errors.is_empty()) {
+        return Err("single-project input has parser diagnostics".to_owned());
+    }
+    let Some((parse_work, checked)) = checked else {
+        return Err("single-project frontend omitted a parser-clean project".to_owned());
+    };
+    if parse_work.parser_invocations
+        != u64::try_from(file_count).map_err(|_| "single-project file count exceeds u64")?
+    {
+        return Err("single-project parser invocation count differs".to_owned());
+    }
+    let checked = checked.map_err(|error| error.to_string())?;
+    let semantic = normalized_project_semantic(&inputs, &parse_errors, &checked.results)?;
+    let receipt = SingleProjectReceipt {
+        schema: 1,
+        tool: "typokat",
+        case_id,
+        file_count,
+        semantic,
+        shared_product_identity,
+        program_identity: checked.project_identity.to_string(),
+        checker_identity: checked.publisher_identity.to_string(),
+        semantic_identity: checked.cache_identity.to_string(),
+        retained_frame_state: 0,
+        session_weak_alive_after: checked.session_weak_alive_after,
+        cache_weak_alive_after: checked.cache_weak_alive_after,
+    };
+    drop(checked.results);
+    drop(inputs);
+    drop(inventory);
+    let value = serde_json::to_value(receipt).map_err(|error| error.to_string())?;
+    let mut stdout = io::BufWriter::new(io::stdout().lock());
+    stdout
+        .write_all(canonical_json(&value)?.as_bytes())
+        .map_err(|error| error.to_string())?;
+    stdout.write_all(b"\n").map_err(|error| error.to_string())?;
+    stdout.flush().map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 fn run_frame(
@@ -402,7 +653,15 @@ fn run() -> Result<RunDisposition, String> {
             );
             return Ok(RunDisposition::Complete);
         }
-        _ => return Err("usage: typokat-session-batch [--protocol-info]".to_owned()),
+        [argument] if argument == std::ffi::OsStr::new("--single-project") => {
+            run_single_project()?;
+            return Ok(RunDisposition::Complete);
+        }
+        _ => {
+            return Err(
+                "usage: typokat-session-batch [--protocol-info|--single-project]".to_owned(),
+            );
+        }
     }
     let clock = SessionBenchClock::start();
     let initialization_start_ns = clock.elapsed_ns();
