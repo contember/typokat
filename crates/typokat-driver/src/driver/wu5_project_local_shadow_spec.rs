@@ -187,6 +187,42 @@ fn project_local_shadow_preserves_operation_specific_initialization_precedence()
     .expect("Bundler reports malformed user input before product acquisition");
     assert_eq!(bundler_calls.get(), 0);
     assert_eq!(bundler.reports[0].output.parse_errors.len(), 1);
+
+    let repeated_empty_calls = Cell::new(0);
+    let repeated_empty = check_project_local_shadow_for_test(
+        Vec::new(),
+        ProjectLocalShadowRouteForTest::RepeatedProject,
+        || {
+            repeated_empty_calls.set(repeated_empty_calls.get() + 1);
+            Err(Arc::new(LibraryInitError::injected_initialization_failure(
+                "WU5 repeated empty failure".to_owned(),
+            )))
+        },
+    );
+    assert!(matches!(
+        repeated_empty,
+        Err(DriverError::LibraryInitialization(_))
+    ));
+    assert_eq!(repeated_empty_calls.get(), 1);
+
+    for route in [
+        ProjectLocalShadowRouteForTest::Standalone,
+        ProjectLocalShadowRouteForTest::Bundler {
+            project_directory: PathBuf::from("/wu5"),
+            roots: Vec::new(),
+        },
+    ] {
+        let calls = Cell::new(0);
+        let empty = check_project_local_shadow_for_test(Vec::new(), route, || {
+            calls.set(calls.get() + 1);
+            Err(Arc::new(LibraryInitError::injected_initialization_failure(
+                "WU5 deferred empty failure".to_owned(),
+            )))
+        })
+        .expect("standalone and Bundler empty projects return before acquisition");
+        assert!(empty.reports.is_empty());
+        assert_eq!(calls.get(), 0);
+    }
 }
 
 #[test]
