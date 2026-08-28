@@ -62,7 +62,7 @@ func TestSingleProjectChecksOrderedCrossFileProgram(t *testing.T) {
 func TestDecodeSingleProjectRequestRejectsMalformedFiles(t *testing.T) {
 	t.Parallel()
 
-	valid := `{"schema":1,"case_id":"case","files":[{"path":"a.ts","source":"export {};"}]}`
+	valid := `{"case_id":"case","files":[{"path":"a.ts","source":"export {};"}],"schema":1}`
 	request, err := decodeSingleProjectRequest([]byte(valid))
 	if err != nil {
 		t.Fatalf("decode valid request: %v", err)
@@ -96,10 +96,11 @@ func TestDecodeSingleProjectRequestRejectsMalformedFiles(t *testing.T) {
 func TestSingleProjectModeRequiresExactlyOneRequestAndResponse(t *testing.T) {
 	t.Parallel()
 
-	raw := `{"schema":1,"case_id":"one","files":[{"path":"one.ts","source":"export {};"}]}`
+	raw := `{"case_id":"one","files":[{"path":"one.ts","source":"export {};"}],"schema":1}`
 	for name, input := range map[string]string{
-		"empty":    "",
-		"multiple": raw + "\n" + raw + "\n",
+		"empty":        "",
+		"multiple":     raw + "\n" + raw + "\n",
+		"noncanonical": `{"schema":1,"case_id":"one","files":[{"path":"one.ts","source":"export {};"}]}` + "\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
