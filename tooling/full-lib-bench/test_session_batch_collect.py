@@ -37,6 +37,11 @@ class FakeLiveHost:
         authority = batch.load_authenticated_batch_oracles(contract)
         fixture = raw_panel_evidence(1, 2.0, 100_000, 150_000)
         apply_real_oracle(fixture, authority)
+        for sample in fixture["samples"]:
+            sample["frames"][0]["shared_product_identity"] = contract["profile"][
+                "length_framed_sha256"
+            ]
+            refresh_responses(sample)
         self.samples = {
             tool: copy.deepcopy(next(row for row in fixture["samples"] if row["tool"] == tool))
             for tool in ("typokat", "tsgo")
