@@ -361,11 +361,12 @@ class SystemLiveHost:
             raise batch.BatchContractError(f"invalid {tool} frame JSON: {error}") from error
         if not isinstance(response, dict):
             _fail(f"{tool} frame response is not an object")
+        canonical_response = _canonical(response)
         frame = dict(response)
         frame.update({
             "raw_request": request_lines[0],
-            "raw_response": response_lines[0],
-            "raw_response_sha256": _sha(response_lines[0].encode()),
+            "raw_response": canonical_response.decode(),
+            "raw_response_sha256": _sha(canonical_response),
         })
         return {
             "block": 0,
