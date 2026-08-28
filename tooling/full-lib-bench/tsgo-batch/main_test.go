@@ -90,6 +90,9 @@ func TestDecodeSingleProjectRequestRejectsMalformedFiles(t *testing.T) {
 		"absolute path":       `{"schema":1,"case_id":"case","files":[{"path":"/a.ts","source":""}]}`,
 		"dot path":            `{"schema":1,"case_id":"case","files":[{"path":"./a.ts","source":""}]}`,
 		"backslash path":      `{"schema":1,"case_id":"case","files":[{"path":"dir\\\\a.ts","source":""}]}`,
+		"control path":        `{"schema":1,"case_id":"case","files":[{"path":"a\nb.ts","source":""}]}`,
+		"space path":          `{"schema":1,"case_id":"case","files":[{"path":"a b.ts","source":""}]}`,
+		"non-ASCII path":      `{"schema":1,"case_id":"case","files":[{"path":"ž.ts","source":""}]}`,
 		"non-TypeScript path": `{"schema":1,"case_id":"case","files":[{"path":"a.js","source":""}]}`,
 	}
 	for name, raw := range invalid {
