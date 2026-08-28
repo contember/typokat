@@ -13,7 +13,40 @@ use crate::library::{LibraryBaseProvider, LibraryInitError};
 use std::cell::Cell;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+
+static TEMP_PROJECT_ORDINAL: AtomicU64 = AtomicU64::new(0);
+
+struct TempBundlerProject {
+    directory: PathBuf,
+}
+
+impl TempBundlerProject {
+    fn new(case: &str, files: &[(&str, &str)]) -> (Self, Vec<FileInput>) {
+        let ordinal = TEMP_PROJECT_ORDINAL.fetch_add(1, Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "typokat-wu5-shadow-{case}-{}-{ordinal}",
+            std::process::id(),
+        ));
+        fs::create_dir_all(&directory).expect("create WU5 Bundler project");
+        let inputs = files
+            .iter()
+            .map(|(name, source)| {
+                let path = directory.join(name);
+                fs::write(&path, source).expect("write WU5 Bundler source");
+                input(&path.to_string_lossy(), source)
+            })
+            .collect();
+        (Self { directory }, inputs)
+    }
+}
+
+impl Drop for TempBundlerProject {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.directory);
+    }
+}
 
 fn input(name: &str, source: &str) -> FileInput {
     FileInput {
@@ -420,12 +453,11 @@ fn project_local_shadow_preserves_reportable_import_diagnostics() {
 
 #[test]
 fn project_local_shadow_preserves_bundler_import_diagnostics() {
-    let project_directory = PathBuf::from("/wu5/bundler-import-errors");
     let cases = [
         (
             "missing module",
-            vec![input(
-                "/wu5/bundler-import-errors/missing-module.ts",
+            vec![(
+                "missing-module.ts",
                 "import { missing } from './absent.js';\nmissing;\n",
             )],
             vec!["TK2307"],
@@ -433,12 +465,9 @@ fn project_local_shadow_preserves_bundler_import_diagnostics() {
         (
             "missing named export",
             vec![
-                input(
-                    "/wu5/bundler-import-errors/source.ts",
-                    "export const present = 1;\n",
-                ),
-                input(
-                    "/wu5/bundler-import-errors/missing-export.ts",
+                ("source.ts", "export const present = 1;\n"),
+                (
+                    "missing-export.ts",
                     "import { missing } from './source.js';\nmissing;\n",
                 ),
             ],
@@ -447,16 +476,17 @@ fn project_local_shadow_preserves_bundler_import_diagnostics() {
     ];
     let provider = LibraryBaseProvider::new();
 
-    for (case, inputs, expected_codes) in cases {
+    for (case, files, expected_codes) in cases {
+        let (project, inputs) = TempBundlerProject::new(case, &files);
         let roots = bundler_roots(&inputs);
         let control =
-            check_bundler_project_once(inputs.clone(), project_directory.clone(), roots.clone())
+            check_bundler_project_once(inputs.clone(), project.directory.clone(), roots.clone())
                 .expect("Bundler import-error control");
         assert_eq!(diagnostic_codes(&control.reports), expected_codes, "{case}");
         let candidate = check_project_local_shadow_for_test(
             inputs,
             ProjectLocalShadowRouteForTest::Bundler {
-                project_directory: project_directory.clone(),
+                project_directory: project.directory.clone(),
                 roots,
             },
             || provider.declaration_product_for_shadow(),
