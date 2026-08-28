@@ -8,21 +8,23 @@ use crate::check::checker::project_local::{
     ObservationWitnessKindForTest, ProjectLocalCacheWriteForTest,
     ProjectLocalCandidateErrorForTest, ProjectLocalContributorKindForTest,
     ProjectLocalContributorOriginForTest, ProjectLocalDemandRootForTest,
-    ProjectLocalFaultSeamForTest, ProjectLocalForceAllTraceForTest,
-    ProjectLocalGlobalContributorForTest, ProjectLocalGlobalContributorSiteForTest,
-    ProjectLocalLibraryRecordForTest, ProjectLocalMappedProductGroupForTest,
-    ProjectLocalModuleTypeProbeForTest, ProjectLocalNamespaceFragmentForTest,
-    ProjectLocalOrderForTest, ProjectLocalProductDependencyForTest,
-    ProjectLocalProductGroupForTest, ProjectLocalProductSccForTest,
-    ProjectLocalPublicationSccCommitForTest, ProjectLocalRepeatedDemandForTest,
-    ProjectLocalSemanticFaultForTest, ProjectLocalSemanticPhaseForTest,
-    ProjectLocalSemanticProbesForTest, ProjectLocalSemanticRequestForTest,
-    ProjectLocalSemanticTraceForTest, ProjectLocalTerminalStateForTest,
-    ProjectLocalUnavailableAuditForTest, ProjectLocalUnavailableReasonForTest,
-    ProjectLocalUnavailableTerminalForTest, ProjectLocalValueProbeForTest, WeakLivenessForTest,
+    ProjectLocalFaultSeamForTest, ProjectLocalForceAllTerminalForTest,
+    ProjectLocalForceAllTraceForTest, ProjectLocalGlobalContributorForTest,
+    ProjectLocalGlobalContributorSiteForTest, ProjectLocalLibraryRecordForTest,
+    ProjectLocalMappedProductGroupForTest, ProjectLocalModuleTypeProbeForTest,
+    ProjectLocalNamespaceFragmentForTest, ProjectLocalOrderForTest,
+    ProjectLocalProductDependencyForTest, ProjectLocalProductGroupForTest,
+    ProjectLocalProductSccForTest, ProjectLocalPublicationSccCommitForTest,
+    ProjectLocalRepeatedDemandForTest, ProjectLocalSemanticFaultForTest,
+    ProjectLocalSemanticPhaseForTest, ProjectLocalSemanticProbesForTest,
+    ProjectLocalSemanticRequestForTest, ProjectLocalSemanticTraceForTest,
+    ProjectLocalTerminalStateForTest, ProjectLocalUnavailableAuditForTest,
+    ProjectLocalUnavailableReasonForTest, ProjectLocalUnavailableTerminalForTest,
+    ProjectLocalValueProbeForTest, WeakLivenessForTest,
 };
 use crate::compiler::LibraryCompilerWorkScopeForTest;
 use crate::provider::{CompleteSourceBlackBoxOracleForTest, LibraryBaseProvider};
+use crate::span::LineIndex;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -149,7 +151,7 @@ fn insert_observation_event(
     receipt.events.insert(index, observation_event(stamp, kind));
 }
 
-const CANDIDATE_SOURCE_PATHS: [&str; 12] = [
+const CANDIDATE_SOURCE_PATHS: [&str; 15] = [
     "cache.rs",
     "contract.rs",
     "coordinator.rs",
@@ -160,8 +162,11 @@ const CANDIDATE_SOURCE_PATHS: [&str; 12] = [
     "mod.rs",
     "observation.rs",
     "project_local_pass_port.rs",
+    "recipe_primitives.rs",
+    "record_staging.rs",
     "session.rs",
     "terminal.rs",
+    "validation.rs",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -317,6 +322,10 @@ fn candidate_import_allowed(relative: &str, import: &CandidateImport) -> bool {
     if relative == "mod.rs" && import.path.starts_with("observation::") {
         return true;
     }
+    if relative == "recipe_primitives.rs" && import.path.starts_with("super::") {
+        return import.path.starts_with("super::project_local_pass_port::")
+            && recipe_primitive_super_path_allowed(&import.path);
+    }
     if import.path.starts_with("super::") {
         return relative != "mod.rs"
             && !import.path["super::".len()..]
@@ -343,10 +352,50 @@ fn candidate_import_allowed(relative: &str, import: &CandidateImport) -> bool {
     candidate_adapter_external_path_allowed(&import.path)
 }
 
+fn candidate_test_import_allowed(relative: &str, import: &CandidateImport) -> bool {
+    relative == "mod.rs"
+        && matches!(
+            import.path.as_str(),
+            "lowerer::accumulate_product_library_records_for_test"
+                | "lowerer::lower_product_groups_for_test"
+        )
+}
+
+fn recipe_primitive_super_path_allowed(path: &str) -> bool {
+    let Some(path) = path.strip_prefix("super::project_local_pass_port::") else {
+        return false;
+    };
+    let leaf = path.split("::").next().unwrap_or_default();
+    matches!(
+        leaf,
+        "number_to_string"
+            | "well_known_symbol_from_name"
+            | "Accessibility"
+            | "DeclarationGroupRecipe"
+            | "DeclarationPayload"
+            | "LibraryDeclarationProduct"
+            | "MappedModifier"
+            | "MemberRecipe"
+            | "ModifierOp"
+            | "ObjectType"
+            | "PropertyKey"
+            | "PropertyNameRecipe"
+            | "SignatureKey"
+            | "SymbolicValueNameRecipe"
+            | "TypeParameterKey"
+            | "TypeRecipeKey"
+            | "TypeRecipeNode"
+            | "TypeReferenceResolution"
+            | "ValueReferenceResolution"
+            | "Visibility"
+    )
+}
+
 fn candidate_adapter_external_path_allowed(path: &str) -> bool {
     matches!(
         path,
         "crate::binder::bind::LibraryBinderUnit"
+            | "crate::binder::declaration::SourceDeclarationManifest"
             | "crate::binder::declaration::SourceGlobalContributorKind"
             | "crate::binder::declaration::TypeGroupId"
             | "crate::binder::declaration::ValueStorageId"
@@ -360,11 +409,12 @@ fn candidate_adapter_external_path_allowed(path: &str) -> bool {
             | "crate::check::checker::context::ProjectLocalDemandSnapshot"
             | "crate::check::checker::context::ProjectLocalTypeOverlayDraft"
             | "crate::check::checker::context::ProjectLocalUserDemandGateway"
-            | "crate::check::checker::eval::contains_deferred_argument"
-            | "crate::check::checker::eval::contains_deferred_keyof"
             | "crate::check::checker::eval::keyof_of_type"
+            | "crate::check::checker::decls::inventory::BoundTypeDeclarationInventory::build"
             | "crate::check::checker::library_identities::LibrarySemanticIdentities"
             | "crate::check::checker::namespace_values::ProjectLocalNamespaceSeed"
+            | "crate::check::checker::project_local_semantics::library_type_dependencies"
+            | "crate::check::checker::project_local_semantics::user_type_dependencies"
             | "crate::check::checker::reporting_record::CheckerRecord"
             | "crate::check::checker::type_groups::PublishedTypeParameterDefault"
             | "crate::check::checker::type_groups::PublishedTypeEnvironment"
@@ -383,13 +433,11 @@ fn candidate_adapter_external_path_allowed(path: &str) -> bool {
             | "crate::check::query::SemanticQueryState"
             | "crate::class_semantics::DemandOutcome"
             | "crate::class_semantics::PublishedClasses"
-            | "crate::diagnostics::render_reason_chain"
             | "crate::diagnostics::render_type"
             | "crate::diagnostics::Diagnostic"
             | "crate::diagnostics::IncompleteSurface"
             | "crate::diagnostics::Severity"
             | "crate::frontend::ProjectProgram"
-            | "crate::relate::relation::RelationOutcome"
             | "crate::source::LibraryFileOrdinal"
             | "crate::source::ModuleOrdinal"
             | "crate::source::UnitSlot"
@@ -411,6 +459,7 @@ fn candidate_adapter_external_path_allowed(path: &str) -> bool {
             | "crate::types::substitute"
             | "crate::types::GenericTypeParam"
             | "crate::types::Interner"
+            | "crate::types::IntrinsicKind"
             | "crate::types::LiteralValue"
             | "crate::types::PropertyKey"
             | "crate::types::TypeId"
@@ -435,13 +484,11 @@ fn candidate_adapter_external_path_allowed(path: &str) -> bool {
             | "typokat_library_product::MemberRecipe"
             | "typokat_library_product::ParameterPattern"
             | "typokat_library_product::PropertyNameRecipe"
-            | "typokat_library_product::QualifiedPathRecipe"
             | "typokat_library_product::QualifiedPathResolutionOutcome"
             | "typokat_library_product::QualifiedPathRole"
             | "typokat_library_product::QualifiedPathUnresolvedCause"
             | "typokat_library_product::RegionKey"
             | "typokat_library_product::SignatureKey"
-            | "typokat_library_product::SourceKey"
             | "typokat_library_product::SourceSite"
             | "typokat_library_product::SymbolicValueNameRecipe"
             | "typokat_library_product::TypeOperator"
@@ -466,9 +513,39 @@ fn candidate_path_text(path: &syn::Path) -> String {
         .join("::")
 }
 
+fn candidate_type_is_callback(ty: &syn::Type, callback_type_bindings: &BTreeSet<String>) -> bool {
+    match ty {
+        syn::Type::BareFn(_) => true,
+        syn::Type::ImplTrait(bounds) => bounds.bounds.iter().any(|bound| {
+            matches!(
+                bound,
+                syn::TypeParamBound::Trait(bound)
+                    if bound.path.segments.last().is_some_and(|segment| {
+                        matches!(segment.ident.to_string().as_str(), "Fn" | "FnMut" | "FnOnce")
+                    })
+            )
+        }),
+        syn::Type::Path(path) => path
+            .path
+            .segments
+            .last()
+            .is_some_and(|segment| callback_type_bindings.contains(&segment.ident.to_string())),
+        syn::Type::Group(group) => candidate_type_is_callback(&group.elem, callback_type_bindings),
+        syn::Type::Paren(paren) => candidate_type_is_callback(&paren.elem, callback_type_bindings),
+        _ => false,
+    }
+}
+
 struct CandidateSourceAudit<'a> {
     relative: &'a str,
     local_roots: BTreeSet<String>,
+    interner_type_bindings: BTreeSet<String>,
+    session_type_bindings: BTreeSet<String>,
+    product_lowerer_bindings: BTreeSet<String>,
+    callback_type_bindings: BTreeSet<String>,
+    current_functions: Vec<String>,
+    current_function_is_test: Vec<bool>,
+    current_interner_values: Vec<BTreeSet<String>>,
     errors: Vec<String>,
 }
 
@@ -494,6 +571,10 @@ impl<'a> CandidateSourceAudit<'a> {
         .into_iter()
         .map(str::to_owned)
         .collect::<BTreeSet<_>>();
+        let mut interner_type_bindings = BTreeSet::new();
+        let mut session_type_bindings = BTreeSet::new();
+        let mut product_lowerer_bindings = BTreeSet::new();
+        let mut callback_type_bindings = BTreeSet::new();
         for item in &file.items {
             let name = match item {
                 syn::Item::Const(item) => Some(&item.ident),
@@ -517,14 +598,69 @@ impl<'a> CandidateSourceAudit<'a> {
                 flatten_candidate_use(&item.tree, &mut Vec::new(), &mut imports);
                 for import in imports {
                     if let Some(binding) = import.binding {
+                        if import.path.ends_with("::Interner") {
+                            interner_type_bindings.insert(binding.clone());
+                        }
+                        if import.path.ends_with("::SessionCore") {
+                            session_type_bindings.insert(binding.clone());
+                        }
+                        if import.path.ends_with("::lower_product_groups") {
+                            product_lowerer_bindings.insert(binding.clone());
+                        }
                         local_roots.insert(binding);
                     }
+                }
+            }
+        }
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for item in &file.items {
+                let syn::Item::Type(alias) = item else {
+                    continue;
+                };
+                let syn::Type::Path(target) = alias.ty.as_ref() else {
+                    continue;
+                };
+                let Some(target) = target
+                    .path
+                    .segments
+                    .last()
+                    .map(|segment| segment.ident.to_string())
+                else {
+                    continue;
+                };
+                let alias = alias.ident.to_string();
+                if interner_type_bindings.contains(&target) {
+                    changed |= interner_type_bindings.insert(alias.clone());
+                }
+                if session_type_bindings.contains(&target) {
+                    changed |= session_type_bindings.insert(alias);
+                }
+            }
+        }
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for item in &file.items {
+                let syn::Item::Type(alias) = item else {
+                    continue;
+                };
+                if candidate_type_is_callback(&alias.ty, &callback_type_bindings) {
+                    changed |= callback_type_bindings.insert(alias.ident.to_string());
                 }
             }
         }
         Self {
             relative,
             local_roots,
+            interner_type_bindings,
+            session_type_bindings,
+            product_lowerer_bindings,
+            callback_type_bindings,
+            current_functions: Vec::new(),
+            current_function_is_test: Vec::new(),
+            current_interner_values: Vec::new(),
             errors: Vec::new(),
         }
     }
@@ -532,6 +668,103 @@ impl<'a> CandidateSourceAudit<'a> {
     fn reject(&mut self, message: impl Into<String>) {
         self.errors
             .push(format!("{}: {}", self.relative, message.into()));
+    }
+
+    fn current_function(&self) -> Option<&str> {
+        self.current_functions.last().map(String::as_str)
+    }
+
+    fn interner_construction_allowed(&self) -> bool {
+        self.relative == "session.rs" && self.current_function() == Some("start")
+    }
+
+    fn product_lowering_allowed(&self) -> bool {
+        (self.relative == "coordinator.rs"
+            && self.current_function() == Some("demand_product_groups_with_interner"))
+            || (self.relative == "lowerer.rs"
+                && self.current_function() == Some("lower_product_groups_for_test")
+                && self.current_function_is_test.last() == Some(&true))
+    }
+
+    fn session_start_allowed(&self) -> bool {
+        self.relative == "entry.rs"
+            && self.current_function() == Some("project_local_semantic_candidate_for_test")
+    }
+
+    fn callback_parameter_allowed(&self) -> bool {
+        (self.relative == "session.rs" && self.current_function() == Some("with_interner"))
+            || (self.relative == "lowerer.rs"
+                && self.current_function() == Some("with_indirection"))
+    }
+
+    fn parameter_type_is_callback(&self, ty: &syn::Type) -> bool {
+        candidate_type_is_callback(ty, &self.callback_type_bindings)
+    }
+
+    fn is_interner_constructor_path(&self, segments: &[String]) -> bool {
+        segments
+            .last()
+            .is_some_and(|leaf| leaf == "with_intrinsics")
+            && (segments
+                .iter()
+                .rev()
+                .nth(1)
+                .is_some_and(|owner| self.interner_type_bindings.contains(owner))
+                || segments
+                    .get(..segments.len().saturating_sub(1))
+                    .is_some_and(|owner| {
+                        owner.ends_with(&[
+                            "project_local_pass_port".to_owned(),
+                            "Interner".to_owned(),
+                        ])
+                    }))
+    }
+
+    fn is_session_constructor_path(&self, segments: &[String]) -> bool {
+        segments.last().is_some_and(|leaf| leaf == "start")
+            && (segments
+                .iter()
+                .rev()
+                .nth(1)
+                .is_some_and(|owner| self.session_type_bindings.contains(owner))
+                || segments
+                    .get(..segments.len().saturating_sub(1))
+                    .is_some_and(|owner| {
+                        owner.ends_with(&["session".to_owned(), "SessionCore".to_owned()])
+                    }))
+    }
+
+    fn is_product_lowerer_path(&self, segments: &[String]) -> bool {
+        segments
+            .last()
+            .is_some_and(|leaf| self.product_lowerer_bindings.contains(leaf))
+            || segments.ends_with(&["lowerer".to_owned(), "lower_product_groups".to_owned()])
+    }
+
+    fn interner_parameters(&self, signature: &syn::Signature) -> BTreeSet<String> {
+        signature
+            .inputs
+            .iter()
+            .filter_map(|input| {
+                let syn::FnArg::Typed(parameter) = input else {
+                    return None;
+                };
+                let syn::Pat::Ident(binding) = parameter.pat.as_ref() else {
+                    return None;
+                };
+                let syn::Type::Path(ty) = parameter.ty.as_ref() else {
+                    return None;
+                };
+                ty.path
+                    .segments
+                    .last()
+                    .is_some_and(|segment| {
+                        self.interner_type_bindings
+                            .contains(&segment.ident.to_string())
+                    })
+                    .then(|| binding.ident.to_string())
+            })
+            .collect()
     }
 
     fn validate_module(&mut self, item: &syn::ItemMod) {
@@ -551,8 +784,11 @@ impl<'a> CandidateSourceAudit<'a> {
                     | "lowerer"
                     | "observation"
                     | "project_local_pass_port"
+                    | "recipe_primitives"
+                    | "record_staging"
                     | "session"
                     | "terminal"
+                    | "validation"
             );
         if !allowed {
             self.reject(format!("undeclared external module {}", item.ident));
@@ -569,6 +805,25 @@ impl<'a> CandidateSourceAudit<'a> {
             .iter()
             .map(|segment| segment.ident.to_string())
             .collect::<Vec<_>>();
+        if segments.iter().any(|segment| segment == "TypeRecipeNode") {
+            let syntax_walker = self.relative == "recipe_primitives.rs"
+                && self.current_functions.last().is_some_and(|function| {
+                    matches!(
+                        function.as_str(),
+                        "has_unsupported_computed_name"
+                            | "is_type_parameter_reference"
+                            | "infer_count"
+                            | "collect_infer"
+                            | "build_contextual_type_parameter_index"
+                            | "assign_signature_type_parameters"
+                            | "assign_member_type_parameters"
+                            | "assign_contextual_type_parameters"
+                    )
+                });
+            if self.relative != "lowerer.rs" && !syntax_walker {
+                self.reject("TypeRecipeNode semantic inspection outside the production lowerer");
+            }
+        }
         if segments
             .last()
             .is_some_and(|segment| segment.starts_with("record_"))
@@ -616,7 +871,13 @@ impl<'a> CandidateSourceAudit<'a> {
                     && candidate_adapter_external_path_allowed(&text)
             }
             "super" => {
-                self.relative != "mod.rs" && !segments[1..].iter().any(|segment| segment == "super")
+                if self.relative == "recipe_primitives.rs" {
+                    text.starts_with("super::project_local_pass_port::")
+                        && recipe_primitive_super_path_allowed(&text)
+                } else {
+                    self.relative != "mod.rs"
+                        && !segments[1..].iter().any(|segment| segment == "super")
+                }
             }
             _ => self.local_roots.contains(first),
         };
@@ -627,6 +888,17 @@ impl<'a> CandidateSourceAudit<'a> {
 }
 
 impl<'ast> Visit<'ast> for CandidateSourceAudit<'_> {
+    fn visit_visibility(&mut self, visibility: &'ast syn::Visibility) {
+        if matches!(
+            visibility,
+            syn::Visibility::Restricted(restricted)
+                if candidate_path_text(&restricted.path) == "crate::check::checker"
+        ) {
+            return;
+        }
+        syn::visit::visit_visibility(self, visibility);
+    }
+
     fn visit_attribute(&mut self, attribute: &'ast syn::Attribute) {
         let name = candidate_path_text(attribute.path());
         if name == "path" {
@@ -640,7 +912,14 @@ impl<'ast> Visit<'ast> for CandidateSourceAudit<'_> {
                     paths.iter().all(|path| {
                         matches!(
                             candidate_path_text(path).as_str(),
-                            "Clone" | "Copy" | "Debug" | "Eq" | "Ord" | "PartialEq" | "PartialOrd"
+                            "Clone"
+                                | "Copy"
+                                | "Debug"
+                                | "Default"
+                                | "Eq"
+                                | "Ord"
+                                | "PartialEq"
+                                | "PartialOrd"
                         )
                     })
                 })
@@ -648,6 +927,12 @@ impl<'ast> Visit<'ast> for CandidateSourceAudit<'_> {
             if !allowed {
                 self.reject("unapproved derive attribute");
             }
+        } else if name == "cfg"
+            && matches!(self.relative, "lowerer.rs" | "mod.rs")
+            && attribute
+                .parse_args::<syn::Ident>()
+                .is_ok_and(|identity| identity == "test")
+        {
         } else if name == "doc" {
             let is_literal = matches!(
                 &attribute.meta,
@@ -669,8 +954,16 @@ impl<'ast> Visit<'ast> for CandidateSourceAudit<'_> {
         }
         let mut imports = Vec::new();
         flatten_candidate_use(&item.tree, &mut Vec::new(), &mut imports);
+        let test_only = item.attrs.iter().any(|attribute| {
+            attribute.path().is_ident("cfg")
+                && attribute
+                    .parse_args::<syn::Ident>()
+                    .is_ok_and(|identity| identity == "test")
+        });
         for import in imports {
-            if !candidate_import_allowed(self.relative, &import) {
+            if !candidate_import_allowed(self.relative, &import)
+                && !(test_only && candidate_test_import_allowed(self.relative, &import))
+            {
                 self.reject(format!("unapproved import {}", import.path));
             }
         }
@@ -679,6 +972,13 @@ impl<'ast> Visit<'ast> for CandidateSourceAudit<'_> {
     fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
         self.validate_module(item);
         syn::visit::visit_item_mod(self, item);
+    }
+
+    fn visit_item_type(&mut self, item: &'ast syn::ItemType) {
+        if !self.current_functions.is_empty() {
+            self.reject(format!("local type alias {}", item.ident));
+        }
+        syn::visit::visit_item_type(self, item);
     }
 
     fn visit_item_extern_crate(&mut self, item: &'ast syn::ItemExternCrate) {
@@ -694,7 +994,113 @@ impl<'ast> Visit<'ast> for CandidateSourceAudit<'_> {
         if signature.unsafety.is_some() {
             self.reject(format!("unsafe function {}", signature.ident));
         }
+        if !self.callback_parameter_allowed()
+            && signature.inputs.iter().any(|input| {
+                matches!(
+                    input,
+                    syn::FnArg::Typed(parameter) if self.parameter_type_is_callback(&parameter.ty)
+                )
+            })
+        {
+            self.reject(format!(
+                "callback parameter outside an approved semantic owner in {}",
+                signature.ident
+            ));
+        }
         syn::visit::visit_signature(self, signature);
+    }
+
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        self.current_functions.push(item.sig.ident.to_string());
+        self.current_function_is_test
+            .push(item.attrs.iter().any(|attribute| {
+                attribute.path().is_ident("cfg")
+                    && attribute
+                        .parse_args::<syn::Ident>()
+                        .is_ok_and(|identity| identity == "test")
+            }));
+        self.current_interner_values
+            .push(self.interner_parameters(&item.sig));
+        syn::visit::visit_item_fn(self, item);
+        self.current_interner_values.pop();
+        self.current_function_is_test.pop();
+        self.current_functions.pop();
+    }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        self.current_functions.push(item.sig.ident.to_string());
+        self.current_function_is_test
+            .push(item.attrs.iter().any(|attribute| {
+                attribute.path().is_ident("cfg")
+                    && attribute
+                        .parse_args::<syn::Ident>()
+                        .is_ok_and(|identity| identity == "test")
+            }));
+        self.current_interner_values
+            .push(self.interner_parameters(&item.sig));
+        syn::visit::visit_impl_item_fn(self, item);
+        self.current_interner_values.pop();
+        self.current_function_is_test.pop();
+        self.current_functions.pop();
+    }
+
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(path) = call.func.as_ref() {
+            let segments = path
+                .path
+                .segments
+                .iter()
+                .map(|segment| segment.ident.to_string())
+                .collect::<Vec<_>>();
+            if self.is_interner_constructor_path(&segments) && !self.interner_construction_allowed()
+            {
+                self.reject("Interner construction outside the project-local session");
+            }
+            if self.is_product_lowerer_path(&segments) && !self.product_lowering_allowed() {
+                self.reject("product lowering call outside the production coordinator");
+            }
+            if self.is_session_constructor_path(&segments) && !self.session_start_allowed() {
+                self.reject("session construction outside the project-local entry");
+            }
+        }
+        syn::visit::visit_expr_call(self, call);
+    }
+
+    fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
+        let segments = path
+            .path
+            .segments
+            .iter()
+            .map(|segment| segment.ident.to_string())
+            .collect::<Vec<_>>();
+        if self.is_product_lowerer_path(&segments) && !self.product_lowering_allowed() {
+            self.reject("product lowering capability escaped its production owner");
+        }
+        if self.is_interner_constructor_path(&segments) && !self.interner_construction_allowed() {
+            self.reject("Interner constructor capability escaped its session owner");
+        }
+        if self.is_session_constructor_path(&segments) && !self.session_start_allowed() {
+            self.reject("session constructor capability escaped its entry owner");
+        }
+        syn::visit::visit_expr_path(self, path);
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        let interner_receiver = match call.receiver.as_ref() {
+            syn::Expr::Path(receiver) => receiver.path.segments.last().is_some_and(|segment| {
+                self.current_interner_values
+                    .last()
+                    .is_some_and(|values| values.contains(&segment.ident.to_string()))
+            }),
+            _ => false,
+        };
+        if call.method == "with_intrinsics"
+            && interner_receiver
+            && !self.interner_construction_allowed()
+        {
+            self.reject("Interner construction method outside the project-local session");
+        }
+        syn::visit::visit_expr_method_call(self, call);
     }
 
     fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
@@ -1303,6 +1709,90 @@ fn project_local_source_boundary_rejects_obfuscated_capabilities() {
             "fn hidden() { super::library_compiler::compile(); }",
             "root path escapes candidate tree",
         ),
+        (
+            "use super::project_local_pass_port::Interner; fn copied() { let _ = Interner::with_intrinsics(); }",
+            "second interner construction",
+        ),
+        (
+            "use super::project_local_pass_port::Interner; type I = Interner; fn copied() { let _ = I::with_intrinsics(); }",
+            "aliased interner construction",
+        ),
+        (
+            "use super::project_local_pass_port::Interner; fn copied() { let make = Interner::with_intrinsics; make(); }",
+            "escaped interner constructor",
+        ),
+        (
+            "fn copied() { let _ = super::project_local_pass_port::Interner::with_intrinsics(); }",
+            "fully qualified interner construction",
+        ),
+        (
+            "fn copied() { let make = super::project_local_pass_port::Interner::with_intrinsics; make(); }",
+            "fully qualified escaped interner constructor",
+        ),
+        (
+            "use super::project_local_pass_port::Interner; fn copied() { type I = Interner; let _ = I::with_intrinsics(); }",
+            "block-local interner alias",
+        ),
+        (
+            "use super::project_local_pass_port::Interner; fn copied(value: Interner) { value.with_intrinsics(); }",
+            "method-shaped interner construction",
+        ),
+        (
+            "use super::lowerer::lower_product_groups; fn copied() { lower_product_groups(); }",
+            "second product lowerer call",
+        ),
+        (
+            "use super::lowerer::lower_product_groups; fn copied() { let f = lower_product_groups; f(); }",
+            "aliased product lowerer call",
+        ),
+        (
+            "fn copied() { super::lowerer::lower_product_groups(); }",
+            "fully qualified product lowerer call",
+        ),
+        (
+            "fn copied() { let lower = super::lowerer::lower_product_groups; lower(); }",
+            "fully qualified escaped product lowerer",
+        ),
+        (
+            "use super::session::SessionCore; fn copied() { let _ = SessionCore::start(); }",
+            "second session construction",
+        ),
+        (
+            "use super::session::SessionCore; fn copied() { let start = SessionCore::start; start(); }",
+            "escaped session constructor",
+        ),
+        (
+            "fn copied() { let _ = super::session::SessionCore::start(); }",
+            "fully qualified session construction",
+        ),
+        (
+            "fn copied() { let start = super::session::SessionCore::start; start(); }",
+            "fully qualified escaped session constructor",
+        ),
+        (
+            "use super::session::SessionCore; fn copied() { type S = SessionCore; let _ = S::start(); }",
+            "block-local session alias",
+        ),
+        (
+            "use super::project_local_pass_port::Interner; fn copied(make: fn() -> Interner) { let _ = make(); }",
+            "interner callback injection",
+        ),
+        (
+            "use super::project_local_pass_port::Interner; type Factory = fn() -> Interner; fn copied(make: Factory) { let _ = make(); }",
+            "callback type alias injection",
+        ),
+        (
+            "use super::project_local_pass_port::Interner; type Factory = fn() -> Interner; type ChainedFactory = Factory; fn copied(make: ChainedFactory) { let _ = make(); }",
+            "chained callback type alias injection",
+        ),
+        (
+            "fn copied(lower: impl FnOnce()) { lower(); }",
+            "lowerer callback injection",
+        ),
+        (
+            "use super::project_local_pass_port::TypeRecipeNode; fn copied(node: TypeRecipeNode) { if let TypeRecipeNode::Keyword(_) = node {} }",
+            "second recipe evaluator",
+        ),
         ("mod hidden { fn concealed() {} }", "inline module"),
         ("mod hidden;", "undeclared external module"),
     ];
@@ -1317,6 +1807,39 @@ fn project_local_source_boundary_rejects_obfuscated_capabilities() {
             "boundary accepted {label}"
         );
     }
+    assert!(
+        validate_candidate_rust_source(
+            "project_local_pass_port.rs",
+            "use crate::check::checker; fn hidden() { checker::library_compiler::compile(); }",
+        )
+        .is_err(),
+        "boundary accepted a parent import that bypasses the child capability allowlist"
+    );
+    assert!(
+        validate_candidate_rust_source(
+            "mod.rs",
+            "pub(super) use lowerer::lower_product_groups_for_test;",
+        )
+        .is_err(),
+        "boundary exposed a test-only lowerer helper without cfg(test)"
+    );
+    assert!(
+        validate_candidate_rust_source(
+            "entry.rs",
+            "struct Local; impl Local { fn with_intrinsics(&self) {} } fn harmless(value: Local) { value.with_intrinsics(); }",
+        )
+        .is_ok(),
+        "boundary rejected a harmless local method with the same leaf name"
+    );
+    let local_alias_error = validate_candidate_rust_source(
+        "entry.rs",
+        "use super::project_local_pass_port::Interner; fn copied() { type I = Interner; let _ = I::with_intrinsics(); }",
+    )
+    .expect_err("boundary rejects a block-local capability alias");
+    assert!(
+        local_alias_error.contains("local type alias"),
+        "block-local capability alias was rejected only incidentally: {local_alias_error}"
+    );
     let aliased_manifest = r#"
         [target.'cfg(test)'.dev-dependencies]
         hidden = { package = "typokat-library", path = "../typokat-library" }
@@ -1950,6 +2473,212 @@ fn request_product_roots_do_not_change_source_driven_output_or_passive_work() {
 }
 
 #[test]
+fn project_local_production_force_all_census_emits_named_attributed_diff() {
+    const STARTING_BASELINE: &str =
+        include_str!("../../../tests/fixtures/library-owned-records.txt");
+    const CLOSED_EVIDENCE: [&str; 3] = [
+        "omitted-member-incomplete",
+        "unavailable-group",
+        "single-report-collapse",
+    ];
+
+    let provider = LibraryBaseProvider::new();
+    let product = provider.declaration_product().expect("declaration product");
+    let product_native = native_product_evidence(&product);
+    let inputs = case_inputs("array");
+    let native = mapped_native_evidence(&provider, &product, &inputs, &product_native);
+    let roots = case_demand_roots("array", &native);
+    let trace = candidate_trace(
+        &provider,
+        candidate_request("array", inputs, roots, true, None),
+    );
+    let force_all = trace
+        .trace
+        .force_all
+        .as_ref()
+        .expect("array force_all production receipt");
+
+    let profile = crate::profile::ExactLibraryProfile::load_packaged()
+        .expect("exact packaged profile source bytes");
+    let source_lines = profile
+        .sources()
+        .iter()
+        .map(|source| {
+            let text = std::str::from_utf8(source.bytes())
+                .unwrap_or_else(|_| panic!("packaged source {} is UTF-8", source.name()));
+            (source.name().to_owned(), LineIndex::new(text))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let escape = |text: &str| {
+        let mut escaped = String::with_capacity(text.len());
+        for character in text.chars() {
+            match character {
+                '\\' => escaped.push_str("\\\\"),
+                '\t' => escaped.push_str("\\t"),
+                '\n' => escaped.push_str("\\n"),
+                '\r' => escaped.push_str("\\r"),
+                _ => escaped.push(character),
+            }
+        }
+        escaped
+    };
+    let mut diagnostics = 0usize;
+    let mut incompletes = 0usize;
+    let mut current = force_all
+        .library_records
+        .iter()
+        .map(|row| {
+            let (kind, name, start, detail) = match &row.record {
+                crate::check::checker::library_compiler::NormalizedCheckerRecordForTest::Diagnostic(
+                    diagnostic,
+                ) => {
+                    diagnostics += 1;
+                    (
+                        "diagnostic",
+                        diagnostic.code.as_str(),
+                        diagnostic.span.start,
+                        diagnostic.message.as_str(),
+                    )
+                }
+                crate::check::checker::library_compiler::NormalizedCheckerRecordForTest::Incomplete(
+                    incomplete,
+                ) => {
+                    incompletes += 1;
+                    (
+                        "incomplete",
+                        incomplete.id.as_str(),
+                        incomplete.span.start,
+                        incomplete.context.as_str(),
+                    )
+                }
+            };
+            let position = source_lines
+                .get(&row.source_path)
+                .unwrap_or_else(|| panic!("missing packaged source {}", row.source_path))
+                .line_col(start);
+            format!(
+                "{kind}\t{}\t{}:{}:{}\t{}",
+                escape(name),
+                row.source_path,
+                position.line,
+                position.column,
+                escape(detail),
+            )
+        })
+        .collect::<Vec<_>>();
+    current.sort();
+
+    let baseline = STARTING_BASELINE
+        .lines()
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let mut delta = BTreeMap::<String, i64>::new();
+    for row in &baseline {
+        *delta.entry(row.clone()).or_default() -= 1;
+    }
+    for row in &current {
+        *delta.entry(row.clone()).or_default() += 1;
+    }
+    let mut removed = Vec::new();
+    let mut added = Vec::new();
+    for (row, count) in delta {
+        for _ in 0..(-count).max(0) {
+            removed.push(row.clone());
+        }
+        for _ in 0..count.max(0) {
+            added.push(row.clone());
+        }
+    }
+
+    let attributions = BTreeMap::<String, &'static str>::new();
+    assert!(attributions
+        .values()
+        .all(|evidence| CLOSED_EVIDENCE.contains(evidence)));
+    let unattributed = removed
+        .iter()
+        .filter(|row| !attributions.contains_key(*row))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let ready = force_all
+        .terminal_census
+        .iter()
+        .filter(|row| {
+            matches!(
+                &row.terminal,
+                ProjectLocalForceAllTerminalForTest::Ready { .. }
+            )
+        })
+        .count();
+    let unavailable = force_all
+        .terminal_census
+        .iter()
+        .filter_map(|row| match &row.terminal {
+            ProjectLocalForceAllTerminalForTest::Unavailable(reason) => {
+                Some(format!("{}={reason:?}", row.group.name))
+            }
+            ProjectLocalForceAllTerminalForTest::Ready { .. } => None,
+        })
+        .collect::<Vec<_>>();
+    let mut receipt_rows = current.clone();
+    receipt_rows.extend(force_all.terminal_census.iter().map(|row| {
+        format!(
+            "terminal\t{}\t{}\t{:?}",
+            row.group.product_key, row.group.name, row.terminal
+        )
+    }));
+    let receipt_digest = rows_digest(&receipt_rows);
+
+    let mut report = format!(
+        "production force_all census: baseline={} current={} diagnostics={} incompletes={} removed={} added={} unattributed={}\nterminal census: total={} ready={} unavailable={}\nreceipt digest: {}\n",
+        baseline.len(),
+        current.len(),
+        diagnostics,
+        incompletes,
+        removed.len(),
+        added.len(),
+        unattributed.len(),
+        force_all.terminal_census.len(),
+        ready,
+        unavailable.len(),
+        receipt_digest,
+    );
+    for row in &unavailable {
+        report.push_str("  terminal - ");
+        report.push_str(row);
+        report.push('\n');
+    }
+    for row in &removed {
+        report.push_str("  - ");
+        report.push_str(row);
+        if let Some(evidence) = attributions.get(row) {
+            report.push_str("\t[attributed: ");
+            report.push_str(evidence);
+            report.push(']');
+        }
+        report.push('\n');
+    }
+    for row in &added {
+        report.push_str("  + ");
+        report.push_str(row);
+        report.push('\n');
+    }
+    let output_path = std::env::temp_dir().join(format!(
+        "typokat-project-local-force-all-named-diff-{}.txt",
+        std::process::id()
+    ));
+    std::fs::write(&output_path, &report).expect("write full named production diff");
+    println!("{report}full named diff: {}", output_path.display());
+    assert!(
+        unattributed.is_empty(),
+        "production force_all census removed {} unattributed rows; full named diff: {}",
+        unattributed.len(),
+        output_path.display(),
+    );
+}
+
+#[test]
 fn project_local_force_all_matches_black_box_observations() {
     let provider = LibraryBaseProvider::new();
     let product = provider.declaration_product().expect("declaration product");
@@ -1969,6 +2698,22 @@ fn project_local_force_all_matches_black_box_observations() {
             &provider,
             candidate_request(case_id, inputs, roots.clone(), true, None),
         );
+        let force_all = trace
+            .trace
+            .force_all
+            .as_ref()
+            .expect("force-all request returns one branded audit receipt");
+        assert_eq!(force_all.terminal_census.len(), product.group_count());
+        assert_eq!(
+            force_all
+                .terminal_census
+                .iter()
+                .map(|row| row.group.clone())
+                .collect::<Vec<_>>(),
+            native.groups
+        );
+        validate_force_all(&native, &oracle, force_all, &trace.observation)
+            .unwrap_or_else(|error| panic!("{case_id} force-all: {error:?}"));
         validate_candidate_trace(
             case_id,
             &native,
@@ -2964,9 +3709,27 @@ fn validate_force_all(
         observation,
         ProjectLocalSemanticPhaseForTest::ForceAll,
     )?;
-    if observed != native.groups
-        || force_all.materialized_product_groups != observed
-        || force_all.materialized_owner_work_count != observed.len()
+    let ready = force_all
+        .terminal_census
+        .iter()
+        .filter_map(|row| {
+            matches!(
+                row.terminal,
+                ProjectLocalForceAllTerminalForTest::Ready { .. }
+            )
+            .then(|| row.group.clone())
+        })
+        .collect::<Vec<_>>();
+    if force_all.requested_product_groups != native.groups
+        || force_all.additional_materialized_product_groups != observed
+        || force_all.additional_materialized_owner_work_count != observed.len()
+        || force_all.terminal_census.len() != native.groups.len()
+        || force_all
+            .terminal_census
+            .iter()
+            .zip(&native.groups)
+            .any(|(row, expected)| row.group != *expected)
+        || force_all.production_validation_roots != ready
         || force_all.semantic_probes != oracle.force_all_semantic_probes
         || force_all.library_records != oracle.library_records
     {
@@ -4077,6 +4840,8 @@ fn valid_control_trace() -> (
         demand_root_visits: roots.clone(),
         materialized_product_groups: materialized.clone(),
         materialized_owner_work_count: materialized.len(),
+        production_validation_roots: Vec::new(),
+        production_library_records: Vec::new(),
         semantic_probes: probes,
         user_event_ledger: Vec::new(),
         user_check_results: Vec::new(),
@@ -4869,6 +5634,11 @@ fn synthetic_recursive_alias_product(kind: RecursiveAliasIndirection) -> Library
                 },
                 node: TypeRecipeNode::Tuple {
                     elements: Box::new([TupleElementRecipe {
+                        site: SourceSite {
+                            source,
+                            start: 26,
+                            end: 41,
+                        },
                         name: None,
                         value: reference,
                         optional: false,
