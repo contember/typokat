@@ -692,12 +692,12 @@ class SessionBatchContractTests(unittest.TestCase):
 
     def test_single_project_linkage_recomputes_exact_raw_cold_projects(self) -> None:
         evidence = single_project_evidence(self.contract)
-        receipt = batch.verify_single_project_linkage(evidence, self.contract)
+        receipt = batch.recompute_single_project_linkage(evidence, self.contract)
 
         self.assertEqual(
             receipt,
             {
-                "verdict": "LINKAGE-PASS",
+                "verdict": "LINKAGE-RECOMPUTED",
                 "candidate_commit": "a" * 40,
                 "candidate_tree": "b" * 40,
                 "rows": ["fast-clean", "fast-errors", "collision", "fanout"],
@@ -705,7 +705,7 @@ class SessionBatchContractTests(unittest.TestCase):
                 "oracle_sha256": single_project_oracle_sha256(self.contract),
             },
         )
-        self.assertNotEqual(receipt["verdict"], "GO")
+        self.assertNotIn(receipt["verdict"], {"GO", "PASS", "LINKAGE-PASS"})
 
     def test_single_project_linkage_rejects_file_inventory_forgery(self) -> None:
         mutations = {
@@ -725,18 +725,18 @@ class SessionBatchContractTests(unittest.TestCase):
             mutate(request["files"])
             refresh_single_project_request(process, request)
             with self.subTest(label=label), self.assertRaises(batch.BatchContractError):
-                batch.verify_single_project_linkage(evidence, self.contract)
+                batch.recompute_single_project_linkage(evidence, self.contract)
 
     def test_single_project_linkage_rejects_row_and_semantic_forgery(self) -> None:
         missing = single_project_evidence(self.contract)
         missing["tools"]["typokat"]["processes"].pop()
         with self.assertRaisesRegex(batch.BatchContractError, "row|cardinality"):
-            batch.verify_single_project_linkage(missing, self.contract)
+            batch.recompute_single_project_linkage(missing, self.contract)
 
         reordered = single_project_evidence(self.contract)
         reordered["tools"]["tsgo"]["processes"].reverse()
         with self.assertRaisesRegex(batch.BatchContractError, "row|order"):
-            batch.verify_single_project_linkage(reordered, self.contract)
+            batch.recompute_single_project_linkage(reordered, self.contract)
 
         for label, diagnostic in (
             ("path", "renamed/main.ts:4:7:2322"),
@@ -751,36 +751,36 @@ class SessionBatchContractTests(unittest.TestCase):
             with self.subTest(label=label), self.assertRaisesRegex(
                 batch.BatchContractError, "oracle|semantic|diagnostic"
             ):
-                batch.verify_single_project_linkage(evidence, self.contract)
+                batch.recompute_single_project_linkage(evidence, self.contract)
 
     def test_single_project_linkage_requires_raw_data_and_same_runner(self) -> None:
         no_raw_request = single_project_evidence(self.contract)
         process = single_project_process(no_raw_request, "typokat", "fast-clean")
         del process["request_stream"]
         with self.assertRaises(batch.BatchContractError):
-            batch.verify_single_project_linkage(no_raw_request, self.contract)
+            batch.recompute_single_project_linkage(no_raw_request, self.contract)
 
         no_raw_response = single_project_evidence(self.contract)
         process = single_project_process(no_raw_response, "tsgo", "fast-clean")
         del process["response_stream"]
         with self.assertRaises(batch.BatchContractError):
-            batch.verify_single_project_linkage(no_raw_response, self.contract)
+            batch.recompute_single_project_linkage(no_raw_response, self.contract)
 
         different_binary = single_project_evidence(self.contract)
         different_binary["tools"]["typokat"]["batch_binary_sha256"] = "f" * 64
         with self.assertRaisesRegex(batch.BatchContractError, "binary"):
-            batch.verify_single_project_linkage(different_binary, self.contract)
+            batch.recompute_single_project_linkage(different_binary, self.contract)
 
-        go_claim = single_project_evidence(self.contract)
-        go_claim["verdict"] = "GO"
-        with self.assertRaisesRegex(batch.BatchContractError, "GO|verdict"):
-            batch.verify_single_project_linkage(go_claim, self.contract)
+        injected_verdict = single_project_evidence(self.contract)
+        injected_verdict["verdict"] = "GO"
+        with self.assertRaisesRegex(batch.BatchContractError, "shape|verdict"):
+            batch.recompute_single_project_linkage(injected_verdict, self.contract)
 
     def test_single_project_linkage_requires_raw_cold_processes(self) -> None:
         missing = single_project_evidence(self.contract)
         del missing["tools"]["typokat"]["cold_processes"]
         with self.assertRaisesRegex(batch.BatchContractError, "cold|process|shape"):
-            batch.verify_single_project_linkage(missing, self.contract)
+            batch.recompute_single_project_linkage(missing, self.contract)
 
         forged = single_project_evidence(self.contract)
         process = forged["tools"]["typokat"]["cold_processes"][1]
@@ -792,18 +792,18 @@ class SessionBatchContractTests(unittest.TestCase):
         with self.assertRaisesRegex(
             batch.BatchContractError, "cold|oracle|semantic|diagnostic"
         ):
-            batch.verify_single_project_linkage(forged, self.contract)
+            batch.recompute_single_project_linkage(forged, self.contract)
 
     def test_single_project_linkage_authenticates_cold_binary_provenance(self) -> None:
         wrong_candidate = single_project_evidence(self.contract)
         wrong_candidate["tools"]["typokat"]["cold_binary_candidate_commit"] = "b" * 40
         with self.assertRaisesRegex(batch.BatchContractError, "candidate|revision|build"):
-            batch.verify_single_project_linkage(wrong_candidate, self.contract)
+            batch.recompute_single_project_linkage(wrong_candidate, self.contract)
 
         wrong_tree = single_project_evidence(self.contract)
         wrong_tree["typokat_cold_build"]["candidate_tree"] = "c" * 40
         with self.assertRaisesRegex(batch.BatchContractError, "tree|build"):
-            batch.verify_single_project_linkage(wrong_tree, self.contract)
+            batch.recompute_single_project_linkage(wrong_tree, self.contract)
 
         wrong_typokat_binary = single_project_evidence(self.contract)
         tool = wrong_typokat_binary["tools"]["typokat"]
@@ -812,12 +812,74 @@ class SessionBatchContractTests(unittest.TestCase):
             process["executable_before_sha256"] = "7" * 64
             process["executable_after_sha256"] = "7" * 64
         with self.assertRaisesRegex(batch.BatchContractError, "binary|build"):
-            batch.verify_single_project_linkage(wrong_typokat_binary, self.contract)
+            batch.recompute_single_project_linkage(wrong_typokat_binary, self.contract)
 
         wrong_tsgo_binary = single_project_evidence(self.contract)
         wrong_tsgo_binary["tools"]["tsgo"]["authenticated_cold_binary_sha256"] = "8" * 64
         with self.assertRaisesRegex(batch.BatchContractError, "binary"):
-            batch.verify_single_project_linkage(wrong_tsgo_binary, self.contract)
+            batch.recompute_single_project_linkage(wrong_tsgo_binary, self.contract)
+
+    def test_single_project_linkage_rejects_bool_numbers_and_malformed_hash_types(self) -> None:
+        def request_schema(evidence: dict[str, object]) -> None:
+            process = single_project_process(evidence, "typokat", "fast-clean")
+            request = json.loads(process["request_stream"])
+            request["schema"] = True
+            refresh_single_project_request(process, request)
+
+        def response_file_count(evidence: dict[str, object]) -> None:
+            process = single_project_process(evidence, "typokat", "fast-clean")
+            response = json.loads(process["response_stream"])
+            response["file_count"] = True
+            refresh_single_project_response(process, response)
+
+        def response_exit_code(evidence: dict[str, object]) -> None:
+            process = single_project_process(evidence, "typokat", "fast-errors")
+            response = json.loads(process["response_stream"])
+            response["semantic"]["exit_code"] = True
+            refresh_single_project_response(process, response)
+            refresh_single_project_claimed_oracle(evidence, "typokat")
+
+        def cold_returncode(evidence: dict[str, object]) -> None:
+            process = evidence["tools"]["typokat"]["cold_processes"][1]
+            process["returncode"] = True
+            process["normalized_semantic"]["exit_code"] = True
+            refresh_claimed_cold_oracle(evidence, "typokat")
+
+        def retained_frame_state(evidence: dict[str, object]) -> None:
+            process = single_project_process(evidence, "typokat", "fast-clean")
+            response = json.loads(process["response_stream"])
+            response["retained_frame_state"] = False
+            refresh_single_project_response(process, response)
+
+        def retained_frame_handles(evidence: dict[str, object]) -> None:
+            process = single_project_process(evidence, "tsgo", "fast-clean")
+            response = json.loads(process["response_stream"])
+            response["retained_frame_handles"] = False
+            refresh_single_project_response(process, response)
+
+        mutations = {
+            "evidence-schema": lambda value: value.update(schema=True),
+            "request-schema": request_schema,
+            "file-count": response_file_count,
+            "exit-code": response_exit_code,
+            "returncode": cold_returncode,
+            "retained-frame-state": retained_frame_state,
+            "retained-frame-handles": retained_frame_handles,
+            "source-hash-type": lambda value: value["tools"]["typokat"].update(
+                runner_source_sha256=[]
+            ),
+            "build-hash-type": lambda value: value["typokat_cold_build"].update(
+                binary_sha256=[]
+            ),
+            "raw-hash-type": lambda value: single_project_process(
+                value, "typokat", "fast-clean"
+            ).update(request_stream_sha256=True),
+        }
+        for label, mutate in mutations.items():
+            evidence = single_project_evidence(self.contract)
+            mutate(evidence)
+            with self.subTest(label=label), self.assertRaises(batch.BatchContractError):
+                batch.recompute_single_project_linkage(evidence, self.contract)
 
     def test_raw_frame_outputs_drive_oracles_and_lifecycle_controls(self) -> None:
         evidence = raw_panel_evidence(1, 1.0, 100_000, 110_000)
@@ -1142,7 +1204,6 @@ def single_project_evidence(contract: dict[str, object]) -> dict[str, object]:
     typokat_cold_hash = "6" * 64
     evidence = {
         "schema": 1,
-        "verdict": "LINKAGE-PASS",
         "candidate_commit": "a" * 40,
         "candidate_tree": "b" * 40,
         "cold_candidate_commit": "a" * 40,
