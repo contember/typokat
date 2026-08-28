@@ -754,3 +754,17 @@ numbers are invalid without `--no-smt`.
   class/status witness for 42 parse-error and four unresolved eligible frames, so those normalize
   to the stable tokens `parse-error` and `unresolved`. Runner-specific message text is not treated
   as authenticated evidence.
+- **2026-08-28 — WU6 exact-flags oracle correction.** The first authenticated official frame
+  exposed that the TypeScript `.errors.txt` baseline was produced with the test's own options,
+  while WU6 strips directives and applies canonical `strict` / ES2025 / Preserve flags. The
+  baseline expected eight diagnostics; the batch TypeScript-Go runner, the authenticated cold
+  TypeScript-Go CLI, and authenticated `tsc` 6.0.3 all produced the same twelve diagnostics under
+  the WU6 flags. A full cold comparison then found the first legitimate 6.0.3-versus-7.0.2
+  difference after 76 matching frames, at `privateNameDuplicateField.ts`; requiring one 687-row
+  cross-version oracle is therefore invalid. Official baselines remain source/version evidence.
+  The four cold workloads retain three-way `tsc` / TypeScript-Go / typokat truth. The 687-frame
+  panels use separate ordered authorities: typokat's committed scoreboard and a committed 1.17 MiB
+  exact-flags oracle produced by 687 fresh processes of the authenticated cold TypeScript-Go
+  binary. That artifact pins every source, argv, stdout, stderr, return code, binary/profile
+  identity, and normalized outcome. The batch runner must reproduce it and may not generate or
+  bless it. No candidate timing has run.

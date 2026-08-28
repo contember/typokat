@@ -84,6 +84,10 @@ class SessionBatchContractTests(unittest.TestCase):
             "4f2de678286401759b3fb4475bafe35b8f32b4b3a07d92642bbf37eadc9b34a4",
         )
         self.assertEqual(
+            self.contract["tsgo"]["cold_binary_relative_path"],
+            "tooling/full-lib-bench/.stage/tsgo-7.0.2/lib/tsc",
+        )
+        self.assertEqual(
             self.contract["tsgo"]["build_argv"],
             ["go", "build", "-trimpath", "-o", "{output}", "./cmd/typokat-wu6-batch"],
         )
@@ -142,6 +146,10 @@ class SessionBatchContractTests(unittest.TestCase):
             "runner-retained-frame-handles-zero",
         )
         self.assertTrue(lifecycle["tsgo_single_threaded"])
+        self.assertEqual(lifecycle["frame_dispositions"], ["semantic", "parse-rejected"])
+        self.assertEqual(
+            lifecycle["parse_rejected_identity"], "explicit-absence-no-fabrication"
+        )
         self.assertEqual(
             self.contract["allocation_probe"],
             {
@@ -188,7 +196,47 @@ class SessionBatchContractTests(unittest.TestCase):
             },
         )
 
-    def test_batch_oracles_are_loaded_from_pinned_scoreboard_and_typescript_baselines(self) -> None:
+    def test_batch_oracles_use_external_exact_flags_cold_tsgo_truth(self) -> None:
+        oracles = self.contract["oracles"]
+        self.assertEqual(
+            oracles["tsgo_batch_oracle"],
+            "authenticated-exact-flags-cold-tsgo-artifact",
+        )
+        self.assertEqual(
+            oracles["typescript_baseline_authority"],
+            "source-and-version-evidence-only",
+        )
+        self.assertEqual(
+            oracles["batch_oracle_rule"],
+            "ordered-normalized-exact-flags-cold-tsgo-outcomes",
+        )
+        self.assertEqual(oracles["exact_flags_truth_tools"], ["tsgo-7.0.2"])
+        self.assertEqual(oracles["exact_flags_truth_mode"], "fresh-process-per-frame")
+        self.assertEqual(
+            oracles["tsgo_batch_oracle_sha256"],
+            "f56e73cc9a60c4bcfd57fe291d72417c74ff4c480f81ee04abee70272e20aa3e",
+        )
+        self.assertEqual(
+            oracles["tsgo_batch_oracle_ordered_semantic_sha256"],
+            "dfb565aeb79264a18293652a5b6d4ff6fc14c5f7f6ccbbd1e771ccdbd60ce6db",
+        )
+        self.assertEqual(oracles["cross_tool_agreement_scope"], "cold-four-row-panel-only")
+        self.assertFalse(oracles["require_full_batch_cross_tool_agreement"])
+        self.assertTrue(oracles["require_cold_cross_tool_agreement"])
+        self.assertEqual(
+            oracles["cross_tool_rows"],
+            ["fast-clean", "fast-errors", "collision", "fanout"],
+        )
+        self.assertEqual(oracles["tsc_tsgo_matching_prefix_frames"], 76)
+        self.assertEqual(
+            oracles["tsc_tsgo_first_mismatch_case_id"],
+            "conformance/classes/members/privateNames/privateNameDuplicateField.ts",
+        )
+        self.assertEqual(
+            oracles["tsc_tsgo_first_mismatch_source_sha256"],
+            "1932666cae238490328c1a3e1535c90ebd061f22a9f567efdede116566201a2f",
+        )
+
         authority = batch.load_authenticated_batch_oracles(self.contract)
         self.assertEqual(authority["frame_count"], 687)
         self.assertEqual(
@@ -226,12 +274,16 @@ class SessionBatchContractTests(unittest.TestCase):
         self.assertEqual(
             authority["tsgo"][0]["diagnostics"],
             [
+                "2:2564",
                 "15:2341",
                 "16:2341",
+                "17:2322",
                 "17:2341",
                 "18:2341",
                 "20:2341",
                 "21:2341",
+                "21:2721",
+                "22:2322",
                 "22:2341",
                 "23:2341",
             ],
@@ -246,26 +298,91 @@ class SessionBatchContractTests(unittest.TestCase):
                     self.contract, scoreboard_path=changed
                 )
 
-        with self.assertRaisesRegex(batch.BatchContractError, "baseline.*identity"):
-            batch.load_authenticated_batch_oracles(
-                self.contract,
-                baseline_overrides={
-                    "tests/baselines/reference/classPropertyAsPrivate.errors.txt": b"wrong"
-                },
-            )
-
-        with tempfile.TemporaryDirectory() as temporary:
-            with self.assertRaisesRegex(batch.BatchContractError, "Git.*baseline"):
-                batch.load_authenticated_batch_oracles(
-                    self.contract, git_cache_path=Path(temporary)
-                )
-
         one_frame = raw_panel_evidence(1, 1.0, 100_000, 110_000)
         apply_real_oracle(one_frame, authority)
         verified = batch.recompute_panel(
             one_frame, batch.oracle_panel(authority, 1), self.contract
         )
         self.assertEqual(verified.projects, 1)
+
+    def test_exact_flags_tsgo_artifact_authenticates_every_raw_cold_invocation(self) -> None:
+        exact = batch.load_authenticated_exact_flags_tsgo_oracle(self.contract)
+        self.assertEqual(len(exact), 687)
+        self.assertEqual([row["ordinal"] for row in exact], list(range(687)))
+        self.assertEqual(
+            exact[0]["normalized_semantic"]["diagnostics"],
+            [
+                "2:2564",
+                "15:2341",
+                "16:2341",
+                "17:2322",
+                "17:2341",
+                "18:2341",
+                "20:2341",
+                "21:2341",
+                "21:2721",
+                "22:2322",
+                "22:2341",
+                "23:2341",
+            ],
+        )
+        self.assertEqual(
+            exact[5]["normalized_semantic"]["diagnostics"].count("20:2341"), 2
+        )
+
+        oracle_path = HERE / "exact-flags-tsgo-oracle.json"
+        with tempfile.TemporaryDirectory() as temporary:
+            changed = Path(temporary) / "oracle.json"
+            changed.write_bytes(oracle_path.read_bytes() + b"\n")
+            with self.assertRaisesRegex(batch.BatchContractError, "exact-flags.*identity"):
+                batch.load_authenticated_exact_flags_tsgo_oracle(
+                    self.contract, oracle_path=changed
+                )
+
+    def test_exact_flags_tsgo_artifact_rejects_rehashed_internal_forgery(self) -> None:
+        oracle_path = HERE / "exact-flags-tsgo-oracle.json"
+        original = json.loads(oracle_path.read_bytes())
+
+        def swap_first_two(value: dict[str, object]) -> None:
+            value["frames"][0], value["frames"][1] = value["frames"][1], value["frames"][0]
+
+        mutations = (
+            ("binary", lambda value: value["tool"].update(binary_sha256="0" * 64)),
+            ("source", lambda value: value["frames"][0].update(source_sha256="0" * 64)),
+            ("command", lambda value: value["frames"][0]["argv"].append("--skipLibCheck")),
+            ("stdout", lambda value: value["frames"][0].update(stdout="")),
+            ("stderr", lambda value: value["frames"][0].update(stderr="forged")),
+            ("returncode", lambda value: value["frames"][0].update(returncode=0)),
+            ("profile", lambda value: value["profile"].update(length_framed_sha256="0" * 64)),
+            ("flags", lambda value: value["flags"].append("--skipLibCheck")),
+            ("process-mode", lambda value: value["execution_contract"].update(mode="batch")),
+            ("frame-order", swap_first_two),
+            (
+                "semantic",
+                lambda value: value["frames"][0]["normalized_semantic"]["diagnostics"].append(
+                    "999:9999"
+                ),
+            ),
+            (
+                "semantic-digest",
+                lambda value: value.update(ordered_normalized_semantic_sha256="0" * 64),
+            ),
+        )
+        for label, mutate in mutations:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
+                candidate = copy.deepcopy(original)
+                mutate(candidate)
+                raw = json.dumps(
+                    candidate, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+                ).encode() + b"\n"
+                changed = Path(temporary) / "oracle.json"
+                changed.write_bytes(raw)
+                contract = copy.deepcopy(self.contract)
+                contract["oracles"]["tsgo_batch_oracle_sha256"] = hashlib.sha256(raw).hexdigest()
+                with self.assertRaises(batch.BatchContractError):
+                    batch.load_authenticated_exact_flags_tsgo_oracle(
+                        contract, oracle_path=changed
+                    )
 
     def test_frame_receipts_require_unique_local_state_and_zero_retention(self) -> None:
         frames = [frame_receipt(index) for index in range(32)]
@@ -285,6 +402,25 @@ class SessionBatchContractTests(unittest.TestCase):
         product_drift[-1]["shared_product_identity"] = "other"
         with self.assertRaisesRegex(batch.BatchContractError, "shared product"):
             batch.validate_lifecycle_receipts(product_drift, 32)
+
+        parse_rejected = frame_receipt(32)
+        parse_rejected.update(
+            lifecycle_disposition="parse-rejected",
+            program_identity=None,
+            checker_identity=None,
+            semantic_identity=None,
+        )
+        batch.validate_lifecycle_receipts([*frames, parse_rejected], 33)
+
+        fabricated = copy.deepcopy(parse_rejected)
+        fabricated["checker_identity"] = "parse-rejected-checker-32"
+        with self.assertRaisesRegex(batch.BatchContractError, "parse-rejected.*identity"):
+            batch.validate_lifecycle_receipts([*frames, fabricated], 33)
+
+        missing = copy.deepcopy(frames)
+        missing[-1]["semantic_identity"] = None
+        with self.assertRaisesRegex(batch.BatchContractError, "semantic identity"):
+            batch.validate_lifecycle_receipts(missing, 32)
 
     def test_next_panel_is_blocked_until_every_prior_gate_passes(self) -> None:
         green = verified_panel(1, 1.0, 100_000, 110_000, self.contract)
@@ -811,6 +947,7 @@ def protocol_info(tool: str) -> dict[str, object]:
 def frame_receipt(index: int) -> dict[str, object]:
     return {
         "ordinal": index,
+        "lifecycle_disposition": "semantic",
         "program_identity": f"program-{index}",
         "checker_identity": f"checker-{index}",
         "semantic_identity": f"semantic-{index}",

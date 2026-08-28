@@ -37,12 +37,21 @@ cold_oracle_relative_path = "tooling/full-lib-bench/oracles.json"
 cold_oracle_sha256 = "1b1297705791cd4702e3512561b5312c56477d63f8f4e5c14011562a74d220c8"
 typokat_batch_oracle_relative_path = "tooling/official-suite/scoreboard.txt"
 typokat_batch_oracle_sha256 = "d3071df89d689e5d3da43a03cd74b9c7f6c91732699303a8ad33c3131af3575f"
-tsgo_batch_oracle = "pinned-typescript-baselines"
+tsgo_batch_oracle = "authenticated-exact-flags-cold-tsgo-artifact"
+tsgo_batch_oracle_relative_path = "tooling/full-lib-bench/exact-flags-tsgo-oracle.json"
+tsgo_batch_oracle_sha256 = "f56e73cc9a60c4bcfd57fe291d72417c74ff4c480f81ee04abee70272e20aa3e"
+tsgo_batch_oracle_ordered_semantic_sha256 = "dfb565aeb79264a18293652a5b6d4ff6fc14c5f7f6ccbbd1e771ccdbd60ce6db"
 typescript_git_cache_relative_path = "tooling/official-suite/.tools/typescript.git"
-typescript_baseline_authority = "git-blob-at-official-revision"
-batch_oracle_rule = "ordered-normalized-frame-outcomes"
-require_tsc_and_tsgo_cross_tool_agreement = true
-require_typokat_cross_tool_agreement = true
+typescript_baseline_authority = "source-and-version-evidence-only"
+batch_oracle_rule = "ordered-normalized-exact-flags-cold-tsgo-outcomes"
+exact_flags_truth_tools = ["tsgo-7.0.2"]
+exact_flags_truth_mode = "fresh-process-per-frame"
+cross_tool_agreement_scope = "cold-four-row-panel-only"
+require_full_batch_cross_tool_agreement = false
+tsc_tsgo_matching_prefix_frames = 76
+tsc_tsgo_first_mismatch_case_id = "conformance/classes/members/privateNames/privateNameDuplicateField.ts"
+tsc_tsgo_first_mismatch_source_sha256 = "1932666cae238490328c1a3e1535c90ebd061f22a9f567efdede116566201a2f"
+require_cold_cross_tool_agreement = true
 
 [current_typokat_baseline]
 artifact_relative_path = "docs/archive/project-local-library-index-feasibility-2026-08-22/lifecycle-baseline.json"
@@ -60,6 +69,7 @@ repository = "https://github.com/microsoft/typescript-go.git"
 upstream_revision = "2bd066d87f5bafd315be9f40889d0a60b9e58e0b"
 package_version = "7.0.2"
 cold_binary_sha256 = "4f2de678286401759b3fb4475bafe35b8f32b4b3a07d92642bbf37eadc9b34a4"
+cold_binary_relative_path = "tooling/full-lib-bench/.stage/tsgo-7.0.2/lib/tsc"
 runner_source_relative_path = "tooling/full-lib-bench/tsgo-batch/main.go"
 runner_install_path = "cmd/typokat-wu6-batch/main.go"
 build_argv = ["go", "build", "-trimpath", "-o", "{output}", "./cmd/typokat-wu6-batch"]
@@ -81,6 +91,8 @@ typokat_teardown_proof = "session-and-cache-weak-handles-dead"
 tsgo_teardown_proof = "runner-retained-frame-handles-zero"
 typokat_owner_metric = "materialized_product_owner_count"
 tsgo_single_threaded = true
+frame_dispositions = ["semantic", "parse-rejected"]
+parse_rejected_identity = "explicit-absence-no-fabrication"
 
 [allocation_probe]
 timed = false
