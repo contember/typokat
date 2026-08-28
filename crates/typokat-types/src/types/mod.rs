@@ -12,8 +12,8 @@ pub use intern::{
     DeclaredMaterializationError, DerivationEdge, DerivationId, DerivedType, Interner, WellKnown,
 };
 pub use repr::{
-    ClassId, EnumId, EnumMemberFact, EnumMemberId, EnumMemberType, EnumNumber, EnumType, EnumValue,
-    GenericTypeParam, IntrinsicKind, LiteralValue, PropertyKey, TypeParamId, Visibility,
+    AliasId, ClassId, EnumId, EnumMemberFact, EnumMemberId, EnumMemberType, EnumNumber, EnumType,
+    EnumValue, GenericTypeParam, IntrinsicKind, LiteralValue, PropertyKey, TypeParamId, Visibility,
     WellKnownSymbol,
 };
 pub use store::TypeId;

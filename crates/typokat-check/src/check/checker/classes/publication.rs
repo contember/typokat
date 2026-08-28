@@ -1539,6 +1539,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .finish_with_inherited(self.interner, &inherited_classes)
             .expect("class publication must preserve reserved identities");
         self.staged_published_classes = Some(publication.published);
+        if self.staged_published_aliases.is_none() {
+            self.staged_published_aliases =
+                Some(typokat_types::alias_semantics::PublishedAliases::empty());
+        }
         let application_parameters = publication
             .type_parameters
             .into_iter()

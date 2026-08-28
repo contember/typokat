@@ -349,9 +349,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
         let index = decl_id.index();
 
-        // Same-depth re-entry is a surface alias cycle: report `TK2456` for the cycle.
-        // Deeper re-entry came through a type constructor and is legal recursion, so
-        // silently error-type it; seeded object aliases handle member self-reference.
+        // Same-depth re-entry is a surface alias cycle. A guarded re-entry is an
+        // immutable application of the already allocated alias identity.
         if matches!(
             self.type_decls.get(index),
             Some(TypeDecl::Alias {
@@ -368,7 +367,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 Some(depth) if self.alias_indirection_depth == depth => {
                     self.report_surface_cycle(decl_id)
                 }
-                _ => error_ty,
+                _ => self.alias_identity_application(index).unwrap_or(error_ty),
             };
         }
 
@@ -376,9 +375,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         // mutating, so the body is lowered with the parameters in scope. The name +
         // name span feed the M26 `resolving_alias` context (mapped `TK2456`) and the B29
         // cycle stack.
-        let (scope, annotation, param_decl, params, name, name_span) =
+        let (declaration, scope, annotation, param_decl, params, name, name_span) =
             match self.type_decls.get(index) {
                 Some(TypeDecl::Alias {
+                    declaration,
                     scope,
                     annotation,
                     param_decl,
@@ -388,6 +388,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     name_span,
                     ..
                 }) => (
+                    *declaration,
                     *scope,
                     *annotation,
                     *param_decl,
@@ -398,6 +399,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 // An interface with no seeded id, or an out-of-range id: defensive.
                 _ => return error_ty,
             };
+        let recover_library_body = matches!(
+            self.lexical_events
+                .declaration_source(declaration)
+                .map(|source| source.unit),
+            Some(crate::source::SourceUnit::Library { .. })
+        );
 
         // Mark in-progress so a transitive self-reference is caught above.
         self.begin_type_group_construction(decl_id);
@@ -418,30 +425,81 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         // reference to `A`/`B` in `type Pair<A, B> = { … }` resolves to the parameter
         // type. The frame is popped before returning (a parameter does not leak).
         let frame = self.build_type_param_frame(param_decl, &params);
-        let target = self
-            .with_type_params(frame, |pass| {
-                // M24: lower the parameters' `extends` constraints with the frame active.
-                pass.lower_annotation(scope, annotation)
-            })
-            .unwrap_or(error_ty);
+        let target = self.with_type_params(frame, |pass| {
+            // M24: lower the parameters' `extends` constraints with the frame active.
+            pass.lower_annotation(scope, annotation)
+        });
 
         self.resolving_alias_stack.pop();
         self.resolving_alias = prev_resolving_alias;
         if let Some(TypeDecl::Alias { resolving, .. }) = self.type_decls.get_mut(index) {
             *resolving = false;
         }
-        // B29: a confirmed surface-cycle member is the error type (final, not provisional
-        // — a detected cycle is settled), so downstream stays silent (M22).
-        let final_ty = if self.circular_aliases.contains(&index) {
-            error_ty
-        } else {
-            trusted_seed.unwrap_or(target)
-        };
+        let unavailable = self.circular_aliases.contains(&index);
+        let final_ty = trusted_seed.unwrap_or_else(|| {
+            self.type_decls
+                .get(index)
+                .and_then(|declaration| match declaration {
+                    TypeDecl::Alias { alias_template, .. } => Some(*alias_template),
+                    _ => None,
+                })
+                .unwrap_or(error_ty)
+        });
+        if let Some(TypeDecl::Alias {
+            alias_body,
+            alias_unavailable,
+            ..
+        }) = self.type_decls.get_mut(index)
+        {
+            if unavailable {
+                *alias_body = None;
+                *alias_unavailable =
+                    Some(typokat_types::alias_semantics::PublishedAliasUnavailable::DirectCycle);
+            } else if let Some(target) = target {
+                *alias_body = Some(target);
+                *alias_unavailable = None;
+            } else if recover_library_body {
+                // Legacy library shadows retain recovery until the audit-only route is removed.
+                *alias_body = Some(error_ty);
+                *alias_unavailable = None;
+            } else {
+                *alias_body = None;
+                *alias_unavailable = Some(
+                    typokat_types::alias_semantics::PublishedAliasUnavailable::UnsupportedBody,
+                );
+            }
+        }
         if let Some(slot) = self.type_resolved.get_mut(index) {
             *slot = Some(final_ty);
         }
         self.freeze_type_group(decl_id);
         final_ty
+    }
+
+    fn alias_identity_application(&mut self, index: usize) -> Option<TypeId> {
+        let (template, parameters, names) = match self.type_decls.get(index)? {
+            TypeDecl::Alias {
+                alias_template,
+                params,
+                param_decl,
+                ..
+            } => (
+                *alias_template,
+                params.clone(),
+                param_decl
+                    .iter()
+                    .flat_map(|declaration| declaration.params.iter())
+                    .map(|parameter| parameter.name.name.to_string())
+                    .collect::<Vec<_>>(),
+            ),
+            _ => return None,
+        };
+        let arguments = parameters
+            .iter()
+            .zip(names)
+            .map(|(&parameter, name)| (parameter, self.interner.intern_type_param(parameter, name)))
+            .collect();
+        Some(self.interner.intern_instantiation(template, arguments))
     }
 
     /// B29 — a surface cycle re-entered `decl_id`. Report `TK2456` at every alias from
@@ -805,6 +863,15 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         span: Span,
         arguments: Option<&TSTypeParameterInstantiation<'_>>,
     ) -> Option<TypeId> {
+        #[cfg(any(test, feature = "test-utils"))]
+        if !self.demand_project_local_type_group(group) {
+            if let Some(arguments) = arguments {
+                for argument in &arguments.params {
+                    let _ = self.lower_annotation(scope, argument);
+                }
+            }
+            return None;
+        }
         self.record_replay_demand(super::super::replay_index::ReplayOwner::TypeGroup(group));
         let rejected_enum_group = self.binder.enum_group(group).is_some_and(|view| {
             view.buildability != crate::binder::namespace::EnumGroupBuildability::Buildable
@@ -892,7 +959,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             } else if instantiate_omitted_defaults {
                 self.instantiate_type_group_arguments(scope, group, Vec::new(), span)
             } else {
-                Some(self.resolve_type_decl(scope, group))
+                let resolved = self.resolve_type_decl(scope, group);
+                if self.interner.store().tag(resolved) == TypeTag::AliasTemplate {
+                    Some(self.interner.intern_instantiation(resolved, Vec::new()))
+                } else {
+                    Some(resolved)
+                }
             }
         }
     }
@@ -1006,6 +1078,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 PublishedTypeGroupSurface::Template(template)
                     if published.parameters.is_empty() =>
                 {
+                    let template = if self.interner.store().tag(template) == TypeTag::AliasTemplate
+                    {
+                        self.interner.intern_instantiation(template, Vec::new())
+                    } else {
+                        template
+                    };
                     if self.type_environment.is_published() {
                         self.maybe_evaluate(template, span)
                     } else {
@@ -1788,6 +1866,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
         if template_tag == TypeTag::Conditional
             || template_tag == TypeTag::Mapped
+            || template_tag == TypeTag::AliasTemplate
             || self
                 .interner
                 .well_known()

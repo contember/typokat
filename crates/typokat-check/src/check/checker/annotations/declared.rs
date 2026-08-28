@@ -282,7 +282,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     }
 
     fn plan_declared_annotation<'node, 'syntax>(
-        &self,
+        &mut self,
         scope: ScopeId,
         annotation: &'node TSType<'syntax>,
         reject_tuple: bool,
@@ -415,7 +415,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     }
 
     fn plan_declared_recipe<'node, 'syntax>(
-        &self,
+        &mut self,
         scope: ScopeId,
         annotation: &'node TSType<'syntax>,
         depth: u32,
@@ -474,7 +474,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             ),
             TSType::TSArrayType(array) => {
                 #[cfg(any(test, feature = "test-utils"))]
-                self.record_declared_array_dependency_for_oracle();
+                {
+                    let _ = self.demand_project_local_library_identity(0);
+                    self.record_declared_array_dependency_for_oracle();
+                }
                 let element = self.plan_declared_recipe(
                     scope,
                     &array.element_type,
@@ -486,7 +489,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
             TSType::TSTupleType(tuple) => {
                 #[cfg(any(test, feature = "test-utils"))]
-                self.record_declared_array_dependency_for_oracle();
+                {
+                    let _ = self.demand_project_local_library_identity(0);
+                    self.record_declared_array_dependency_for_oracle();
+                }
                 let mut elements = Vec::with_capacity(tuple.element_types.len());
                 for element in &tuple.element_types {
                     elements.push(self.plan_declared_tuple_element(
@@ -530,7 +536,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     }
 
     fn plan_declared_tuple_element<'node, 'syntax>(
-        &self,
+        &mut self,
         scope: ScopeId,
         element: &'node TSTupleElement<'syntax>,
         depth: u32,
@@ -554,7 +560,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     }
 
     fn plan_declared_reference<'node, 'syntax>(
-        &self,
+        &mut self,
         scope: ScopeId,
         name: &'node TSTypeName<'syntax>,
         arguments: Option<&'node oxc_ast::ast::TSTypeParameterInstantiation<'syntax>>,

@@ -14,9 +14,9 @@ pub use declared::DeclaredMaterializationError;
 
 use crate::types::hash::{structural_hash, StructuralKey};
 use crate::types::repr::{
-    ConditionalType, DeclaredRecipeId, DeclaredTypeRecipe, EnumId, EnumMemberId, EnumMemberType,
-    EnumType, IntrinsicKind, LiteralValue, MappedType, ObjectType, ParameterType, PropertyType,
-    TypeFlags, TypeParamId, TypeParamType, TypeTag,
+    AliasId, ConditionalType, DeclaredRecipeId, DeclaredTypeRecipe, EnumId, EnumMemberId,
+    EnumMemberType, EnumType, IntrinsicKind, LiteralValue, MappedType, ObjectType, ParameterType,
+    PropertyType, TypeFlags, TypeParamId, TypeParamType, TypeTag,
 };
 use crate::types::store::{Store, TypeId, TypeParamFreezeError};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -507,6 +507,7 @@ pub struct Interner {
     /// them; an unavailable member remains because queries must keep rejecting it.
     reserved_enum_semantic_frontier_count: usize,
     next_enum_id: u32,
+    next_alias_id: u32,
     well_known: WellKnown,
     #[cfg(any(test, feature = "test-utils"))]
     user_delta_drop_witness: Option<UserDeltaDropWitness>,
@@ -534,6 +535,7 @@ impl Interner {
             reserved_types: FxHashMap::default(),
             reserved_enum_semantic_frontier_count: 0,
             next_enum_id: 0,
+            next_alias_id: 0,
             // Placeholder; overwritten below before any use.
             well_known: WellKnown {
                 error: TypeId(0),
@@ -872,6 +874,7 @@ impl Interner {
             reserved_types: FxHashMap::default(),
             reserved_enum_semantic_frontier_count: self.reserved_enum_semantic_frontier_count,
             next_enum_id: self.next_enum_id,
+            next_alias_id: self.next_alias_id,
             well_known: self.well_known,
             #[cfg(any(test, feature = "test-utils"))]
             user_delta_drop_witness: None,
@@ -1172,6 +1175,10 @@ impl Interner {
     /// right after `reserve_conditional`/`reserve_mapped` for a named alias, so a
     /// deferred instantiation renders as `Extract<K, string>` instead of the raw body.
     pub fn set_template_name(&mut self, id: TypeId, name: impl Into<String>) {
+        if self.store.tag(id) == TypeTag::AliasTemplate {
+            self.store.set_template_name(id, name.into());
+            return;
+        }
         let Some(reserved) = self.reserved_types.get(&id) else {
             return;
         };
@@ -1284,6 +1291,18 @@ impl Interner {
     /// Reserve one nominal enum shell before its initializer dependencies are typed.
     pub fn next_enum_id(&self) -> EnumId {
         EnumId(self.next_enum_id)
+    }
+
+    /// Allocate one project-local recursive-alias identity and immutable template.
+    pub fn reserve_alias_template(&mut self, name: impl Into<String>) -> (AliasId, TypeId) {
+        let alias = AliasId(self.next_alias_id);
+        self.next_alias_id = self
+            .next_alias_id
+            .checked_add(1)
+            .expect("alias identity domain exhausted");
+        let template = self.intern_alias_template(alias);
+        self.set_template_name(template, name);
+        (alias, template)
     }
 
     /// Reserve one nominal enum shell before its initializer dependencies are typed.

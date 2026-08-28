@@ -261,6 +261,27 @@ impl LibrarySemanticIdentities {
         }
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(in crate::check::checker) fn select_project_local_exact(
+        groups: [Option<TypeGroupId>; 8],
+        published: &PublishedTypeEnvironment,
+        store: &Store,
+    ) -> Self {
+        let select = |group, arity| select_exact_group(published, store, group, arity);
+        Self {
+            inner: Arc::new(LibrarySemanticIdentityRows {
+                array: select(groups[0], 1),
+                readonly_array: select(groups[1], 1),
+                string: select(groups[2], 0),
+                number: select(groups[3], 0),
+                boolean: select(groups[4], 0),
+                regexp: select(groups[5], 0),
+                object: select(groups[6], 0),
+                callable_function: select(groups[7], 0),
+            }),
+        }
+    }
+
     pub(crate) fn all_ready(&self) -> bool {
         self.terminals()
             .into_iter()
@@ -553,6 +574,21 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         ty: TypeId,
         span: Span,
     ) -> LibraryMemberProjection {
+        #[cfg(any(test, feature = "test-utils"))]
+        if let Some(surface) = classify_native_source_surface(self.interner, ty) {
+            let identity = match surface {
+                NativeSourceSurface::Array { readonly: true, .. } => 1,
+                NativeSourceSurface::Array {
+                    readonly: false, ..
+                } => 0,
+                NativeSourceSurface::String => 2,
+                NativeSourceSurface::Number => 3,
+                NativeSourceSurface::Boolean => 4,
+                NativeSourceSurface::Object => 6,
+                NativeSourceSurface::Function => 7,
+            };
+            let _ = self.demand_project_local_library_identity(identity);
+        }
         let Some(identities) = self.library_semantic_identities.clone() else {
             return LibraryMemberProjection::NotApplicable;
         };
@@ -794,6 +830,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             return LibraryComposedMember::Missing;
         }
 
+        #[cfg(any(test, feature = "test-utils"))]
+        let _ = self.demand_project_local_library_identity(6);
         let terminal = self
             .library_semantic_identities
             .as_ref()
@@ -814,6 +852,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     }
 
     pub(in crate::check::checker) fn regexp_literal_type(&mut self, span: Span) -> Option<TypeId> {
+        #[cfg(any(test, feature = "test-utils"))]
+        let _ = self.demand_project_local_library_identity(5);
         let identities = self.library_semantic_identities.as_ref()?;
         match &identities.inner.regexp {
             LibraryIdentityTerminal::Ready(identity) => Some(identity.template),
@@ -1312,6 +1352,51 @@ mod tests {
         };
         assert!(matches!(terminal, LibraryIdentityTerminal::Unavailable(_)));
         assert!(!identities.all_ready());
+    }
+
+    #[test]
+    fn project_local_identity_with_error_surface_is_unavailable() {
+        let interner = Interner::with_intrinsics();
+        let parameter = TypeParamId(17);
+        let error = interner.well_known().error;
+        let template = error;
+        let published =
+            super::super::type_groups::PublishedTypeEnvironment::from_project_local_terminals(
+                vec![
+                    super::super::type_groups::PublishedTypeGroupTerminal::Ready(
+                        super::super::type_groups::PublishedTypeGroup {
+                            name: "Array".to_owned(),
+                            surface: super::super::type_groups::PublishedTypeGroupSurface::Template(
+                                template,
+                            ),
+                            parameters: vec![parameter],
+                            parameter_names: vec!["T".to_owned()],
+                            parameter_defaults: vec![
+                                super::super::type_groups::PublishedTypeParameterDefault::Absent,
+                            ],
+                            conflict_alternatives: Vec::new(),
+                        },
+                    ),
+                ],
+            );
+        let identities = LibrarySemanticIdentities::select_project_local_exact(
+            [
+                Some(TypeGroupId(0)),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ],
+            &published,
+            interner.store(),
+        );
+        assert_eq!(
+            identities.terminals()[0],
+            &LibraryIdentityTerminal::Unavailable(LibraryIdentityUnavailable::ContainsError)
+        );
     }
 
     #[test]

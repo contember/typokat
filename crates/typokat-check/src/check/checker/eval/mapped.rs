@@ -958,7 +958,8 @@ impl<'a> ConditionalEvaluator<'a> {
             | TypeTag::EnumMember
             | TypeTag::TypeParam
             | TypeTag::Infer
-            | TypeTag::Declared => identity(ty),
+            | TypeTag::Declared
+            | TypeTag::AliasTemplate => identity(ty),
             TypeTag::Mapped => {
                 let Some(mapped) = self.interner.store().mapped_type(ty).copied() else {
                     return identity(ty);

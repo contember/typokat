@@ -1,6 +1,18 @@
 //! Canonical candidate fault activation sites.
 
+use super::observation;
 use super::{ProjectLocalFaultSeamForTest, ProjectLocalSemanticFaultForTest};
+
+pub(super) fn activate_if(
+    requested: Option<ProjectLocalSemanticFaultForTest>,
+    reached: ProjectLocalSemanticFaultForTest,
+) -> bool {
+    if requested != Some(reached) {
+        return false;
+    }
+    observation::record_fault(reached, canonical_fault_seam(reached));
+    true
+}
 
 pub(super) const fn canonical_fault_seam(
     fault: ProjectLocalSemanticFaultForTest,

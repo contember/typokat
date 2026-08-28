@@ -133,7 +133,8 @@ impl<'a> Relater<'a> {
                 | TypeTag::TypeParam
                 | TypeTag::Conditional
                 | TypeTag::Mapped
-                | TypeTag::MappedValue => {}
+                | TypeTag::MappedValue
+                | TypeTag::AliasTemplate => {}
             }
         }
         false

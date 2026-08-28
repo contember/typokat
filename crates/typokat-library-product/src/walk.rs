@@ -671,6 +671,7 @@ fn walk_type_node<V: ProductFieldVisitor>(visitor: &mut V, row: usize, node: &Ty
         TypeRecipeNode::Tuple { elements } => {
             for element in elements {
                 let TupleElementRecipe {
+                    site,
                     name: _name,
                     value: _value,
                     optional: _optional,
@@ -685,6 +686,21 @@ fn walk_type_node<V: ProductFieldVisitor>(visitor: &mut V, row: usize, node: &Ty
                         (ProductFieldClass::ProductKey, "node.element.value"),
                         (ProductFieldClass::Scalar, "node.element.optional"),
                         (ProductFieldClass::Scalar, "node.element.rest"),
+                    ],
+                );
+                let SourceSite {
+                    source: _source,
+                    start: _start,
+                    end: _end,
+                } = site;
+                emit(
+                    visitor,
+                    "types",
+                    row,
+                    &[
+                        (ProductFieldClass::ProductKey, "node.element.site.source"),
+                        (ProductFieldClass::Scalar, "node.element.site.start"),
+                        (ProductFieldClass::Scalar, "node.element.site.end"),
                     ],
                 );
             }

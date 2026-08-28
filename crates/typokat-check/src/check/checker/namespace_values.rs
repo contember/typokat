@@ -52,6 +52,10 @@ pub(in crate::check::checker) struct NamespaceValueRegistry<Ticket: Copy = UserR
     terminal_planning_failed: bool,
     #[cfg(any(test, feature = "test-utils"))]
     namespace_function_reservations: FxHashMap<DeclId, SourceSite>,
+    #[cfg(any(test, feature = "test-utils"))]
+    project_local_discarded_writes: FxHashMap<NamespaceId, Vec<String>>,
+    #[cfg(any(test, feature = "test-utils"))]
+    project_local_published_provisional_writes: FxHashMap<NamespaceId, Vec<String>>,
     #[cfg(test)]
     standalone_query_root_calls: u64,
 }
@@ -122,6 +126,13 @@ pub(in crate::check::checker) enum StandaloneNamespaceTerminal {
     Unavailable {
         cause: NamespaceValueUnavailableCause,
     },
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub(in crate::check::checker) struct ProjectLocalNamespaceSeed {
+    pub(in crate::check::checker) namespace: NamespaceId,
+    pub(in crate::check::checker) storage: ValueStorageId,
+    pub(in crate::check::checker) ty: TypeId,
 }
 
 struct StandaloneNamespacePlan<Ticket: Copy> {
@@ -345,6 +356,10 @@ impl<Ticket: Copy> Default for NamespaceValueRegistry<Ticket> {
             terminal_planning_failed: false,
             #[cfg(any(test, feature = "test-utils"))]
             namespace_function_reservations: FxHashMap::default(),
+            #[cfg(any(test, feature = "test-utils"))]
+            project_local_discarded_writes: FxHashMap::default(),
+            #[cfg(any(test, feature = "test-utils"))]
+            project_local_published_provisional_writes: FxHashMap::default(),
             #[cfg(test)]
             standalone_query_root_calls: 0,
         }
@@ -409,6 +424,45 @@ impl<Ticket: Copy> NamespaceValueRegistry<Ticket> {
         namespace: NamespaceId,
     ) -> Option<StandaloneNamespaceTerminal> {
         self.standalone_terminals.get(&namespace).copied()
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(in crate::check::checker) fn project_local_discarded_writes(
+        &self,
+        namespace: NamespaceId,
+    ) -> Vec<String> {
+        self.project_local_discarded_writes
+            .get(&namespace)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(in crate::check::checker) fn project_local_published_provisional_writes(
+        &self,
+        namespace: NamespaceId,
+    ) -> Vec<String> {
+        self.project_local_published_provisional_writes
+            .get(&namespace)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(in crate::check::checker) fn publish_project_local_provisional_write_for_fault(
+        &mut self,
+        namespace: NamespaceId,
+    ) {
+        self.project_local_published_provisional_writes
+            .entry(namespace)
+            .or_insert_with(|| vec!["standalone-namespace-terminal-reservation".to_owned()]);
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    fn record_project_local_discard(&mut self, namespace: NamespaceId) {
+        self.project_local_discarded_writes
+            .entry(namespace)
+            .or_insert_with(|| vec!["standalone-namespace-terminal-reservation".to_owned()]);
     }
 
     #[cfg(test)]
@@ -686,6 +740,69 @@ impl FrozenNamespaceValueTerminals {
 }
 
 impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(in crate::check::checker) fn install_project_local_namespace_seeds(
+        &mut self,
+        seeds: Vec<ProjectLocalNamespaceSeed>,
+        user_modules: &FxHashSet<ScopeId>,
+    ) -> Result<(), &'static str> {
+        for seed in seeds {
+            if self.binder.standalone_namespace_for_storage(seed.storage) != Some(seed.namespace) {
+                return Err("project-local namespace seed identity mismatch");
+            }
+            let has_user_fragment = self
+                .binder
+                .all_standalone_namespace_value_attachments()
+                .into_iter()
+                .find(|attachment| attachment.namespace == seed.namespace)
+                .is_some_and(|attachment| {
+                    attachment
+                        .fragments
+                        .iter()
+                        .any(|fragment| user_modules.contains(&fragment.module))
+                });
+            if has_user_fragment {
+                continue;
+            }
+            self.namespace_values
+                .standalone_terminals
+                .insert_local(
+                    seed.namespace,
+                    StandaloneNamespaceTerminal::Ready {
+                        storage: seed.storage,
+                        ty: seed.ty,
+                    },
+                )
+                .map_err(|_| "project-local namespace seed replaced a terminal")?;
+        }
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(in crate::check::checker) fn retain_project_local_unsupported_namespace_terminals(
+        &mut self,
+        demanded: &FxHashSet<NamespaceId>,
+    ) {
+        let unsupported = self
+            .binder
+            .all_standalone_namespace_value_attachments()
+            .into_iter()
+            .filter(|attachment| demanded.contains(&attachment.namespace))
+            .filter(|attachment| {
+                attachment
+                    .members
+                    .iter()
+                    .any(|member| member.kind == MergeDeclarationKind::Enum)
+            })
+            .map(|attachment| attachment.namespace)
+            .collect::<Vec<_>>();
+        for namespace in unsupported {
+            if let Some(plan) = self.namespace_values.standalone_plans.get_mut(&namespace) {
+                plan.unavailable = Some(NamespaceValueUnavailableCause::UnsupportedExportedMember);
+            }
+        }
+    }
+
     pub(in crate::check::checker) fn namespace_terminal_planning_failed(&self) -> bool {
         self.namespace_values.terminal_planning_failed()
     }
@@ -1578,6 +1695,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     continue;
                 };
                 if let Some(cause) = plan.unavailable {
+                    #[cfg(any(test, feature = "test-utils"))]
+                    self.namespace_values
+                        .record_project_local_discard(namespace);
                     self.namespace_values
                         .standalone_terminals
                         .insert_local(
@@ -1700,6 +1820,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     });
                 }
                 if let Some(cause) = unavailable {
+                    #[cfg(any(test, feature = "test-utils"))]
+                    self.namespace_values
+                        .record_project_local_discard(namespace);
                     self.namespace_values
                         .standalone_terminals
                         .insert_local(
@@ -1747,6 +1870,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
             if !progressed {
                 for namespace in next.drain(..) {
+                    #[cfg(any(test, feature = "test-utils"))]
+                    self.namespace_values
+                        .record_project_local_discard(namespace);
                     self.namespace_values
                         .standalone_terminals
                         .insert_local(

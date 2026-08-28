@@ -3,8 +3,8 @@
 
 use super::*;
 use crate::types::repr::{
-    ClassId, ClassInstanceType, ConditionalType, DeferredIndexedAccessType, InstantiationType,
-    IntrinsicKind, LiteralValue, MappedType, TemplateType,
+    AliasId, ClassId, ClassInstanceType, ConditionalType, DeferredIndexedAccessType,
+    InstantiationType, IntrinsicKind, LiteralValue, MappedType, TemplateType,
 };
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -403,6 +403,20 @@ impl Interner {
         let id = self
             .store
             .push_class_instance(ClassInstanceType { class, args }, TypeFlags::EMPTY);
+        self.dedup.entry(hash).or_default().push(id);
+        id
+    }
+
+    /// Intern one immutable recursive-alias declaration identity.
+    pub fn intern_alias_template(&mut self, alias: AliasId) -> TypeId {
+        let key = StructuralKey::AliasTemplate(alias);
+        let hash = structural_hash(&key);
+        if let Some(existing) =
+            self.lookup(hash, |store, id| store.alias_template_id(id) == Some(alias))
+        {
+            return existing;
+        }
+        let id = self.store.push_alias_template(alias, TypeFlags::EMPTY);
         self.dedup.entry(hash).or_default().push(id);
         id
     }

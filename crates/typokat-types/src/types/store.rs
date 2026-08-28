@@ -6,7 +6,7 @@
 use crate::types::hash::StableHash;
 use crate::types::layered::{LayeredMap, LayeredSet, LayeredVec};
 use crate::types::repr::{
-    ArrayType, ClassInstanceType, ConditionalType, DeclaredRecipeId, DeclaredType,
+    AliasId, ArrayType, ClassInstanceType, ConditionalType, DeclaredRecipeId, DeclaredType,
     DeclaredTypeRecipe, DeferredIndexedAccessType, EnumId, EnumMemberId, EnumMemberType, EnumType,
     FunctionType, InstantiationType, IntrinsicKind, LiteralValue, MappedType, ObjectType,
     TemplateType, TupleType, TypeFlags, TypeParamId, TypeParamType, TypeTag,
@@ -561,6 +561,11 @@ impl Store {
             .get(usize::try_from(self.payload(id)).ok()?)
     }
 
+    /// The immutable recursive-alias identity stored inline in this row.
+    pub fn alias_template_id(&self, id: TypeId) -> Option<AliasId> {
+        (self.tag(id) == TypeTag::AliasTemplate).then(|| AliasId(self.payload(id)))
+    }
+
     /// The deferred indexed-access operands, or `None` for another tag.
     pub fn deferred_indexed_access_type(&self, id: TypeId) -> Option<&DeferredIndexedAccessType> {
         if self.tag(id) != TypeTag::DeferredIndexedAccess {
@@ -782,7 +787,10 @@ impl Store {
     pub fn set_template_name(&mut self, id: TypeId, name: String) {
         if id.index() < self.tag.base_len()
             || id.index() >= self.len()
-            || !matches!(self.tag(id), TypeTag::Conditional | TypeTag::Mapped)
+            || !matches!(
+                self.tag(id),
+                TypeTag::Conditional | TypeTag::Mapped | TypeTag::AliasTemplate
+            )
         {
             return;
         }
@@ -957,6 +965,11 @@ impl Store {
             .expect("class-instance side table exceeds the u32 payload range");
         self.class_instances.push_local(instance);
         self.push(TypeTag::ClassInstance, flags, payload)
+    }
+
+    /// Append an immutable recursive-alias template identity.
+    pub fn push_alias_template(&mut self, alias: AliasId, flags: TypeFlags) -> TypeId {
+        self.push(TypeTag::AliasTemplate, flags, alias.0)
     }
 
     /// Append an immutable deferred indexed access. Internal — `Interner` owns dedup.

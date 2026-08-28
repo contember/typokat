@@ -3,14 +3,23 @@ use super::context::{
 };
 use super::replay_index::{ReplayClassLookup, ReplayOwner};
 use crate::binder::declaration::TypeGroupId;
+#[cfg(any(test, feature = "test-utils"))]
+use crate::binder::declaration::ValueStorageId;
 use crate::check::query::PublishedClassLookup;
 use crate::class_semantics::OwnedPublishedClassTerminal;
 use crate::class_semantics::{DemandOutcome, PublishedClassSurface, PublishedClasses};
 use crate::types::layered::LayeredVec;
-use crate::types::repr::{ClassId, TypeParamId};
+use crate::types::repr::{AliasId, ClassId, TypeParamId};
 use crate::types::store::TypeId;
 use crate::types::substitute;
 use rustc_hash::FxHashMap;
+use std::sync::Arc;
+use typokat_types::alias_semantics::{PublishedAliasTerminal, PublishedAliases};
+
+#[cfg(any(test, feature = "test-utils"))]
+fn project_local_row_is_writable<T>(rows: &LayeredVec<T>, index: usize) -> bool {
+    index < rows.len() && (index >= rows.base_len() || rows.prefix_overrides_enabled())
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::check::checker) enum PublishedTypeGroupSurface {
@@ -102,12 +111,15 @@ impl PublishedTypeGroups {
 /// visible together through one assignment after both private builders are frozen.
 pub(in crate::check::checker) struct PublishedTypeEnvironment {
     classes: PublishedClasses,
+    aliases: PublishedAliases,
     groups: PublishedTypeGroups,
+    semantic_publication_identity: Arc<()>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::check::checker) struct PublishedTypeEnvironmentProductParts {
     pub(in crate::check::checker) classes: Vec<(ClassId, OwnedPublishedClassTerminal)>,
+    pub(in crate::check::checker) aliases: Vec<(AliasId, PublishedAliasTerminal)>,
     pub(in crate::check::checker) groups: Vec<PublishedTypeGroupTerminal>,
 }
 
@@ -194,7 +206,13 @@ impl<'ast> TypeEnvironmentState<'ast> {
 
     pub(in crate::check::checker) fn semantic_query_class_layers(
         &self,
-    ) -> (&PublishedClasses, Option<&PublishedClasses>) {
+    ) -> (
+        &PublishedClasses,
+        Option<&PublishedClasses>,
+        &PublishedAliases,
+        Option<&PublishedAliases>,
+        &Arc<()>,
+    ) {
         match self {
             Self::Constructing {
                 inherited: Some(inherited),
@@ -205,6 +223,12 @@ impl<'ast> TypeEnvironmentState<'ast> {
                     .as_ref()
                     .expect("semantic construction query requires staged class terminals"),
                 Some(inherited.classes()),
+                drafts
+                    .staged_published_aliases
+                    .as_ref()
+                    .expect("semantic construction query requires staged alias terminals"),
+                Some(inherited.aliases()),
+                inherited.semantic_publication_identity(),
             ),
             Self::Constructing {
                 inherited: None, ..
@@ -212,7 +236,13 @@ impl<'ast> TypeEnvironmentState<'ast> {
             Self::Constructing { drafts: None, .. } => {
                 panic!("construction drafts are being consumed")
             }
-            Self::Published(environment) => (environment.classes(), None),
+            Self::Published(environment) => (
+                environment.classes(),
+                None,
+                environment.aliases(),
+                None,
+                environment.semantic_publication_identity(),
+            ),
         }
     }
 
@@ -250,7 +280,12 @@ impl<'ast> TypeEnvironmentState<'ast> {
         }
     }
 
-    fn publish(&mut self, groups: PublishedTypeGroups, staged_classes: PublishedClasses) {
+    fn publish(
+        &mut self,
+        groups: PublishedTypeGroups,
+        staged_classes: PublishedClasses,
+        staged_aliases: PublishedAliases,
+    ) {
         let (inherited, drafts) = match self {
             Self::Constructing { inherited, drafts } => (
                 inherited
@@ -264,11 +299,172 @@ impl<'ast> TypeEnvironmentState<'ast> {
         };
         assert!(drafts.type_group_construction.is_none());
         assert!(drafts.staged_published_classes.is_none());
+        assert!(drafts.staged_published_aliases.is_none());
         let classes = inherited
             .classes
             .extend(staged_classes)
             .expect("class publication epochs must be disjoint");
-        *self = Self::Published(PublishedTypeEnvironment { classes, groups });
+        let aliases = inherited
+            .aliases
+            .extend(staged_aliases)
+            .expect("alias publication epochs must be disjoint");
+        *self = Self::Published(PublishedTypeEnvironment {
+            classes,
+            aliases,
+            groups,
+            semantic_publication_identity: Arc::new(()),
+        });
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
+    pub(in crate::check::checker) fn demand_project_local_type_group(
+        &mut self,
+        group: TypeGroupId,
+    ) -> bool {
+        let Some(gateway) = self.project_local_demand_gateway.take() else {
+            return true;
+        };
+        let snapshot = gateway.demand_type_group(self.interner, group);
+        self.project_local_demand_gateway = Some(gateway);
+        let result =
+            snapshot.and_then(|snapshot| self.install_project_local_demand_snapshot(snapshot));
+        if let Err(error) = result {
+            self.project_local_demand_error.get_or_insert(error);
+            return false;
+        }
+        true
+    }
+
+    pub(in crate::check::checker) fn demand_project_local_value(
+        &mut self,
+        storage: ValueStorageId,
+    ) -> bool {
+        let Some(gateway) = self.project_local_demand_gateway.take() else {
+            return true;
+        };
+        let snapshot = gateway.demand_value(self.interner, storage);
+        self.project_local_demand_gateway = Some(gateway);
+        let result =
+            snapshot.and_then(|snapshot| self.install_project_local_demand_snapshot(snapshot));
+        if let Err(error) = result {
+            self.project_local_demand_error.get_or_insert(error);
+            return false;
+        }
+        true
+    }
+
+    pub(in crate::check::checker) fn demand_project_local_library_identity(
+        &mut self,
+        index: usize,
+    ) -> bool {
+        let Some(group) = self
+            .project_local_library_identity_groups
+            .and_then(|groups| groups.get(index).copied().flatten())
+        else {
+            self.project_local_demand_error
+                .get_or_insert("project-local library identity has no mapped product terminal");
+            return false;
+        };
+        self.demand_project_local_type_group(group)
+    }
+
+    pub(in crate::check::checker) fn commit_project_local_staged_terminals(&mut self) -> bool {
+        let Some(gateway) = self.project_local_demand_gateway.take() else {
+            return true;
+        };
+        let snapshot = gateway.commit_staged();
+        self.project_local_demand_gateway = Some(gateway);
+        let result =
+            snapshot.and_then(|snapshot| self.install_project_local_demand_snapshot(snapshot));
+        if let Err(error) = result {
+            self.project_local_demand_error.get_or_insert(error);
+        }
+        self.project_local_demand_error.is_none()
+    }
+
+    fn install_project_local_demand_snapshot(
+        &mut self,
+        snapshot: super::context::ProjectLocalDemandSnapshot,
+    ) -> Result<(), &'static str> {
+        let super::context::ProjectLocalDemandSnapshot {
+            aliases,
+            type_terminals,
+            value_types,
+            namespace_seeds,
+        } = snapshot;
+        match &self.type_environment {
+            TypeEnvironmentState::Constructing {
+                inherited: Some(inherited),
+                drafts: Some(drafts),
+            } => {
+                inherited.validate_project_local_snapshot(&aliases, &type_terminals)?;
+                if type_terminals.iter().any(|(group, _)| {
+                    !drafts
+                        .type_decls
+                        .can_install_project_local_published(group.index())
+                        || !drafts
+                            .type_resolved
+                            .can_install_project_local_published(group.index())
+                }) {
+                    return Err("project-local draft terminal is outside the published prefix");
+                }
+            }
+            TypeEnvironmentState::Published(environment) => {
+                environment.validate_project_local_snapshot(&aliases, &type_terminals)?;
+            }
+            TypeEnvironmentState::Constructing { .. } => {
+                return Err("project-local type environment is being published")
+            }
+        }
+        match &mut self.type_environment {
+            TypeEnvironmentState::Constructing {
+                inherited: Some(inherited),
+                drafts: Some(drafts),
+            } => {
+                inherited.install_project_local_alias_snapshot(&aliases)?;
+                for (group, terminal) in type_terminals {
+                    let (declaration, resolution) = construction_terminal(&terminal);
+                    inherited.install_project_local_terminal(group, terminal)?;
+                    drafts
+                        .type_decls
+                        .install_project_local_published(group.index(), declaration)?;
+                    drafts
+                        .type_resolved
+                        .install_project_local_published(group.index(), resolution)?;
+                }
+            }
+            TypeEnvironmentState::Published(environment) => {
+                environment.install_project_local_alias_snapshot(&aliases)?;
+                for (group, terminal) in type_terminals {
+                    environment.install_project_local_terminal(group, terminal)?;
+                }
+            }
+            TypeEnvironmentState::Constructing { .. } => {
+                return Err("project-local type environment is being published")
+            }
+        }
+        for (storage, ty) in value_types {
+            self.decl_types.set(storage, ty);
+        }
+        let user_modules = self
+            .project_local_user_modules
+            .clone()
+            .ok_or("project-local user modules are unavailable")?;
+        self.install_project_local_namespace_seeds(namespace_seeds, &user_modules)?;
+        if let Some(groups) = self.project_local_library_identity_groups {
+            let identities =
+                super::library_identities::LibrarySemanticIdentities::select_project_local_exact(
+                    groups,
+                    self.type_environment.resolution_environment(),
+                    self.interner.store(),
+                );
+            self.semantic_queries
+                .set_library_object_context(identities.object_relation_context());
+            self.library_semantic_identities = Some(identities);
+        }
+        Ok(())
     }
 }
 
@@ -276,8 +472,34 @@ impl PublishedTypeEnvironment {
     pub(in crate::check::checker) fn empty() -> Self {
         Self {
             classes: PublishedClasses::empty(),
+            aliases: PublishedAliases::empty(),
             groups: PublishedTypeGroups::empty(),
+            semantic_publication_identity: Arc::new(()),
         }
+    }
+
+    #[cfg(test)]
+    pub(in crate::check::checker) fn from_project_local_terminals(
+        entries: Vec<PublishedTypeGroupTerminal>,
+    ) -> Self {
+        Self::from_project_local_terminals_with_aliases(entries, PublishedAliases::empty())
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(in crate::check::checker) fn from_project_local_terminals_with_aliases(
+        entries: Vec<PublishedTypeGroupTerminal>,
+        aliases: PublishedAliases,
+    ) -> Self {
+        let mut environment = Self {
+            classes: PublishedClasses::empty(),
+            aliases,
+            groups: published_type_groups_from_terminals(entries),
+            semantic_publication_identity: Arc::new(()),
+        };
+        environment.groups.entries.enable_prefix_overrides();
+        environment.groups.declarations.enable_prefix_overrides();
+        environment.groups.resolved.enable_prefix_overrides();
+        environment
     }
 
     #[cfg(test)]
@@ -286,7 +508,9 @@ impl PublishedTypeEnvironment {
     ) -> Self {
         Self {
             classes: PublishedClasses::empty(),
+            aliases: PublishedAliases::empty(),
             groups: published_type_groups_from_terminals(entries),
+            semantic_publication_identity: Arc::new(()),
         }
     }
 
@@ -294,8 +518,71 @@ impl PublishedTypeEnvironment {
         &self.classes
     }
 
+    pub(in crate::check::checker) fn aliases(&self) -> &PublishedAliases {
+        &self.aliases
+    }
+
+    pub(in crate::check::checker) fn semantic_publication_identity(&self) -> &Arc<()> {
+        &self.semantic_publication_identity
+    }
+
     pub(in crate::check::checker) fn groups(&self) -> &PublishedTypeGroups {
         &self.groups
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    fn validate_project_local_snapshot(
+        &self,
+        aliases: &PublishedAliases,
+        groups: &[(TypeGroupId, PublishedTypeGroupTerminal)],
+    ) -> Result<(), &'static str> {
+        self.aliases.validate_snapshot(aliases)?;
+        let valid_group = |group: TypeGroupId| {
+            let index = group.index();
+            project_local_row_is_writable(&self.groups.entries, index)
+                && project_local_row_is_writable(&self.groups.declarations, index)
+                && project_local_row_is_writable(&self.groups.resolved, index)
+        };
+        if groups.iter().any(|(group, _)| !valid_group(*group)) {
+            return Err("project-local terminal is outside the published prefix");
+        }
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    fn install_project_local_alias_snapshot(
+        &mut self,
+        aliases: &PublishedAliases,
+    ) -> Result<(), &'static str> {
+        if self.aliases.install_snapshot(aliases)? {
+            self.semantic_publication_identity = Arc::new(());
+        }
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(in crate::check::checker) fn install_project_local_terminal(
+        &mut self,
+        group: TypeGroupId,
+        terminal: PublishedTypeGroupTerminal,
+    ) -> Result<(), &'static str> {
+        let (declaration, resolution) = construction_terminal(&terminal);
+        *self
+            .groups
+            .entries
+            .get_mut_local(group.index())
+            .ok_or("project-local terminal is outside the published prefix")? = terminal;
+        *self
+            .groups
+            .declarations
+            .get_mut_local(group.index())
+            .ok_or("project-local declaration is outside the published prefix")? = declaration;
+        *self
+            .groups
+            .resolved
+            .get_mut_local(group.index())
+            .ok_or("project-local resolution is outside the published prefix")? = resolution;
+        Ok(())
     }
 
     pub(in crate::check::checker) fn construction_prefix<'ast>(
@@ -315,6 +602,7 @@ impl PublishedTypeEnvironment {
                 .classes
                 .owned_terminals()
                 .ok_or("class publication contains a non-terminal state")?,
+            aliases: self.aliases.owned_terminals(),
             groups: self.groups.entries.iter().cloned().collect(),
         })
     }
@@ -343,12 +631,15 @@ impl PublishedTypeEnvironment {
         }
         Ok(Self {
             classes: PublishedClasses::from_owned_terminals(parts.classes)?,
+            aliases: PublishedAliases::from_owned_terminals(parts.aliases)?,
             groups: published_type_groups_from_terminals(parts.groups),
+            semantic_publication_identity: Arc::new(()),
         })
     }
 
     pub(in crate::check::checker) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
         self.classes.freeze_as_base()?;
+        self.aliases.freeze_as_base()?;
         self.groups.entries.freeze_as_base()?;
         self.groups.declarations.freeze_as_base()?;
         self.groups.resolved.freeze_as_base()
@@ -357,28 +648,33 @@ impl PublishedTypeEnvironment {
     pub(in crate::check::checker) fn fork_delta(&self) -> Result<Self, &'static str> {
         Ok(Self {
             classes: self.classes.fork_delta()?,
+            aliases: self.aliases.fork_delta()?,
             groups: PublishedTypeGroups {
                 entries: self.groups.entries.fork_delta()?,
                 declarations: self.groups.declarations.fork_delta()?,
                 resolved: self.groups.resolved.fork_delta()?,
             },
+            semantic_publication_identity: Arc::clone(&self.semantic_publication_identity),
         })
     }
 
     pub(in crate::check::checker) fn fork_sparse_delta(&self) -> Result<Self, &'static str> {
         Ok(Self {
             classes: self.classes.fork_sparse_delta()?,
+            aliases: self.aliases.fork_delta()?,
             groups: PublishedTypeGroups {
                 entries: self.groups.entries.fork_sparse_delta()?,
                 declarations: self.groups.declarations.fork_sparse_delta()?,
                 resolved: self.groups.resolved.fork_sparse_delta()?,
             },
+            semantic_publication_identity: Arc::clone(&self.semantic_publication_identity),
         })
     }
 
     #[cfg(test)]
     pub(in crate::check::checker) fn shares_base_with(&self, other: &Self) -> bool {
         self.classes.shares_base_with(&other.classes)
+            && Arc::ptr_eq(self.aliases.identity(), other.aliases.identity())
             && self.groups.entries.shares_base_with(&other.groups.entries)
             && self
                 .groups
@@ -448,7 +744,7 @@ impl PublishedTypeEnvironment {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn published_type_groups_from_terminals(
     terminals: Vec<PublishedTypeGroupTerminal>,
 ) -> PublishedTypeGroups {
@@ -912,10 +1208,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .type_environment
             .inherited_mut()
             .is_some_and(|environment| {
-                environment
+                let replaced = environment
                     .classes
                     .replace_published_surface(replacement)
-                    .is_ok()
+                    .is_ok();
+                if replaced {
+                    environment.semantic_publication_identity = Arc::new(());
+                }
+                replaced
             });
         if replaced {
             InheritedClassAugmentation::Ready(published)
@@ -933,6 +1233,19 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             usize::try_from(self.binder.prelude_type_group_count)
                 .expect("prelude type group count fits usize")
         );
+        self.install_type_environment_base(base);
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(in crate::check::checker) fn install_project_local_type_environment_base(
+        &mut self,
+        base: PublishedTypeEnvironment,
+    ) {
+        assert!(base.groups.len() <= self.binder.type_groups.len());
+        self.install_type_environment_base(base);
+    }
+
+    fn install_type_environment_base(&mut self, base: PublishedTypeEnvironment) {
         self.type_group_construction
             .as_mut()
             .expect("type-group construction is consumed exactly once")
@@ -1065,9 +1378,46 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 recovery_names,
                 recovery_defaults,
                 conflict_alternatives,
+                project_local_overlay,
                 ..
             } => {
-                if self
+                if let Some(overlay) = project_local_overlay {
+                    if overlay.unavailable || recovery_params.len() != overlay.parameters.len() {
+                        self.freeze_project_local_unavailable_type_group(group)
+                    } else {
+                        let substitutions = recovery_params
+                            .iter()
+                            .copied()
+                            .zip(overlay.parameters.iter().copied())
+                            .enumerate()
+                            .map(|(position, (source, target))| {
+                                let name = overlay
+                                    .parameter_names
+                                    .get(position)
+                                    .cloned()
+                                    .unwrap_or_else(|| format!("T{position}"));
+                                (source, self.interner.intern_type_param(target, name))
+                            })
+                            .collect::<FxHashMap<_, _>>();
+                        let mut alternatives = conflict_alternatives.clone();
+                        for alternative in &mut alternatives {
+                            alternative.types = alternative
+                                .types
+                                .iter()
+                                .copied()
+                                .map(|ty| substitute(self.interner, ty, &substitutions))
+                                .collect();
+                        }
+                        PublishedTypeGroupTerminal::Ready(PublishedTypeGroup {
+                            name,
+                            surface: PublishedTypeGroupSurface::Template(*reserved),
+                            parameters: overlay.parameters.clone(),
+                            parameter_names: overlay.parameter_names.clone(),
+                            parameter_defaults: overlay.parameter_defaults.clone(),
+                            conflict_alternatives: alternatives,
+                        })
+                    }
+                } else if self
                     .private_collision_affected
                     .contains(&ReplayOwner::TypeGroup(group))
                 {
@@ -1126,53 +1476,27 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 }
             }
             TypeDecl::Alias {
-                params,
-                defaults,
-                param_decl,
-                conditional_template: Some(reserved),
-                ..
-            }
-            | TypeDecl::Alias {
-                params,
-                defaults,
-                param_decl,
-                mapped_template: Some(reserved),
-                ..
-            }
-            | TypeDecl::Alias {
-                params,
-                defaults,
-                param_decl,
-                object_template: Some(reserved),
-                ..
-            } => PublishedTypeGroupTerminal::Ready(PublishedTypeGroup {
-                name,
-                surface: PublishedTypeGroupSurface::Template(*reserved),
-                parameters: params.clone(),
-                parameter_names: parameter_names(*param_decl),
-                parameter_defaults: parameter_defaults(*param_decl, defaults),
-                conflict_alternatives: Vec::new(),
-            }),
-            TypeDecl::Alias {
+                alias_template,
+                alias_unavailable,
                 params,
                 defaults,
                 param_decl,
                 ..
             } => {
-                let template = self
-                    .type_resolved
-                    .get(group.index())
-                    .copied()
-                    .flatten()
-                    .unwrap_or_else(|| panic!("frozen alias {name} has one final template"));
-                PublishedTypeGroupTerminal::Ready(PublishedTypeGroup {
-                    name,
-                    surface: PublishedTypeGroupSurface::Template(template),
-                    parameters: params.clone(),
-                    parameter_names: parameter_names(*param_decl),
-                    parameter_defaults: parameter_defaults(*param_decl, defaults),
-                    conflict_alternatives: Vec::new(),
-                })
+                if alias_unavailable.is_some() {
+                    PublishedTypeGroupTerminal::Unavailable(PublishedTypeGroupUnavailable {
+                        cause: TypeGroupUnavailableCause::UnsupportedComposition,
+                    })
+                } else {
+                    PublishedTypeGroupTerminal::Ready(PublishedTypeGroup {
+                        name,
+                        surface: PublishedTypeGroupSurface::Template(*alias_template),
+                        parameters: params.clone(),
+                        parameter_names: parameter_names(*param_decl),
+                        parameter_defaults: parameter_defaults(*param_decl, defaults),
+                        conflict_alternatives: Vec::new(),
+                    })
+                }
             }
             TypeDecl::Resolved { params, defaults } => {
                 PublishedTypeGroupTerminal::Ready(PublishedTypeGroup {
@@ -1237,6 +1561,16 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .freeze(group, terminal);
     }
 
+    fn freeze_project_local_unavailable_type_group(
+        &mut self,
+        group: TypeGroupId,
+    ) -> PublishedTypeGroupTerminal {
+        self.private_collision_unavailable_type_groups.insert(group);
+        PublishedTypeGroupTerminal::Unavailable(PublishedTypeGroupUnavailable {
+            cause: TypeGroupUnavailableCause::UnsupportedComposition,
+        })
+    }
+
     #[cfg(any(test, feature = "test-utils"))]
     pub(in crate::check::checker) fn freeze_seeded_type_groups(&mut self) {
         let groups: Vec<TypeGroupId> = self
@@ -1255,6 +1589,54 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     pub(in crate::check::checker) fn publish_type_groups(&mut self) -> TypeGroupPublicationOutcome {
         #[cfg(any(test, feature = "test-utils"))]
         super::library_compiler::record_complete_source_publication_entry_for_test();
+        self.publish_type_groups_inner(false)
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(in crate::check::checker) fn publish_project_local_user_type_groups(
+        &mut self,
+    ) -> TypeGroupPublicationOutcome {
+        self.publish_type_groups_inner(true)
+    }
+
+    fn publish_type_groups_inner(
+        &mut self,
+        allow_partial_library_identities: bool,
+    ) -> TypeGroupPublicationOutcome {
+        let alias_terminals = self
+            .type_decls
+            .changed_entries()
+            .into_iter()
+            .filter_map(|(_, declaration)| match declaration {
+                TypeDecl::Alias {
+                    alias_id,
+                    alias_template,
+                    alias_body,
+                    alias_unavailable,
+                    params,
+                    ..
+                } => Some((
+                    *alias_id,
+                    match (*alias_body, *alias_unavailable) {
+                        (Some(body), None) => PublishedAliasTerminal::Ready(
+                            typokat_types::alias_semantics::PublishedAliasSurface::new(
+                                *alias_id,
+                                *alias_template,
+                                params.clone(),
+                                body,
+                            ),
+                        ),
+                        (None, Some(cause)) => PublishedAliasTerminal::Unavailable(cause),
+                        _ => panic!("alias publication requires one final terminal"),
+                    },
+                )),
+                _ => None,
+            })
+            .collect::<FxHashMap<_, _>>();
+        self.staged_published_aliases = Some(
+            PublishedAliases::from_terminals(alias_terminals)
+                .expect("alias publication preserves exact owner identities"),
+        );
         let owned_parameters: Vec<TypeParamId> = self
             .type_decls
             .changed_entries()
@@ -1308,12 +1690,18 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .staged_published_classes
             .take()
             .expect("class registry must be staged before type publication");
+        let staged_aliases = self
+            .staged_published_aliases
+            .take()
+            .expect("alias registry must be staged before type publication");
         let mut identity_selection_pending = false;
         let groups = if replaced_prefix {
             let identities_were_installed = self.library_semantic_identities.is_some();
             let preview = PublishedTypeEnvironment {
                 classes: self.type_environment.inherited().classes.clone(),
+                aliases: self.type_environment.inherited().aliases.clone(),
                 groups,
+                semantic_publication_identity: Arc::new(()),
             };
             let selected =
                 super::library_identities::LibrarySemanticIdentities::select_for_collision_publication(
@@ -1322,7 +1710,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     self.interner.store(),
                 );
             let relation_context = selected.object_relation_context();
-            if selected.all_ready() && relation_context.is_some() {
+            if (selected.all_ready() && relation_context.is_some())
+                || allow_partial_library_identities
+            {
                 self.semantic_queries
                     .set_library_object_context(relation_context);
                 self.library_semantic_identities = Some(selected);
@@ -1335,7 +1725,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         } else {
             groups
         };
-        self.type_environment.publish(groups, staged_classes);
+        self.type_environment
+            .publish(groups, staged_classes, staged_aliases);
         if identity_selection_pending {
             TypeGroupPublicationOutcome::LibraryIdentitySelectionPending {
                 publication_validations,
@@ -1355,6 +1746,7 @@ mod tests {
     fn empty_drafts() -> ConstructionDrafts<'static> {
         ConstructionDrafts {
             staged_published_classes: None,
+            staged_published_aliases: None,
             type_group_construction: None,
             type_decls: Vec::new().into(),
             type_resolved: Vec::new().into(),
@@ -1383,10 +1775,69 @@ mod tests {
     #[test]
     fn publication_physically_consumes_construction_drafts() {
         let mut state = TypeEnvironmentState::constructing(empty_drafts());
-        state.publish(PublishedTypeGroups::empty(), PublishedClasses::empty());
+        state.publish(
+            PublishedTypeGroups::empty(),
+            PublishedClasses::empty(),
+            PublishedAliases::empty(),
+        );
 
         assert!(state.is_published());
         assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| state.drafts())).is_err());
+    }
+
+    #[test]
+    fn project_local_alias_snapshot_is_idempotent_and_invalidates_semantic_identity_once() {
+        let alias = AliasId(17);
+        let terminal = PublishedAliasTerminal::Ready(
+            typokat_types::alias_semantics::PublishedAliasSurface::new(
+                alias,
+                TypeId(19),
+                vec![TypeParamId(23)],
+                TypeId(29),
+            ),
+        );
+        let snapshot =
+            PublishedAliases::from_terminals(FxHashMap::from_iter([(alias, terminal.clone())]))
+                .expect("valid alias snapshot");
+        let mut environment = PublishedTypeEnvironment::from_project_local_terminals(Vec::new());
+        let initial_identity = Arc::clone(environment.semantic_publication_identity());
+
+        environment
+            .validate_project_local_snapshot(&snapshot, &[])
+            .expect("disjoint snapshot validates");
+        environment
+            .install_project_local_alias_snapshot(&snapshot)
+            .expect("disjoint snapshot installs");
+        assert_eq!(environment.aliases().terminal(alias), Some(&terminal));
+        assert!(!Arc::ptr_eq(
+            &initial_identity,
+            environment.semantic_publication_identity()
+        ));
+
+        let installed_identity = Arc::clone(environment.semantic_publication_identity());
+        environment
+            .install_project_local_alias_snapshot(&snapshot)
+            .expect("exact snapshot is idempotent");
+        assert!(Arc::ptr_eq(
+            &installed_identity,
+            environment.semantic_publication_identity()
+        ));
+
+        let conflict = PublishedAliases::from_terminals(FxHashMap::from_iter([(
+            alias,
+            PublishedAliasTerminal::Unavailable(
+                typokat_types::alias_semantics::PublishedAliasUnavailable::ComponentFailure,
+            ),
+        )]))
+        .expect("valid conflicting snapshot");
+        assert!(environment
+            .validate_project_local_snapshot(&conflict, &[])
+            .is_err());
+        assert_eq!(environment.aliases().terminal(alias), Some(&terminal));
+        assert!(Arc::ptr_eq(
+            &installed_identity,
+            environment.semantic_publication_identity()
+        ));
     }
 
     #[test]

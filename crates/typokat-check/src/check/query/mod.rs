@@ -18,7 +18,9 @@ use crate::relate::relation::ApparentSurface;
 use crate::relate::{
     ReasonChain, Relater, RelationAttempt, RelationDemand, RelationNormalization, RelationOutcome,
 };
-use crate::types::repr::{ClassId, IntrinsicKind, LiteralValue, TypeParamId, TypeTag, Visibility};
+use crate::types::repr::{
+    AliasId, ClassId, IntrinsicKind, LiteralValue, TypeParamId, TypeTag, Visibility,
+};
 use crate::types::store::{Store, TypeId};
 use crate::types::substitute::{DerivedSubstitutionOutcome, SubstitutionOutcome};
 use crate::types::{
@@ -27,8 +29,10 @@ use crate::types::{
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::Arc;
+use typokat_types::alias_semantics::{PublishedAliasTerminal, PublishedAliases};
 
 pub const MAX_CLASS_PROJECTION_EXPANSIONS: usize = 128;
+const MAX_ALIAS_PROJECTION_EXPANSIONS: usize = DEFAULT_STEP_BUDGET as usize;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct GenericNativeSurface {
@@ -659,6 +663,9 @@ pub trait PublishedClassLookup {
     fn published_class(&self, class: ClassId) -> DemandOutcome<&PublishedClassSurface>;
     fn require_class(&self, class: ClassId) -> DemandOutcome<()>;
     fn publication_identity(&self) -> &Arc<()>;
+    fn published_alias(&self, _alias: AliasId) -> Option<&PublishedAliasTerminal> {
+        None
+    }
     /// Whether terminal lookup records dependencies or other observable work.
     fn published_class_lookup_is_observational(&self) -> bool {
         true
@@ -742,7 +749,15 @@ enum SemanticQueryUndo {
     NoCandidateInserted(CompletedRelationKey),
     NoCandidateRemoved(CompletedRelationKey),
     PublicationClean(TypeId),
+    AliasPublication(AliasId, Option<AliasPublicationPreflight>),
     ContextReset(Box<ResetSemanticContext>),
+}
+
+#[derive(Clone, Copy)]
+enum AliasPublicationPreflight {
+    Ready,
+    Invalid,
+    Unavailable,
 }
 
 /// The whole pre-reset context, moved aside rather than copied.
@@ -754,6 +769,7 @@ struct ResetSemanticContext {
     completed_relations: FxHashMap<CompletedRelationKey, CompletedRelationOutcome>,
     completed_relation_no_candidates: FxHashSet<CompletedRelationKey>,
     publication_clean: FxHashSet<TypeId>,
+    alias_publication: FxHashMap<AliasId, AliasPublicationPreflight>,
     publication_store_identity: Option<Arc<()>>,
     publication_snapshot_identity: Option<Arc<()>>,
 }
@@ -768,6 +784,7 @@ pub struct SemanticQueryState {
     completed_relations: FxHashMap<CompletedRelationKey, CompletedRelationOutcome>,
     completed_relation_no_candidates: FxHashSet<CompletedRelationKey>,
     publication_clean: FxHashSet<TypeId>,
+    alias_publication: FxHashMap<AliasId, AliasPublicationPreflight>,
     publication_store_identity: Option<Arc<()>>,
     publication_snapshot_identity: Option<Arc<()>>,
     array_definitely_lacks_then: bool,
@@ -788,6 +805,7 @@ impl SemanticQueryState {
         self.completed_relations.clear();
         self.completed_relation_no_candidates.clear();
         self.publication_clean.clear();
+        self.alias_publication.clear();
         self.publication_store_identity = None;
         self.publication_snapshot_identity = None;
         self.journal.clear();
@@ -808,6 +826,7 @@ impl SemanticQueryState {
         self.completed_relations.clear();
         self.completed_relation_no_candidates.clear();
         self.publication_clean.clear();
+        self.alias_publication.clear();
         self.publication_store_identity = None;
         self.publication_snapshot_identity = None;
         self.journal.clear();
@@ -877,6 +896,9 @@ impl SemanticQueryState {
             SemanticQueryUndo::PublicationClean(ty) => {
                 self.publication_clean.remove(&ty);
             }
+            SemanticQueryUndo::AliasPublication(alias, previous) => {
+                restore_entry(&mut self.alias_publication, alias, previous);
+            }
             SemanticQueryUndo::ContextReset(reset) => {
                 let ResetSemanticContext {
                     projection_memo,
@@ -886,6 +908,7 @@ impl SemanticQueryState {
                     completed_relations,
                     completed_relation_no_candidates,
                     publication_clean,
+                    alias_publication,
                     publication_store_identity,
                     publication_snapshot_identity,
                 } = *reset;
@@ -896,6 +919,7 @@ impl SemanticQueryState {
                 self.completed_relations = completed_relations;
                 self.completed_relation_no_candidates = completed_relation_no_candidates;
                 self.publication_clean = publication_clean;
+                self.alias_publication = alias_publication;
                 // Restoring the stale identities keeps the next refresh reset-worthy,
                 // exactly as a discarded copy of the pre-reset state would have been.
                 self.publication_store_identity = publication_store_identity;
@@ -980,6 +1004,11 @@ impl SemanticQueryState {
         }
     }
 
+    fn remember_alias_publication(&mut self, alias: AliasId, outcome: AliasPublicationPreflight) {
+        let previous = self.alias_publication.insert(alias, outcome);
+        self.record(SemanticQueryUndo::AliasPublication(alias, previous));
+    }
+
     /// Drop every memo the changed store/publication identity invalidated. The
     /// pre-reset context moves into the journal, so undoing costs no copy either.
     fn reset_semantic_context(&mut self, store_identity: &Arc<()>, publication_identity: &Arc<()>) {
@@ -999,6 +1028,7 @@ impl SemanticQueryState {
                 &mut self.completed_relation_no_candidates,
             ),
             publication_clean: std::mem::take(&mut self.publication_clean),
+            alias_publication: std::mem::take(&mut self.alias_publication),
             publication_store_identity: self.publication_store_identity.take(),
             publication_snapshot_identity: self.publication_snapshot_identity.take(),
         };
@@ -1037,6 +1067,11 @@ impl SemanticQueryState {
     #[cfg(any(test, feature = "test-utils"))]
     pub fn completed_relation_no_candidate_len(&self) -> usize {
         self.completed_relation_no_candidates.len()
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn alias_publication_len_for_test(&self) -> usize {
+        self.alias_publication.len()
     }
 }
 
@@ -2551,12 +2586,14 @@ struct ProjectionPlanner<'work, 'memo, L: PublishedClassLookup + ?Sized> {
     plan: ProjectionPlan<'memo>,
     pending_projection_writes: FxHashMap<TypeId, TypeId>,
     admitted_applications: FxHashSet<TypeId>,
+    admitted_alias_applications: FxHashSet<TypeId>,
+    expanded_relation_demands: FxHashSet<RelationDemand>,
     visiting: FxHashSet<TypeId>,
     visited: FxHashSet<TypeId>,
     planning_tainted: bool,
     cycle_taint_reason: Option<Exhaustion>,
     first_exhaustion: Option<Exhaustion>,
-    evaluation_expansions: u32,
+    root_evaluation_expansions: usize,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2569,8 +2606,9 @@ enum SemanticVisitPolicy {
 impl SemanticVisitPolicy {
     fn operand_policy(self) -> Self {
         match self {
-            Self::RelationRootOuterOnly => Self::Recursive,
-            Self::Recursive | Self::DemandOuterOnly => self,
+            Self::Recursive => Self::Recursive,
+            Self::DemandOuterOnly => Self::DemandOuterOnly,
+            Self::RelationRootOuterOnly => Self::DemandOuterOnly,
         }
     }
 
@@ -2608,18 +2646,21 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             },
             pending_projection_writes: FxHashMap::default(),
             admitted_applications: FxHashSet::default(),
+            admitted_alias_applications: FxHashSet::default(),
+            expanded_relation_demands: FxHashSet::default(),
             visiting: FxHashSet::default(),
             visited: FxHashSet::default(),
             planning_tainted: false,
             cycle_taint_reason: None,
             first_exhaustion: None,
-            evaluation_expansions: 0,
+            root_evaluation_expansions: 0,
         }
     }
 
     #[cfg(test)]
     fn plan(mut self, roots: &[TypeId]) -> PlannedQuery<'memo> {
         for &root in roots {
+            self.start_root();
             self.visit(root);
         }
         self.finish()
@@ -2628,6 +2669,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
     #[cfg(test)]
     fn plan_derived(mut self, roots: &[DerivedType]) -> PlannedQuery<'memo> {
         for &root in roots {
+            self.start_root();
             match self.interner.store().tag(root.ty) {
                 TypeTag::ClassInstance => {
                     let projection = self.project_class_outer_derived(root);
@@ -2680,7 +2722,8 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             | TypeTag::Function
             | TypeTag::Array
             | TypeTag::Tuple
-            | TypeTag::Readonly => {}
+            | TypeTag::Readonly
+            | TypeTag::AliasTemplate => {}
         }
         self.finish()
     }
@@ -2690,6 +2733,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
     /// untouched recursive frontier.
     fn prepare_relation_roots(&mut self, roots: &[TypeId]) {
         for &root in roots {
+            self.start_root();
             match self.interner.store().tag(root) {
                 TypeTag::ClassInstance => {
                     self.project_class_outer(root);
@@ -2713,6 +2757,18 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
     fn expand_relation_demand(&mut self, demand: RelationDemand) {
         #[cfg(test)]
         record_relation_driver_expand(demand);
+        if !self.expanded_relation_demands.insert(demand) {
+            let ty = match demand {
+                RelationDemand::ClassProjection(ty)
+                | RelationDemand::Evaluation(ty)
+                | RelationDemand::ApparentSurface(ty) => ty,
+                RelationDemand::DerivedClassProjection(derived)
+                | RelationDemand::DerivedEvaluation(derived) => derived.ty,
+            };
+            self.mark_frontier(ty, Exhaustion::EvaluationCycle { ty });
+            return;
+        }
+        self.start_root();
         match demand {
             RelationDemand::ClassProjection(application) => {
                 self.project_class_outer(application);
@@ -2858,6 +2914,10 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
         self.visit_with_policy(ty, SemanticVisitPolicy::RelationRootOuterOnly)
     }
 
+    fn start_root(&mut self) {
+        self.root_evaluation_expansions = 0;
+    }
+
     fn visit_with_policy(&mut self, ty: TypeId, policy: SemanticVisitPolicy) -> TypeId {
         #[cfg(any(test, feature = "test-utils"))]
         {
@@ -2891,7 +2951,15 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             return ty;
         }
 
+        let alias_application =
+            self.interner
+                .store()
+                .instantiation_type(ty)
+                .is_some_and(|instantiation| {
+                    self.interner.store().tag(instantiation.base) == TypeTag::AliasTemplate
+                });
         let result = match self.interner.store().tag(ty) {
+            TypeTag::Instantiation if alias_application => self.project_alias_outer(ty, policy),
             TypeTag::ClassInstance if !policy.admits_result_recursively() => {
                 self.project_class_outer(ty)
             }
@@ -2923,6 +2991,161 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
         let projection = self.project_class_outer(application);
         self.visit(projection);
         projection
+    }
+
+    fn project_alias_outer(&mut self, application: TypeId, policy: SemanticVisitPolicy) -> TypeId {
+        if !self.admitted_alias_applications.contains(&application) {
+            if self.admitted_alias_applications.len() >= MAX_ALIAS_PROJECTION_EXPANSIONS {
+                self.mark_frontier(application, Exhaustion::AliasProjectionBudget);
+                return application;
+            }
+            self.admitted_alias_applications.insert(application);
+        }
+        let Some(instantiation) = self
+            .interner
+            .store()
+            .instantiation_type(application)
+            .cloned()
+        else {
+            return application;
+        };
+        let Some(alias) = self.interner.store().alias_template_id(instantiation.base) else {
+            return application;
+        };
+        let surface = match self.published.published_alias(alias) {
+            Some(PublishedAliasTerminal::Ready(surface)) => surface,
+            Some(PublishedAliasTerminal::Unavailable(_)) => {
+                self.mark_frontier(application, Exhaustion::AliasUnavailable { alias });
+                return application;
+            }
+            None => {
+                self.mark_frontier(application, Exhaustion::AliasNotPublished { alias });
+                return application;
+            }
+        };
+        if PublishedAliases::validate_ready_surface(self.interner.store(), alias, surface).is_err()
+        {
+            self.mark_frontier(
+                application,
+                Exhaustion::EvaluationInvalidNode { ty: application },
+            );
+            return application;
+        }
+        if surface.template() != instantiation.base
+            || surface.type_params().len() != instantiation.args.len()
+            || surface
+                .type_params()
+                .iter()
+                .zip(&instantiation.args)
+                .any(|(expected, (actual, _))| expected != actual)
+        {
+            self.mark_frontier(
+                application,
+                Exhaustion::EvaluationInvalidNode { ty: application },
+            );
+            return application;
+        }
+        let mut mapper = instantiation
+            .args
+            .iter()
+            .copied()
+            .collect::<FxHashMap<_, _>>();
+        let distributive_parameter = self
+            .interner
+            .store()
+            .conditional_type(surface.body())
+            .filter(|conditional| conditional.distributive && !conditional.poisoned)
+            .and_then(|conditional| {
+                self.interner
+                    .store()
+                    .type_param(conditional.check)
+                    .map(|parameter| parameter.id)
+            });
+        let mut cycle_tainted = false;
+        let result = if let Some(parameter) = distributive_parameter {
+            let Some(mut argument) = mapper.get(&parameter).copied() else {
+                self.mark_frontier(
+                    application,
+                    Exhaustion::EvaluationInvalidNode { ty: application },
+                );
+                return application;
+            };
+            if alias_distribution_argument_requires_visit(self.interner.store(), argument) {
+                argument = self.visit_with_policy(argument, policy.operand_policy());
+                argument = match self.plan.normalize(argument) {
+                    Ok(argument) => argument,
+                    Err(reason) => {
+                        self.mark_frontier(application, reason);
+                        return application;
+                    }
+                };
+            }
+            let wk = self.interner.well_known();
+            let raw_members = self
+                .interner
+                .store()
+                .union_members(argument)
+                .map(<[TypeId]>::to_vec)
+                .or_else(|| {
+                    self.interner
+                        .store()
+                        .distributive_enum_member_types(argument)
+                })
+                .unwrap_or_else(|| vec![argument]);
+            let mut members = Vec::with_capacity(raw_members.len());
+            for member in raw_members {
+                if member == wk.never {
+                    continue;
+                }
+                if member == wk.boolean {
+                    members.push(self.interner.intern_literal(LiteralValue::Boolean(true)));
+                    members.push(self.interner.intern_literal(LiteralValue::Boolean(false)));
+                } else {
+                    members.push(member);
+                }
+            }
+            let mut results = Vec::with_capacity(members.len());
+            for member in members {
+                mapper.insert(parameter, member);
+                match substitute_with_outcome(self.interner, surface.body(), &mapper) {
+                    SubstitutionOutcome::CycleClean(result) => results.push(result),
+                    SubstitutionOutcome::CycleTainted(result) => {
+                        cycle_tainted = true;
+                        results.push(result);
+                    }
+                }
+            }
+            self.interner.union(results)
+        } else {
+            match substitute_with_outcome(self.interner, surface.body(), &mapper) {
+                SubstitutionOutcome::CycleClean(result) => result,
+                SubstitutionOutcome::CycleTainted(result) => {
+                    cycle_tainted = true;
+                    result
+                }
+            }
+        };
+        if cycle_tainted {
+            self.mark_cycle_tainted(application);
+        }
+        let distributed_alias_result = distributive_parameter.is_some();
+        self.record_evaluation(application, result);
+        if matches!(
+            policy,
+            SemanticVisitPolicy::DemandOuterOnly | SemanticVisitPolicy::RelationRootOuterOnly
+        ) && (matches!(
+            self.interner.store().tag(result),
+            TypeTag::Conditional | TypeTag::Instantiation
+        ) || (distributed_alias_result
+            && self.interner.store().tag(result) == TypeTag::Union))
+        {
+            // An alias body is the admitted root's outer layer. Evaluate a conditional
+            // body, but keep its operands on the existing demand-driven policy.
+            self.visit_with_policy(result, SemanticVisitPolicy::RelationRootOuterOnly);
+        } else {
+            self.visit_demand_result(result, policy);
+        }
+        result
     }
 
     fn project_class_outer(&mut self, application: TypeId) -> TypeId {
@@ -3122,18 +3345,18 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             return result;
         }
 
+        if self.root_evaluation_expansions >= DEFAULT_STEP_BUDGET as usize {
+            self.mark_frontier(ty, Exhaustion::EvaluationBudget);
+            return ty;
+        }
+        self.root_evaluation_expansions += 1;
+        #[cfg(any(test, feature = "test-utils"))]
+        measure_query_demand(|measure| measure.evaluation_expansions += 1);
+
         let children = self.evaluation_prerequisites(ty, policy);
         for child in children {
             self.visit_with_policy(child, policy.operand_policy());
         }
-
-        if self.evaluation_expansions >= DEFAULT_STEP_BUDGET {
-            self.mark_frontier(ty, Exhaustion::EvaluationBudget);
-            return ty;
-        }
-        self.evaluation_expansions += 1;
-        #[cfg(any(test, feature = "test-utils"))]
-        measure_query_demand(|measure| measure.evaluation_expansions += 1);
 
         let (outcome, exhausted, cycle_detected) = {
             let mut evaluator = ConditionalEvaluator::with_parent_memo(
@@ -3239,6 +3462,17 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
 
     fn evaluation_prerequisites(&self, ty: TypeId, policy: SemanticVisitPolicy) -> Vec<TypeId> {
         if policy == SemanticVisitPolicy::RelationRootOuterOnly
+            && self.interner.store().tag(ty) == TypeTag::Conditional
+        {
+            return self
+                .interner
+                .store()
+                .conditional_type(ty)
+                .map_or_else(Vec::new, |conditional| {
+                    vec![conditional.check, conditional.extends_ty]
+                });
+        }
+        if policy == SemanticVisitPolicy::RelationRootOuterOnly
             && self.interner.store().tag(ty) == TypeTag::Instantiation
             && self
                 .interner
@@ -3258,17 +3492,24 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             SemanticVisitPolicy::Recursive => {
                 self.visit_with_policy(result, SemanticVisitPolicy::Recursive);
             }
-            SemanticVisitPolicy::DemandOuterOnly | SemanticVisitPolicy::RelationRootOuterOnly => {
-                match self.interner.store().tag(result) {
-                    TypeTag::ClassInstance => {
-                        self.project_class_outer(result);
-                    }
-                    TypeTag::DeferredIndexedAccess | TypeTag::Declared => {
-                        self.visit_with_policy(result, policy);
-                    }
-                    _ => {}
+            SemanticVisitPolicy::DemandOuterOnly => match self.interner.store().tag(result) {
+                TypeTag::ClassInstance => {
+                    self.project_class_outer(result);
                 }
-            }
+                TypeTag::DeferredIndexedAccess | TypeTag::Declared => {
+                    self.visit_with_policy(result, policy);
+                }
+                _ => {}
+            },
+            SemanticVisitPolicy::RelationRootOuterOnly => match self.interner.store().tag(result) {
+                TypeTag::ClassInstance => {
+                    self.project_class_outer(result);
+                }
+                TypeTag::DeferredIndexedAccess | TypeTag::Declared | TypeTag::Instantiation => {
+                    self.visit_with_policy(result, policy);
+                }
+                _ => {}
+            },
         }
     }
 
@@ -3407,6 +3648,56 @@ fn publication_exhaustion<L: PublishedClassLookup + ?Sized>(
         if state.publication_clean.contains(&ty) {
             continue;
         }
+        if let Some(alias) = store.alias_template_id(ty).or_else(|| {
+            store
+                .instantiation_type(ty)
+                .and_then(|instantiation| store.alias_template_id(instantiation.base))
+        }) {
+            match state.alias_publication.get(&alias).copied() {
+                Some(AliasPublicationPreflight::Invalid) => {
+                    return Some(Exhaustion::EvaluationInvalidNode { ty });
+                }
+                Some(AliasPublicationPreflight::Unavailable) => {
+                    return Some(Exhaustion::AliasUnavailable { alias });
+                }
+                Some(AliasPublicationPreflight::Ready) | None => {}
+            }
+            match published.published_alias(alias) {
+                Some(PublishedAliasTerminal::Ready(surface)) => {
+                    if !matches!(
+                        state.alias_publication.get(&alias),
+                        Some(AliasPublicationPreflight::Ready)
+                    ) {
+                        if PublishedAliases::validate_ready_surface(store, alias, surface).is_err()
+                        {
+                            state.remember_alias_publication(
+                                alias,
+                                AliasPublicationPreflight::Invalid,
+                            );
+                            return Some(Exhaustion::EvaluationInvalidNode { ty });
+                        }
+                        state.remember_alias_publication(alias, AliasPublicationPreflight::Ready);
+                    }
+                    if let Some(instantiation) = store.instantiation_type(ty) {
+                        if surface.template() != instantiation.base
+                            || surface.type_params().len() != instantiation.args.len()
+                            || surface
+                                .type_params()
+                                .iter()
+                                .zip(&instantiation.args)
+                                .any(|(expected, (actual, _))| expected != actual)
+                        {
+                            return Some(Exhaustion::EvaluationInvalidNode { ty });
+                        }
+                    }
+                }
+                Some(PublishedAliasTerminal::Unavailable(_)) => {
+                    state.remember_alias_publication(alias, AliasPublicationPreflight::Unavailable);
+                    return Some(Exhaustion::AliasUnavailable { alias });
+                }
+                None => return Some(Exhaustion::AliasNotPublished { alias }),
+            }
+        }
         if let Some(instance) = store.class_instance_type(ty) {
             match published.published_class(instance.class) {
                 DemandOutcome::Ready(surface) => {
@@ -3442,6 +3733,23 @@ fn refresh_semantic_context<L: PublishedClassLookup + ?Sized>(
     if !same_store || !same_publication {
         state.reset_semantic_context(store_identity, publication_identity);
     }
+}
+
+fn alias_distribution_argument_requires_visit(store: &Store, argument: TypeId) -> bool {
+    let evaluable = |ty| {
+        matches!(
+            store.tag(ty),
+            TypeTag::Conditional
+                | TypeTag::Instantiation
+                | TypeTag::Mapped
+                | TypeTag::Template
+                | TypeTag::Keyof
+        )
+    };
+    evaluable(argument)
+        || store
+            .union_members(argument)
+            .is_some_and(|members| members.iter().copied().any(evaluable))
 }
 
 fn query_children(store: &Store, ty: TypeId) -> Vec<TypeId> {
@@ -3534,7 +3842,8 @@ fn query_children(store: &Store, ty: TypeId) -> Vec<TypeId> {
         | TypeTag::Enum
         | TypeTag::EnumMember
         | TypeTag::Infer
-        | TypeTag::MappedValue => Vec::new(),
+        | TypeTag::MappedValue
+        | TypeTag::AliasTemplate => Vec::new(),
     }
 }
 

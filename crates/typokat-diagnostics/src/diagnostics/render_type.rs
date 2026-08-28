@@ -1,7 +1,7 @@
 //! Type rendering for diagnostic messages (the corpus display format).
 
 use crate::types::repr::{
-    DeclaredRecipeId, DeclaredRecipeNode, LiteralValue, TypeParamId, TypeTag,
+    DeclaredRecipeId, DeclaredRecipeNode, IntrinsicKind, LiteralValue, TypeParamId, TypeTag,
 };
 use crate::types::store::{Store, TypeId};
 use oxc_syntax::identifier::is_identifier_name;
@@ -88,6 +88,18 @@ impl RenderContext {
         self.remaining_chars = DISPLAY_CHAR_LIMIT - ELLIPSIS.len();
         self.truncated = true;
     }
+
+    fn ordering_context(&self) -> Self {
+        Self {
+            output: String::new(),
+            rendering: self.rendering.clone(),
+            overlays: self.overlays.clone(),
+            overlay_limit: self.overlay_limit,
+            remaining_chars: DISPLAY_CHAR_LIMIT,
+            depth: self.depth,
+            truncated: false,
+        }
+    }
 }
 
 /// Render a type per the corpus display format. `widen` applies only to the
@@ -157,6 +169,9 @@ fn render_type_node(store: &Store, id: TypeId, widen: bool, context: &mut Render
             }
             None => context.append("<unsupported>"),
         },
+        TypeTag::AliasTemplate => {
+            context.append(store.template_name(id).unwrap_or("<alias>"));
+        }
         // Object: `{ a: number; b: string }` — members in stored (canonical)
         // order, `; `-separated (README "Type display format").
         TypeTag::Object => {
@@ -270,7 +285,8 @@ fn render_type_node(store: &Store, id: TypeId, widen: bool, context: &mut Render
                         context,
                     );
                 } else {
-                    render_union_members(store, members.iter().copied(), context);
+                    let members = stable_discriminated_union_members(store, members, context);
+                    render_union_members(store, members, context);
                 }
             }
             // Defensive fallback; a union always has a side-table entry.
@@ -389,18 +405,20 @@ fn render_type_node(store: &Store, id: TypeId, widen: bool, context: &mut Render
                     Some(name) => context.append(name),
                     None => render_type_inner(store, inst.base, false, context),
                 }
-                context.append("<");
-                for (index, (_, arg)) in inst.args.iter().enumerate() {
-                    if context.truncated {
-                        break;
+                if !inst.args.is_empty() {
+                    context.append("<");
+                    for (index, (_, arg)) in inst.args.iter().enumerate() {
+                        if context.truncated {
+                            break;
+                        }
+                        if index > 0 {
+                            context.append(", ");
+                        }
+                        render_type_inner(store, *arg, false, context);
                     }
-                    if index > 0 {
-                        context.append(", ");
-                    }
-                    render_type_inner(store, *arg, false, context);
+                    context.append(">");
                 }
                 context.rendering.pop();
-                context.append(">");
             }
             None => context.append("<unsupported>"),
         },
@@ -559,6 +577,79 @@ fn render_type_node(store: &Store, id: TypeId, widen: bool, context: &mut Render
             None => context.append("<unsupported>"),
         },
     }
+}
+
+fn stable_discriminated_union_members(
+    store: &Store,
+    members: &[TypeId],
+    context: &RenderContext,
+) -> Vec<TypeId> {
+    let mut ordered = members.to_vec();
+    let Some(first) = members
+        .first()
+        .and_then(|member| store.object_type(*member))
+    else {
+        return ordered;
+    };
+    let mut candidate_keys = first
+        .properties
+        .iter()
+        .map(|property| property.key.clone())
+        .collect::<Vec<_>>();
+    candidate_keys.sort();
+    candidate_keys.dedup();
+    for key in candidate_keys {
+        let ranks = members
+            .iter()
+            .map(|member| {
+                store
+                    .object_type(*member)
+                    .and_then(|object| object.property_by_key(&key))
+                    .and_then(|property| boolean_discriminant_rank(store, property.ty))
+            })
+            .collect::<Option<Vec<_>>>();
+        let Some(ranks) = ranks else {
+            continue;
+        };
+        if ranks.contains(&0) && ranks.contains(&1) {
+            let mut ranked = members
+                .iter()
+                .copied()
+                .zip(ranks)
+                .map(|(member, rank)| {
+                    let mut ordering = context.ordering_context();
+                    render_type_inner(store, member, false, &mut ordering);
+                    (rank, ordering.output, member)
+                })
+                .collect::<Vec<_>>();
+            ranked.sort_by(|left, right| (&left.0, &left.1).cmp(&(&right.0, &right.1)));
+            ordered = ranked.into_iter().map(|(_, _, member)| member).collect();
+            break;
+        }
+    }
+    ordered
+}
+
+fn boolean_discriminant_rank(store: &Store, ty: TypeId) -> Option<u8> {
+    if let Some(LiteralValue::Boolean(value)) = store.literal_value(ty) {
+        return Some(u8::from(*value));
+    }
+    let members = store.union_members(ty)?;
+    let mut rank = None;
+    for member in members {
+        if store.intrinsic_kind(*member) == Some(IntrinsicKind::Undefined) {
+            continue;
+        }
+        let LiteralValue::Boolean(value) = store.literal_value(*member)? else {
+            return None;
+        };
+        let member_rank = u8::from(*value);
+        if rank.is_some_and(|rank| rank != member_rank) {
+            return None;
+        }
+        rank = Some(member_rank);
+    }
+    rank
 }
 
 fn render_union_members(
@@ -1082,7 +1173,7 @@ mod escape_tests {
 mod stable_union_tests {
     use super::render_type;
     use crate::types::intern::Interner;
-    use crate::types::repr::LiteralValue;
+    use crate::types::repr::{LiteralValue, ObjectType, PropertyType};
 
     fn render_string_union(first: &str, second: &str) -> String {
         let mut interner = Interner::with_intrinsics();
@@ -1100,6 +1191,66 @@ mod stable_union_tests {
         assert_eq!(a_then_b, "\"a\" | \"b\"");
         assert_eq!(b_then_a, "\"a\" | \"b\"");
         assert_eq!(a_then_b.as_bytes(), b_then_a.as_bytes());
+    }
+
+    #[test]
+    fn boolean_discriminated_object_union_ignores_allocation_order() {
+        fn render(reverse: bool) -> String {
+            let mut interner = Interner::with_intrinsics();
+            let true_type = interner.intern_literal(LiteralValue::Boolean(true));
+            let false_type = interner.intern_literal(LiteralValue::Boolean(false));
+            let undefined = interner.well_known().undefined;
+            let optional_false = interner.union(vec![false_type, undefined]);
+            let branch = |interner: &mut Interner, ty| {
+                interner.intern_object(ObjectType {
+                    properties: vec![PropertyType::public("done", ty)],
+                    ..Default::default()
+                })
+            };
+            let (false_branch, true_branch) = if reverse {
+                let true_branch = branch(&mut interner, true_type);
+                let false_branch = branch(&mut interner, optional_false);
+                (false_branch, true_branch)
+            } else {
+                let false_branch = branch(&mut interner, optional_false);
+                let true_branch = branch(&mut interner, true_type);
+                (false_branch, true_branch)
+            };
+            let union = interner.union(vec![true_branch, false_branch]);
+            render_type(interner.store(), union, false)
+        }
+
+        let expected = "{ done: undefined | false } | { done: true }";
+        assert_eq!(render(false), expected);
+        assert_eq!(render(true), expected);
+    }
+
+    #[test]
+    fn boolean_discriminated_object_union_uses_canonical_key_and_tie_breaker() {
+        let mut interner = Interner::with_intrinsics();
+        let true_type = interner.intern_literal(LiteralValue::Boolean(true));
+        let false_type = interner.intern_literal(LiteralValue::Boolean(false));
+        let string_a = interner.intern_literal(LiteralValue::String("a".to_owned()));
+        let string_b = interner.intern_literal(LiteralValue::String("b".to_owned()));
+        let branch = |interner: &mut Interner, a, z, value| {
+            interner.intern_object(ObjectType {
+                properties: vec![
+                    PropertyType::public("a", a),
+                    PropertyType::public("z", z),
+                    PropertyType::public("value", value),
+                ],
+                ..Default::default()
+            })
+        };
+        let true_a = branch(&mut interner, true_type, false_type, string_b);
+        let false_a_b = branch(&mut interner, false_type, true_type, string_b);
+        let false_a_a = branch(&mut interner, false_type, true_type, string_a);
+        let union = interner.union(vec![true_a, false_a_b, false_a_a]);
+
+        assert_eq!(
+            render_type(interner.store(), union, false),
+            "{ a: false; value: \"a\"; z: true } | { a: false; value: \"b\"; z: true } | { a: true; value: \"b\"; z: false }"
+        );
     }
 }
 

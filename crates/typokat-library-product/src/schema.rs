@@ -399,6 +399,7 @@ pub struct TypeRecipe {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TupleElementRecipe {
+    pub site: SourceSite,
     pub name: Option<StringKey>,
     pub value: TypeRecipeKey,
     pub optional: bool,

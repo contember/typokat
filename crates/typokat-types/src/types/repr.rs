@@ -109,6 +109,9 @@ pub enum TypeTag {
     /// The member retains its declaration identity even when another member has the
     /// same primitive value.
     EnumMember = 21,
+    /// The immutable identity of one recursive alias declaration. The payload is
+    /// an [`AliasId`]; applications are ordinary [`TypeTag::Instantiation`] nodes.
+    AliasTemplate = 22,
 }
 
 impl TypeTag {
@@ -136,6 +139,7 @@ impl TypeTag {
             TypeTag::Declared => 19,
             TypeTag::Enum => 20,
             TypeTag::EnumMember => 21,
+            TypeTag::AliasTemplate => 22,
         }
     }
 }
@@ -290,6 +294,17 @@ impl LiteralValue {
 pub struct ClassId(pub u32);
 
 impl ClassId {
+    #[inline]
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// Stable project-local identity for one immutable recursive alias template.
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+pub struct AliasId(pub u32);
+
+impl AliasId {
     #[inline]
     pub fn index(self) -> usize {
         self.0 as usize

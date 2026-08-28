@@ -23,6 +23,7 @@ use crate::diagnostics::Diagnostic;
 use crate::span::Span;
 use crate::types::repr::{ClassId, EnumId, TypeParamId, TypeTag, Visibility};
 use crate::types::store::{Store, TypeId};
+use crate::types::substitute::substitute;
 use crate::types::Interner;
 use oxc_ast::ast::{
     BinaryOperator, Class, Expression, TSEnumDeclaration, TSInterfaceHeritage, TSType, TSTypeName,
@@ -203,7 +204,8 @@ fn for_each_object_alias_type_operand(store: &Store, owner: TypeId, mut visit: i
         | TypeTag::Enum
         | TypeTag::EnumMember
         | TypeTag::Infer
-        | TypeTag::MappedValue => {}
+        | TypeTag::MappedValue
+        | TypeTag::AliasTemplate => {}
         TypeTag::Object => {
             let object = store.object_type(owner).expect("object payload");
             for property in &object.properties {
@@ -902,9 +904,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
         // Fill conditional-alias placeholders before ordinary aliases can instantiate them.
         for index in start..end {
-            let (scope, placeholder, params, param_decl, annotation, name, name_span) =
+            let (declaration, scope, placeholder, params, param_decl, annotation, name, name_span) =
                 match &self.type_decls[index] {
                     TypeDecl::Alias {
+                        declaration,
                         scope,
                         conditional_template: Some(placeholder),
                         params,
@@ -914,6 +917,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         name_span,
                         ..
                     } => (
+                        *declaration,
                         *scope,
                         *placeholder,
                         params.clone(),
@@ -924,6 +928,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     ),
                     _ => continue,
                 };
+            let recover_library_body = matches!(
+                self.lexical_events
+                    .declaration_source(declaration)
+                    .map(|source| source.unit),
+                Some(crate::source::SourceUnit::Library { .. })
+            );
             let decl_id = TypeGroupId(u32::try_from(index).expect("type group index fits u32"));
             self.begin_type_group_construction(decl_id);
             let frame = self.build_type_param_frame(param_decl, &params);
@@ -945,6 +955,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 // Circular check (`TK2456`) or out-of-subset body → the alias is the error
                 // type (silent downstream, m22 discipline).
                 _ => {
+                    let unavailable = if self.circular_aliases.contains(&index) {
+                        typokat_types::alias_semantics::PublishedAliasUnavailable::DirectCycle
+                    } else {
+                        typokat_types::alias_semantics::PublishedAliasUnavailable::UnsupportedBody
+                    };
                     self.interner
                         .poison_reserved_conditional(placeholder)
                         .expect("failed conditional alias owns one pending reservation");
@@ -952,11 +967,21 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         *slot = Some(error_ty);
                     }
                     if let TypeDecl::Alias {
+                        alias_body,
+                        alias_unavailable,
                         conditional_template,
                         ..
                     } = &mut self.type_decls[index]
                     {
                         *conditional_template = None;
+                        if recover_library_body {
+                            // Legacy library shadows retain recovery until audit-only cutover.
+                            *alias_body = Some(error_ty);
+                            *alias_unavailable = None;
+                        } else {
+                            *alias_body = None;
+                            *alias_unavailable = Some(unavailable);
+                        }
                     }
                 }
             }
@@ -2590,15 +2615,88 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 unreachable!()
             };
             *conflict_alternatives = alternatives;
-            completed.push((index, complete));
+            completed.push((index, complete, own_surface));
         }
 
         let fills = completed
             .into_iter()
-            .map(|(index, object)| {
-                let TypeDecl::Interface { reserved, .. } = self.type_decls[index] else {
-                    unreachable!()
+            .map(|(index, mut object, own_surface)| {
+                let (reserved, recovery_params) = match &self.type_decls[index] {
+                    TypeDecl::Interface {
+                        reserved,
+                        recovery_params,
+                        ..
+                    } => (*reserved, recovery_params.clone()),
+                    _ => unreachable!(),
                 };
+                let overlay = match &self.type_decls[index] {
+                    TypeDecl::Interface {
+                        project_local_overlay,
+                        ..
+                    } => project_local_overlay.clone(),
+                    _ => unreachable!(),
+                };
+                if let Some(overlay) = overlay {
+                    let mut unavailable = false;
+                    if recovery_params.len() != overlay.parameters.len() {
+                        unavailable = true;
+                        object = overlay.object.clone();
+                    } else {
+                        let substitutions = recovery_params
+                            .iter()
+                            .copied()
+                            .zip(overlay.parameters.iter().copied())
+                            .enumerate()
+                            .map(|(position, (source, target))| {
+                                let name = overlay
+                                    .parameter_names
+                                    .get(position)
+                                    .cloned()
+                                    .unwrap_or_else(|| format!("T{position}"));
+                                (source, self.interner.intern_type_param(target, name))
+                            })
+                            .collect::<FxHashMap<_, _>>();
+                        let user_complete = self.interner.intern_object(object);
+                        let user_complete =
+                            substitute(self.interner, user_complete, &substitutions);
+                        let user_own = self.interner.intern_object(own_surface);
+                        let user_own = substitute(self.interner, user_own, &substitutions);
+                        let (Some(user_complete), Some(_user_own)) = (
+                            self.interner.store().object_type(user_complete).cloned(),
+                            self.interner.store().object_type(user_own).cloned(),
+                        ) else {
+                            if let TypeDecl::Interface {
+                                project_local_overlay: Some(overlay),
+                                ..
+                            } = &mut self.type_decls[index]
+                            {
+                                overlay.unavailable = true;
+                            }
+                            object = overlay.object.clone();
+                            return crate::types::intern::ReservedTypeFill::Object(
+                                reserved, object,
+                            );
+                        };
+                        #[cfg(any(test, feature = "test-utils"))]
+                        self.project_local_user_interface_own.insert(
+                            TypeGroupId(u32::try_from(index).expect("type group index fits u32")),
+                            _user_own,
+                        );
+                        object = interface::merge_object_members_overlay(
+                            overlay.object.clone(),
+                            user_complete,
+                        );
+                    }
+                    if unavailable {
+                        if let TypeDecl::Interface {
+                            project_local_overlay: Some(overlay),
+                            ..
+                        } = &mut self.type_decls[index]
+                        {
+                            overlay.unavailable = true;
+                        }
+                    }
+                }
                 crate::types::intern::ReservedTypeFill::Object(reserved, object)
             })
             .collect();
@@ -4620,7 +4718,16 @@ pub(in crate::check::checker) fn reserve_type_decls_from_inventory<'ast>(
         decls,
         resolved,
     };
-    reserve_type_decls_with_policy(state, inventory, false, None, None)
+    reserve_type_decls_with_policy(state, inventory, false, None, None, None)
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub(in crate::check::checker) fn reserve_type_decls_for_project_local_user_from_inventory<'ast>(
+    state: TypeDeclReservationState<'_, 'ast>,
+    inventory: &BoundTypeDeclarationInventory<'ast>,
+    overlays: &mut FxHashMap<TypeGroupId, ProjectLocalTypeOverlayDraft>,
+) -> TypeDeclReservationReceipt {
+    reserve_type_decls_with_policy(state, inventory, false, None, None, Some(overlays))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -4649,7 +4756,7 @@ pub(in crate::check::checker) fn reserve_type_decls_for_combined_library_from_in
     state: TypeDeclReservationState<'_, 'ast>,
     inventory: &BoundTypeDeclarationInventory<'ast>,
 ) -> TypeDeclReservationReceipt {
-    reserve_type_decls_with_policy(state, inventory, true, None, None)
+    reserve_type_decls_with_policy(state, inventory, true, None, None, None)
 }
 
 pub(in crate::check::checker) fn reserve_type_decls_for_combined_user_from_inventory<'ast>(
@@ -4657,7 +4764,14 @@ pub(in crate::check::checker) fn reserve_type_decls_for_combined_user_from_inven
     inventory: &BoundTypeDeclarationInventory<'ast>,
     library_declarations: &FxHashSet<DeclId>,
 ) -> TypeDeclReservationReceipt {
-    reserve_type_decls_with_policy(state, inventory, false, Some(library_declarations), None)
+    reserve_type_decls_with_policy(
+        state,
+        inventory,
+        false,
+        Some(library_declarations),
+        None,
+        None,
+    )
 }
 
 pub(in crate::check::checker) fn reserve_type_decls_selected_from_inventory<'ast>(
@@ -4672,6 +4786,7 @@ pub(in crate::check::checker) fn reserve_type_decls_selected_from_inventory<'ast
         false,
         None,
         Some((selected, published_types)),
+        None,
     )
 }
 
@@ -4688,6 +4803,7 @@ fn reserve_type_decls_with_policy<'ast>(
     retain_library_declarations: bool,
     preserved_library_declarations: Option<&FxHashSet<DeclId>>,
     selected: Option<(&BTreeSet<ReplayOwner>, &PublishedTypeEnvironment)>,
+    mut project_local_overlays: Option<&mut FxHashMap<TypeGroupId, ProjectLocalTypeOverlayDraft>>,
 ) -> TypeDeclReservationReceipt {
     let TypeDeclReservationState {
         interner,
@@ -4939,7 +5055,12 @@ fn reserve_type_decls_with_policy<'ast>(
                         ..
                     }) => {
                         let inherited_defaults = inherited_defaults.clone();
-                        let reserved = interner.reserve_object();
+                        let project_local_overlay = project_local_overlays
+                            .as_deref_mut()
+                            .and_then(|overlays| overlays.remove(&group));
+                        let reserved = project_local_overlay
+                            .as_ref()
+                            .map_or_else(|| interner.reserve_object(), |overlay| overlay.template);
                         if let Some(slot) = resolved.get_mut(group.index()) {
                             *slot = Some(reserved);
                         }
@@ -4985,6 +5106,7 @@ fn reserve_type_decls_with_policy<'ast>(
                             param_decl: iface.type_parameters.as_deref(),
                             extends: &iface.extends,
                             fragments: vec![fragment],
+                            project_local_overlay,
                         };
                     }
                     Some(displaced @ TypeDecl::Enum { .. })
@@ -5050,54 +5172,23 @@ fn reserve_type_decls_with_policy<'ast>(
                     }
                     // Reserve recursive templates only after the declaration wins its
                     // group slot; rejected aliases never publish a draft identity.
-                    let conditional_template = if matches!(
-                        alias.type_annotation,
-                        oxc_ast::ast::TSType::TSConditionalType(_)
-                    ) {
-                        let reserved = interner.reserve_conditional();
-                        interner.set_template_name(reserved, alias.id.name.as_str());
-                        if let Some(slot) = resolved.get_mut(group.index()) {
-                            *slot = Some(reserved);
-                        }
-                        Some(reserved)
-                    } else {
-                        None
-                    };
-                    let mapped_template =
-                        if matches!(alias.type_annotation, oxc_ast::ast::TSType::TSMappedType(_)) {
-                            let reserved = interner.reserve_mapped();
-                            interner.set_template_name(reserved, alias.id.name.as_str());
-                            if let Some(slot) = resolved.get_mut(group.index()) {
-                                *slot = Some(reserved);
-                            }
-                            Some(reserved)
-                        } else {
-                            None
-                        };
-                    let object_template = if alias.type_parameters.is_none()
-                        && matches!(
-                            alias.type_annotation,
-                            oxc_ast::ast::TSType::TSTypeLiteral(_)
-                        ) {
-                        let reserved = interner.reserve_object();
-                        if let Some(slot) = resolved.get_mut(group.index()) {
-                            *slot = Some(reserved);
-                        }
-                        Some(reserved)
-                    } else {
-                        None
-                    };
+                    let (alias_id, alias_template) =
+                        interner.reserve_alias_template(alias.id.name.as_str());
                     decls[group.index()] = TypeDecl::Alias {
                         declaration,
                         scope,
+                        alias_id,
+                        alias_template,
+                        alias_body: None,
+                        alias_unavailable: None,
                         annotation: &alias.type_annotation,
                         params,
                         defaults,
                         param_decl: alias.type_parameters.as_deref(),
                         resolving: false,
-                        conditional_template,
-                        mapped_template,
-                        object_template,
+                        conditional_template: None,
+                        mapped_template: None,
+                        object_template: None,
                         name: alias.id.name.to_string(),
                         name_span: Span::from_oxc(alias.id.span),
                     };

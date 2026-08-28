@@ -156,10 +156,118 @@ pub struct ProjectLocalRepeatedDemandForTest {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectLocalForceAllTraceForTest {
-    pub materialized_product_groups: Vec<ProjectLocalProductGroupForTest>,
-    pub materialized_owner_work_count: usize,
+    pub requested_product_groups: Vec<ProjectLocalProductGroupForTest>,
+    pub additional_materialized_product_groups: Vec<ProjectLocalProductGroupForTest>,
+    pub additional_materialized_owner_work_count: usize,
+    pub production_validation_roots: Vec<ProjectLocalProductGroupForTest>,
+    pub terminal_census: Vec<ProjectLocalForceAllTerminalRowForTest>,
     pub semantic_probes: ProjectLocalSemanticProbesForTest,
     pub library_records: Vec<ProjectLocalLibraryRecordForTest>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectLocalForceAllTerminalRowForTest {
+    pub group: ProjectLocalProductGroupForTest,
+    pub terminal: ProjectLocalForceAllTerminalForTest,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProjectLocalForceAllTerminalForTest {
+    Ready {
+        type_surface: Option<ProjectLocalForceAllReadySurfaceForTest>,
+        value_surface: Option<ProjectLocalForceAllReadySurfaceForTest>,
+    },
+    Unavailable(ProjectLocalUnavailableReasonForTest),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProjectLocalForceAllReadySurfaceForTest {
+    Object(ProjectLocalForceAllObjectShapeForTest),
+    Alias(ProjectLocalForceAllAliasTerminalForTest),
+    Other(ProjectLocalForceAllTypeKindForTest),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectLocalForceAllObjectShapeForTest {
+    pub property_count: usize,
+    pub call_signature_count: usize,
+    pub construct_signature_count: usize,
+    pub has_string_index: bool,
+    pub has_number_index: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProjectLocalForceAllAliasTerminalForTest {
+    Ready {
+        parameter_count: usize,
+        body: Box<ProjectLocalForceAllReadySurfaceForTest>,
+    },
+    Unavailable(ProjectLocalForceAllAliasUnavailableForTest),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProjectLocalForceAllAliasUnavailableForTest {
+    DirectCycle,
+    UnsupportedBody,
+    ComponentFailure,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProjectLocalForceAllTypeKindForTest {
+    Intrinsic(ProjectLocalForceAllIntrinsicKindForTest),
+    Literal(ProjectLocalForceAllLiteralKindForTest),
+    Object,
+    Union,
+    Intersection,
+    Function,
+    TypeParameter,
+    Array,
+    Tuple,
+    Readonly,
+    Conditional,
+    Instantiation,
+    Infer,
+    Mapped,
+    MappedValue,
+    Template,
+    Keyof,
+    ClassInstance,
+    DeferredIndexedAccess,
+    Declared,
+    Enum,
+    EnumMember,
+    AliasTemplate,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProjectLocalForceAllLiteralKindForTest {
+    Number,
+    String,
+    Boolean,
+    WellKnownSymbol,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProjectLocalForceAllIntrinsicKindForTest {
+    Error,
+    Any,
+    Unknown,
+    Never,
+    Void,
+    Null,
+    Undefined,
+    Boolean,
+    Number,
+    String,
+    Uppercase,
+    Lowercase,
+    Capitalize,
+    Uncapitalize,
+    ThisType,
+    OmitThisParameter,
+    Object,
+    BigInt,
+    Symbol,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -241,7 +349,7 @@ pub struct ProjectLocalGlobalContributorForTest {
     pub sites: Vec<ProjectLocalGlobalContributorSiteForTest>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProjectLocalLibraryRecordForTest {
     pub source_path: String,
     pub owner_start: u32,
@@ -262,6 +370,8 @@ pub struct ProjectLocalSemanticTraceForTest {
     pub demand_root_visits: Vec<ProjectLocalDemandRootForTest>,
     pub materialized_product_groups: Vec<ProjectLocalProductGroupForTest>,
     pub materialized_owner_work_count: usize,
+    pub production_validation_roots: Vec<ProjectLocalProductGroupForTest>,
+    pub production_library_records: Vec<ProjectLocalLibraryRecordForTest>,
     pub semantic_probes: ProjectLocalSemanticProbesForTest,
     pub user_event_ledger: Vec<ProjectLocalUserEventRecordForTest>,
     pub user_check_results: Vec<ProjectLocalCheckResultForTest>,
@@ -274,24 +384,4 @@ pub struct ProjectLocalSemanticTraceForTest {
     pub repeated_demands: Vec<ProjectLocalRepeatedDemandForTest>,
     pub ordinary_force_all_invocations: Vec<String>,
     pub force_all: Option<ProjectLocalForceAllTraceForTest>,
-}
-
-impl ProjectLocalForceAllTraceForTest {
-    pub fn validation_roots_for_test(&self) -> &[ProjectLocalProductGroupForTest] {
-        &[]
-    }
-
-    pub fn library_records_for_test(&self) -> &[ProjectLocalLibraryRecordForTest] {
-        &[]
-    }
-}
-
-impl ProjectLocalSemanticTraceForTest {
-    pub fn validation_roots_for_test(&self) -> &[ProjectLocalProductGroupForTest] {
-        &[]
-    }
-
-    pub fn library_records_for_test(&self) -> &[ProjectLocalLibraryRecordForTest] {
-        &[]
-    }
 }

@@ -1,4 +1,5 @@
 use super::*;
+use typokat_types::alias_semantics::{PublishedAliasTerminal, PublishedAliases};
 
 pub struct OwnedLibraryRuntimeState {
     pub(super) interner: Interner,
@@ -168,7 +169,27 @@ pub(super) fn validate_owned_library_product_parts(
         }
     }
 
+    let mut aliases = BTreeMap::new();
+    for (alias, terminal) in &parts.published_types.aliases {
+        if aliases.insert(*alias, terminal).is_some() {
+            return Err("product alias publication repeats an alias id");
+        }
+        let PublishedAliasTerminal::Ready(surface) = terminal else {
+            continue;
+        };
+        PublishedAliases::validate_ready_surface(store, *alias, surface)
+            .map_err(|_| "product published alias surface has an invalid reference")?;
+        if surface
+            .type_params()
+            .iter()
+            .any(|parameter| !type_param_precedes_counter(*parameter, parts.next_type_param))
+        {
+            return Err("product alias parameter collides with the next parameter counter");
+        }
+    }
+
     let mut class_group_names = BTreeMap::new();
+    let mut alias_group_owners = BTreeSet::new();
     for (index, terminal) in parts.published_types.groups.iter().enumerate() {
         let PublishedTypeGroupTerminal::Ready(group) = terminal else {
             continue;
@@ -217,11 +238,34 @@ pub(super) fn validate_owned_library_product_parts(
                     return Err("product class identity is published by multiple type groups");
                 }
             }
-            PublishedTypeGroupSurface::Template(_) | PublishedTypeGroupSurface::Enum(_) => {}
+            PublishedTypeGroupSurface::Template(template) => {
+                if let Some(alias) = store.alias_template_id(template) {
+                    let Some(PublishedAliasTerminal::Ready(surface)) = aliases.get(&alias).copied()
+                    else {
+                        return Err("product alias type group has no ready alias publication");
+                    };
+                    if surface.template() != template || surface.type_params() != group.parameters {
+                        return Err("product alias publication does not match its type group");
+                    }
+                    if !alias_group_owners.insert(alias) {
+                        return Err("product alias identity is published by multiple type groups");
+                    }
+                }
+            }
+            PublishedTypeGroupSurface::Enum(_) => {}
         }
     }
     if class_group_names.keys().copied().collect::<BTreeSet<_>>() != classes {
         return Err("product published classes do not have exact type-group ownership");
+    }
+    let ready_aliases = aliases
+        .iter()
+        .filter_map(|(alias, terminal)| {
+            matches!(terminal, PublishedAliasTerminal::Ready(_)).then_some(*alias)
+        })
+        .collect::<BTreeSet<_>>();
+    if alias_group_owners != ready_aliases {
+        return Err("product published aliases do not have exact type-group ownership");
     }
 
     for index in 0..store_len {

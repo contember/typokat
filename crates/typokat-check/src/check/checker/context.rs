@@ -13,7 +13,7 @@ use crate::diagnostics::Diagnostic;
 use crate::source::{LibraryFileOrdinal, SourceUnit};
 use crate::span::Span;
 use crate::types::layered::{LayeredMap, LayeredSet, LayeredVec};
-use crate::types::repr::{ClassId, EnumId, PropertyType, TypeParamId, Visibility};
+use crate::types::repr::{ClassId, EnumId, ObjectType, PropertyType, TypeParamId, Visibility};
 use crate::types::store::TypeId;
 use crate::types::Interner;
 use oxc_ast::ast::{
@@ -1046,6 +1046,17 @@ pub(in crate::check::checker) struct InterfaceFragment<'ast> {
     pub(in crate::check::checker) extends: &'ast [TSInterfaceHeritage<'ast>],
 }
 
+/// Product-owned object draft completed by project-local user augmentation.
+#[derive(Clone)]
+pub(in crate::check::checker) struct ProjectLocalTypeOverlayDraft {
+    pub(in crate::check::checker) template: TypeId,
+    pub(in crate::check::checker) parameters: Vec<TypeParamId>,
+    pub(in crate::check::checker) parameter_names: Vec<String>,
+    pub(in crate::check::checker) parameter_defaults: Vec<PublishedTypeParameterDefault>,
+    pub(in crate::check::checker) object: ObjectType,
+    pub(in crate::check::checker) unavailable: bool,
+}
+
 /// One exact type-parameter identity retained from a class/interface header.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::check::checker) struct NamedTypeParamBinding {
@@ -1117,12 +1128,17 @@ pub(in crate::check::checker) enum TypeDecl<'ast> {
         extends: &'ast [TSInterfaceHeritage<'ast>],
         /// Every declaration fragment in canonical source order shares `reserved`.
         fragments: Vec<InterfaceFragment<'ast>>,
+        project_local_overlay: Option<ProjectLocalTypeOverlayDraft>,
     },
     /// A transparent alias lowers on demand. Template placeholders keep recursive
     /// conditional, mapped, and object-literal alias shapes from expanding inline.
     Alias {
         declaration: DeclId,
         scope: ScopeId,
+        alias_id: crate::types::repr::AliasId,
+        alias_template: TypeId,
+        alias_body: Option<TypeId>,
+        alias_unavailable: Option<typokat_types::alias_semantics::PublishedAliasUnavailable>,
         annotation: &'ast TSType<'ast>,
         params: Vec<TypeParamId>,
         defaults: Vec<Option<TypeId>>,
@@ -1336,6 +1352,28 @@ impl<'ast> TypeDeclTable<'ast> {
     ) -> Option<&[TypeParamId]> {
         Some(self.published.get(index)?.params.as_slice())
     }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(in crate::check::checker) fn can_install_project_local_published(
+        &self,
+        index: usize,
+    ) -> bool {
+        index < self.published.len() && self.published.prefix_overrides_enabled()
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(in crate::check::checker) fn install_project_local_published(
+        &mut self,
+        index: usize,
+        declaration: PublishedTypeDecl,
+    ) -> Result<(), &'static str> {
+        let slot = self
+            .published
+            .get_mut_local(index)
+            .ok_or("project-local type declaration is outside the published prefix")?;
+        *slot = declaration;
+        Ok(())
+    }
 }
 
 impl<'ast> From<Vec<TypeDecl<'ast>>> for TypeDeclTable<'ast> {
@@ -1396,6 +1434,28 @@ impl TypeResolvedTable {
             return self.published.get_mut_local(index);
         }
         self.local.get_mut(index.checked_sub(self.published.len())?)
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(in crate::check::checker) fn can_install_project_local_published(
+        &self,
+        index: usize,
+    ) -> bool {
+        index < self.published.len() && self.published.prefix_overrides_enabled()
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(in crate::check::checker) fn install_project_local_published(
+        &mut self,
+        index: usize,
+        resolution: Option<TypeId>,
+    ) -> Result<(), &'static str> {
+        let slot = self
+            .published
+            .get_mut_local(index)
+            .ok_or("project-local type resolution is outside the published prefix")?;
+        *slot = resolution;
+        Ok(())
     }
 }
 
@@ -1548,6 +1608,8 @@ pub(in crate::check::checker) enum ClassFillState {
 pub(in crate::check::checker) struct ConstructionDrafts<'ast> {
     pub(in crate::check::checker) staged_published_classes:
         Option<crate::class_semantics::PublishedClasses>,
+    pub(in crate::check::checker) staged_published_aliases:
+        Option<typokat_types::alias_semantics::PublishedAliases>,
     pub(in crate::check::checker) type_group_construction: Option<TypeGroupConstruction>,
     pub(in crate::check::checker) type_decls: TypeDeclTable<'ast>,
     pub(in crate::check::checker) type_resolved: TypeResolvedTable,
@@ -1825,9 +1887,49 @@ pub(in crate::check::checker) fn record_cycle_tainted_application_cache_measure(
 /// pass writes to. Bundled into one struct so the many recursive `infer_*`/
 /// `lower_*` helpers take a single `&mut` rather than a long, churn-prone argument
 /// list.
+#[cfg(any(test, feature = "test-utils"))]
+pub(in crate::check::checker) struct ProjectLocalDemandSnapshot {
+    pub(in crate::check::checker) aliases: typokat_types::alias_semantics::PublishedAliases,
+    pub(in crate::check::checker) type_terminals:
+        Vec<(TypeGroupId, super::type_groups::PublishedTypeGroupTerminal)>,
+    pub(in crate::check::checker) value_types: Vec<(ValueStorageId, TypeId)>,
+    pub(in crate::check::checker) namespace_seeds:
+        Vec<super::namespace_values::ProjectLocalNamespaceSeed>,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub(in crate::check::checker) trait ProjectLocalUserDemandGateway {
+    fn demand_type_group(
+        &mut self,
+        interner: &mut Interner,
+        group: TypeGroupId,
+    ) -> Result<ProjectLocalDemandSnapshot, &'static str>;
+
+    fn demand_value(
+        &mut self,
+        interner: &mut Interner,
+        storage: ValueStorageId,
+    ) -> Result<ProjectLocalDemandSnapshot, &'static str>;
+
+    fn commit_staged(&mut self) -> Result<ProjectLocalDemandSnapshot, &'static str>;
+}
+
 pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = UserRecordTicket> {
     pub(in crate::check::checker) interner: &'a mut Interner,
     pub(in crate::check::checker) binder: &'a Binder,
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(in crate::check::checker) project_local_demand_gateway:
+        Option<&'a mut dyn ProjectLocalUserDemandGateway>,
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(in crate::check::checker) project_local_demand_error: Option<&'static str>,
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(in crate::check::checker) project_local_library_identity_groups:
+        Option<[Option<TypeGroupId>; 8]>,
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(in crate::check::checker) project_local_user_modules: Option<FxHashSet<ScopeId>>,
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(in crate::check::checker) project_local_user_interface_own:
+        FxHashMap<TypeGroupId, ObjectType>,
     /// Completed eager generic applications in this pass's type universe.
     pub(in crate::check::checker) eager_application_cache:
         FxHashMap<(TypeId, Vec<(TypeParamId, TypeId)>), TypeId>,

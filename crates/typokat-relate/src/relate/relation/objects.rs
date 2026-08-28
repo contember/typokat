@@ -1072,7 +1072,8 @@ impl<'a> Relater<'a> {
                 | TypeTag::Enum
                 | TypeTag::EnumMember
                 | TypeTag::Infer
-                | TypeTag::MappedValue => {}
+                | TypeTag::MappedValue
+                | TypeTag::AliasTemplate => {}
             }
         }
 

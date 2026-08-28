@@ -424,7 +424,8 @@ fn push_node_children(
         | TypeTag::EnumMember
         | TypeTag::TypeParam
         | TypeTag::Infer
-        | TypeTag::MappedValue => {}
+        | TypeTag::MappedValue
+        | TypeTag::AliasTemplate => {}
     }
 }
 

@@ -315,7 +315,11 @@ impl Interner {
             let owner = TypeId(u32::try_from(raw_owner).map_err(|_| "TypeId exceeds u32")?);
 
             match store.tag(owner) {
-                TypeTag::Intrinsic | TypeTag::Literal | TypeTag::Infer | TypeTag::MappedValue => {}
+                TypeTag::Intrinsic
+                | TypeTag::Literal
+                | TypeTag::Infer
+                | TypeTag::MappedValue
+                | TypeTag::AliasTemplate => {}
                 TypeTag::Enum => {
                     store
                         .enum_type(owner)

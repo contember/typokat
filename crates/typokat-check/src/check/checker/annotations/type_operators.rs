@@ -63,13 +63,17 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             frame.accepts_infer_declarations = false;
             frame.active = true;
         }
-        let true_branch = self.lower_annotation(scope, &cond.true_type);
+        // Conditional branches are lazy recursive boundaries. Keep the check and
+        // extends surfaces at the declaration depth so direct cycles still report.
+        let true_branch =
+            self.with_indirection(|pass| pass.lower_annotation(scope, &cond.true_type));
         if let Some(frame) = self.cond_frames.last_mut() {
             frame.active = false;
         }
         // False branch — this node's own infer names are out of scope here (→ TK2304);
         // an outer node's binder still resolves (and poisons — cross-binder).
-        let false_branch = self.lower_annotation(scope, &cond.false_type);
+        let false_branch =
+            self.with_indirection(|pass| pass.lower_annotation(scope, &cond.false_type));
 
         // Unwind the context: the binder count and the poison verdict.
         let frame = self.cond_frames.pop().unwrap_or_default();

@@ -491,7 +491,8 @@ fn literal_could_equal_property(
         | TypeTag::MappedValue
         | TypeTag::Keyof
         | TypeTag::DeferredIndexedAccess
-        | TypeTag::Declared => true,
+        | TypeTag::Declared
+        | TypeTag::AliasTemplate => true,
     }
 }
 
@@ -763,7 +764,8 @@ fn member_matches_typeof(
         | TypeTag::MappedValue
         | TypeTag::Keyof
         | TypeTag::DeferredIndexedAccess
-        | TypeTag::Declared => false,
+        | TypeTag::Declared
+        | TypeTag::AliasTemplate => false,
         | TypeTag::Enum
         | TypeTag::EnumMember => false,
     }

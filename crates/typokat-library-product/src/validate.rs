@@ -735,6 +735,20 @@ impl LibraryDeclarationProduct {
         }
         for (row, recipe) in self.types.iter().enumerate() {
             valid_site(self, recipe.site, "types", row)?;
+            if let TypeRecipeNode::Tuple { elements } = &recipe.node {
+                for element in elements {
+                    valid_site(self, element.site, "types", row)?;
+                    if element.site.source != recipe.site.source
+                        || element.site.start < recipe.site.start
+                        || recipe.site.end < element.site.end
+                    {
+                        return Err(ProductValidationError::InvalidTypeRecipe {
+                            table: "types",
+                            row,
+                        });
+                    }
+                }
+            }
             for child in recipe_children(&recipe.node) {
                 if child.index() >= self.types.len() {
                     return Err(ProductValidationError::InvalidTypeRecipe {

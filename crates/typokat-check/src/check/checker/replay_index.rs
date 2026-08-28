@@ -10,13 +10,14 @@ use crate::check::query::PublishedClassLookup;
 use crate::class_semantics::{DemandOutcome, Exhaustion, PublishedClassSurface, PublishedClasses};
 use crate::source::LibraryFileOrdinal;
 use crate::span::Span;
-use crate::types::repr::ClassId;
+use crate::types::repr::{AliasId, ClassId};
 use sha2::{Digest, Sha256};
 use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
+use typokat_types::alias_semantics::{PublishedAliasTerminal, PublishedAliases};
 
 const COLLISION_REPLAY_MANIFEST_DOMAIN: &[u8] = b"typokat-collision-replay-index-v1";
 
@@ -2874,6 +2875,9 @@ pub struct ReplayClassLookup<'a> {
 pub struct ConstructionReplayClassLookup<'a> {
     staged: &'a PublishedClasses,
     inherited: Option<&'a PublishedClasses>,
+    staged_aliases: Option<&'a PublishedAliases>,
+    inherited_aliases: Option<&'a PublishedAliases>,
+    semantic_publication_identity: &'a Arc<()>,
     trace: Option<ReplayDependencyTrace>,
 }
 
@@ -2886,6 +2890,27 @@ impl<'a> ConstructionReplayClassLookup<'a> {
         Self {
             staged,
             inherited,
+            staged_aliases: None,
+            inherited_aliases: None,
+            semantic_publication_identity: staged.identity(),
+            trace,
+        }
+    }
+
+    pub fn new_with_aliases(
+        staged: &'a PublishedClasses,
+        inherited: Option<&'a PublishedClasses>,
+        staged_aliases: &'a PublishedAliases,
+        inherited_aliases: Option<&'a PublishedAliases>,
+        semantic_publication_identity: &'a Arc<()>,
+        trace: Option<ReplayDependencyTrace>,
+    ) -> Self {
+        Self {
+            staged,
+            inherited,
+            staged_aliases: Some(staged_aliases),
+            inherited_aliases,
+            semantic_publication_identity,
             trace,
         }
     }
@@ -2910,7 +2935,16 @@ impl PublishedClassLookup for ConstructionReplayClassLookup<'_> {
     }
 
     fn publication_identity(&self) -> &Arc<()> {
-        self.staged.identity()
+        self.semantic_publication_identity
+    }
+
+    fn published_alias(&self, alias: AliasId) -> Option<&PublishedAliasTerminal> {
+        self.staged_aliases
+            .and_then(|aliases| aliases.terminal(alias))
+            .or_else(|| {
+                self.inherited_aliases
+                    .and_then(|aliases| aliases.terminal(alias))
+            })
     }
 
     fn published_class_lookup_is_observational(&self) -> bool {
@@ -4228,6 +4262,19 @@ mod raw_access_audit {
         "crates/typokat-check/src/check/checker/lexical_events/completion_slot_spec.rs",
         "crates/typokat-check/src/check/checker/lexical_events/owner_lookup_spec.rs",
         "crates/typokat-check/src/check/checker/library_compiler/tests.rs",
+        "crates/typokat-check/src/check/checker/project_local/cache.rs",
+        "crates/typokat-check/src/check/checker/project_local/contract.rs",
+        "crates/typokat-check/src/check/checker/project_local/coordinator.rs",
+        "crates/typokat-check/src/check/checker/project_local/entry.rs",
+        "crates/typokat-check/src/check/checker/project_local/fault_gate.rs",
+        "crates/typokat-check/src/check/checker/project_local/global_owner.rs",
+        "crates/typokat-check/src/check/checker/project_local/lowerer.rs",
+        "crates/typokat-check/src/check/checker/project_local/mod.rs",
+        "crates/typokat-check/src/check/checker/project_local/observation.rs",
+        "crates/typokat-check/src/check/checker/project_local/project_local_pass_port.rs",
+        "crates/typokat-check/src/check/checker/project_local/session.rs",
+        "crates/typokat-check/src/check/checker/project_local/terminal.rs",
+        "crates/typokat-check/src/check/checker/project_local_semantics.rs",
         "crates/typokat-check/src/check/checker/surface_lowering_copy_spec.rs",
         "crates/typokat-check/src/check/query/deferred_indexed_lazy_spec.rs",
         "crates/typokat-check/src/check/query/demand_identity_spec.rs",

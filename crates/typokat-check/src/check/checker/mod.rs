@@ -38,6 +38,8 @@ use crate::span::Span;
 use crate::types::layered::{LayeredMap, LayeredSet};
 use crate::types::repr::{ClassId, ObjectType, PropertyType};
 use crate::types::store::TypeId;
+#[cfg(any(test, feature = "test-utils"))]
+use crate::types::substitute::substitute;
 use crate::types::Interner;
 #[cfg(any(test, feature = "test-utils"))]
 use oxc_allocator::Allocator;
@@ -87,7 +89,7 @@ mod namespace_values;
 mod narrowing;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod project_local;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 pub(in crate::check) mod project_local_semantics;
 pub mod replay_index;
 pub mod reporting_record;
@@ -96,6 +98,8 @@ mod statements;
 mod surface_lowering_copy_spec;
 mod type_groups;
 
+#[cfg(any(test, feature = "test-utils"))]
+use context::ConstraintCheckObligation;
 use context::{
     AssertionCompatibilityObligation, AssignObligation, CheckerEffects, CheckerRecordBatch,
     ClassFillState, ConstructionDrafts, DeclTypes, DeferredRelationObligation,
@@ -5277,6 +5281,543 @@ where
         .collect())
 }
 
+#[cfg(any(test, feature = "test-utils"))]
+pub(in crate::check::checker) struct ProjectLocalUserPassOutput {
+    pub results: Vec<CheckResult>,
+    pub records: Vec<(events::EventKey, CheckerRecord)>,
+    pub library_records: Vec<(usize, events_library::LibraryEventKey, CheckerRecord)>,
+    pub unavailable_namespaces: Vec<ProjectLocalUserNamespaceUnavailable>,
+    pub published_type_groups: Vec<type_groups::PublishedTypeGroupTerminal>,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub(in crate::check::checker) struct ProjectLocalUserNamespaceUnavailable {
+    pub name: String,
+    pub fragments: Vec<(CompilationOrigin, u32)>,
+    pub reason: ProjectLocalUserNamespaceUnavailableReason,
+    pub discarded_provisional_writes: Vec<String>,
+    pub published_provisional_writes: Vec<String>,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub(in crate::check::checker) enum ProjectLocalUserNamespaceUnavailableReason {
+    Unsupported,
+    Invalid,
+    Cyclic,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub(in crate::check::checker) struct ProjectLocalUserPassPlan<'a> {
+    pub bound: BoundProjectBinder,
+    pub published_types: type_groups::PublishedTypeEnvironment,
+    pub product_value_types: Vec<(ValueStorageId, TypeId)>,
+    pub product_namespace_seeds: Vec<namespace_values::ProjectLocalNamespaceSeed>,
+    pub product_type_overlays: Vec<(TypeGroupId, context::ProjectLocalTypeOverlayDraft)>,
+    pub user_namespace_demands: Vec<String>,
+    pub library_identity_groups: [Option<TypeGroupId>; 8],
+    pub next_type_param: u32,
+    pub lexical_array_alias: Option<TypeGroupId>,
+    pub demand_gateway: &'a mut dyn context::ProjectLocalUserDemandGateway,
+    pub library_validations: Vec<project_local::validation::ProjectLocalValidationCandidate>,
+    pub library_validation_groups: BTreeMap<usize, TypeGroupId>,
+    pub inject_provisional_unavailable_write: bool,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub(in crate::check::checker) fn check_bound_project_local_programs<'a, 'ast>(
+    interner: &'a mut Interner,
+    units: &[ProjectProgram<'ast>],
+    plan: ProjectLocalUserPassPlan<'a>,
+) -> Result<ProjectLocalUserPassOutput, &'static str> {
+    let ProjectLocalUserPassPlan {
+        bound,
+        published_types,
+        product_value_types,
+        product_namespace_seeds,
+        product_type_overlays,
+        user_namespace_demands,
+        library_identity_groups,
+        next_type_param,
+        lexical_array_alias,
+        demand_gateway,
+        library_validations,
+        library_validation_groups,
+        inject_provisional_unavailable_write,
+    } = plan;
+    if units.is_empty() {
+        if !product_type_overlays.is_empty() {
+            return Err("project-local type overlay has no live user program");
+        }
+        let published_type_groups = published_types
+            .product_parts()
+            .map_err(|_| "project-local published types are incomplete")?
+            .groups;
+        return Ok(ProjectLocalUserPassOutput {
+            results: Vec::new(),
+            records: Vec::new(),
+            library_records: Vec::new(),
+            unavailable_namespaces: Vec::new(),
+            published_type_groups,
+        });
+    }
+
+    let declaration_manifests = units
+        .iter()
+        .map(|unit| SourceDeclarationManifest::build(unit.program))
+        .collect::<Vec<_>>();
+    let mut event_store = EventStore::default();
+    let mut library_event_ledger = LibraryEventLedger::new_without_replay(true);
+    let mut validation_tickets = Vec::with_capacity(library_validations.len());
+    {
+        let mut reservations = library_event_ledger
+            .replay_reservation_domain()
+            .map_err(|_| "project-local library validation reservation failed")?;
+        for validation in &library_validations {
+            validation_tickets.push(
+                reservations
+                    .reserve_event(
+                        validation.site().file_ordinal,
+                        validation.site().owner_start,
+                    )
+                    .primary,
+            );
+        }
+    }
+    library_event_ledger.mark_binder_reporting_complete();
+    library_event_ledger
+        .seal_reporting_without_replay()
+        .map_err(|_| "project-local library validation reporting seal failed")?;
+    let validation_groups_by_key = validation_tickets
+        .iter()
+        .zip(&library_validations)
+        .map(|(ticket, validation)| {
+            library_event_ledger
+                .key(*ticket)
+                .map(|key| (key, validation.group()))
+                .map_err(|_| "project-local library validation ticket is unavailable")
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
+    let mut lexical_events: LexicalReservations<PrivateCombinedRecordTicket> =
+        LexicalReservations::default();
+    for (slot, (unit, manifest)) in units.iter().zip(&declaration_manifests).enumerate() {
+        debug_assert_eq!(unit.unit_slot.index(), slot);
+        lexical_events
+            .reserve_private_continuation_program_with_declaration_manifest(
+                unit.module_ordinal,
+                unit.unit_slot,
+                unit.program,
+                manifest,
+                unit.compilation_unit.binding,
+                &mut event_store,
+            )
+            .map_err(|_| "project-local lexical event reservation failed")?;
+    }
+
+    let demanded_namespace_names = user_namespace_demands.into_iter().collect::<BTreeSet<_>>();
+    let demanded_namespaces = bound
+        .binder
+        .all_standalone_namespace_value_attachments()
+        .into_iter()
+        .filter_map(|attachment| {
+            let namespace = bound.binder.namespaces.get(attachment.namespace)?;
+            if !demanded_namespace_names.contains(&namespace.name) {
+                return None;
+            }
+            let fragments = attachment
+                .fragments
+                .iter()
+                .filter_map(|fragment| {
+                    let CompilationOrigin::User(module) = bound
+                        .binder
+                        .namespaces
+                        .compilation_origin_for_source(fragment.source)?
+                    else {
+                        return None;
+                    };
+                    Some((CompilationOrigin::User(module), fragment.source_start))
+                })
+                .collect::<Vec<_>>();
+            Some((attachment.namespace, namespace.name.clone(), fragments))
+        })
+        .collect::<Vec<_>>();
+    let demanded_namespace_ids = demanded_namespaces
+        .iter()
+        .map(|(namespace, _, _)| *namespace)
+        .collect::<FxHashSet<_>>();
+    let final_global_inventory =
+        crate::binder::roots::collect_final_global_object_contributors(&bound.binder)
+            .map_err(|_| "project-local final global contributor inventory is unavailable")?;
+    let BoundProjectBinder {
+        binder,
+        module_scopes,
+        module_placeholders,
+        ..
+    } = bound;
+    let mut external_effects: BTreeMap<UserRecordTicket, CandidateEffects> = BTreeMap::new();
+    let mut declaration_fragment_batch =
+        decls::inventory::CanonicalFragmentAuthenticationBatch::default();
+    let declaration_inventories = module_scopes
+        .iter()
+        .copied()
+        .zip(units)
+        .zip(declaration_manifests)
+        .map(|((scope, _unit), manifest)| {
+            let source = binder
+                .source_for_module(scope)
+                .ok_or("bound project module has no source identity")?;
+            decls::inventory::BoundTypeDeclarationInventory::build_in_batch(
+                &binder,
+                scope,
+                source,
+                manifest,
+                None,
+                &mut declaration_fragment_batch,
+            )
+            .map_err(|_| "bound project module has no canonical declaration inventory")
+        })
+        .collect::<Result<Vec<_>, &'static str>>()?;
+    let (mut type_decls, mut type_resolved) = published_types.construction_prefix();
+    let user_type_start = type_decls.len();
+    type_resolved.resize(binder.type_groups.len(), None);
+    let mut next_type_param = next_type_param;
+    let mut next_class_id = 0;
+    let mut product_type_overlays = product_type_overlays
+        .into_iter()
+        .collect::<FxHashMap<_, _>>();
+    let declaration_spans = ModuleDeclarationSpans::index(&binder);
+    for ((scope, unit), inventory) in module_scopes
+        .iter()
+        .copied()
+        .zip(units)
+        .zip(&declaration_inventories)
+    {
+        let reservation_receipt = decls::reserve_type_decls_for_project_local_user_from_inventory(
+            decls::TypeDeclReservationState {
+                interner,
+                binder: &binder,
+                next_type_param: &mut next_type_param,
+                next_class_id: &mut next_class_id,
+                decls: &mut type_decls,
+                resolved: &mut type_resolved,
+            },
+            inventory,
+            &mut product_type_overlays,
+        );
+        attach_type_decl_owners(
+            &mut lexical_events,
+            SourceOrdinal::User(unit.module_ordinal),
+            &binder,
+            scope,
+            &declaration_spans,
+        );
+        attach_class_bindings_from_inventory(
+            &mut lexical_events,
+            SourceOrdinal::User(unit.module_ordinal),
+            &binder,
+            inventory,
+            &type_decls,
+            reservation_receipt,
+            None,
+        )?;
+    }
+    if !product_type_overlays.is_empty() {
+        return Err("project-local type overlay was not bound to a live user fragment");
+    }
+    lexical_events
+        .reserve_callable_type_params(&mut next_type_param)
+        .map_err(|_| "project-local callable type parameter reservation failed")?;
+    enqueue_local_ambient_export_alias_diagnostics(
+        &binder,
+        &lexical_events,
+        &mut external_effects,
+    )?;
+    enqueue_namespace_placement_diagnostics(&binder, &lexical_events, &mut external_effects)?;
+    enqueue_enum_merge_diagnostics(&binder, &lexical_events, &mut external_effects)?;
+    enqueue_ambient_context_diagnostics(&binder, &lexical_events, &mut external_effects)?;
+
+    let error = interner.well_known().error;
+    let mut decl_types = DeclTypes::new(binder.decl_count);
+    for (storage, ty) in product_value_types {
+        decl_types.set(storage, ty);
+    }
+    let project_local_global_object = interner.intern_object(ObjectType {
+        properties: final_global_inventory
+            .rows
+            .into_iter()
+            .filter_map(|row| {
+                let ty = row.value.and_then(|storage| decl_types.get(storage))?;
+                Some(PropertyType::public(row.name, ty))
+            })
+            .collect(),
+        ..ObjectType::default()
+    });
+    seed_module_placeholder_errors(&mut decl_types, &module_placeholders, error);
+    let library_semantic_identities =
+        library_identities::LibrarySemanticIdentities::select_project_local_exact(
+            library_identity_groups,
+            &published_types,
+            interner.store(),
+        );
+    let mut pending_tickets = lexical_events.tickets();
+    pending_tickets.extend(
+        validation_tickets
+            .iter()
+            .copied()
+            .map(PrivateCombinedRecordTicket::Library),
+    );
+    let mut pass = build_pass_with_tickets(
+        interner,
+        &binder,
+        type_decls,
+        type_resolved,
+        decl_types,
+        next_type_param,
+        PassReportingPlan {
+            reporting: PassReporting {
+                source: SourceUnit::User {
+                    module_ordinal: units[0].module_ordinal,
+                    unit_slot: units[0].unit_slot,
+                },
+                lexical_events,
+                suppress_effects: false,
+            },
+            pending_tickets,
+            ticket_key: private_combined_record_ticket_key,
+        },
+    );
+    pass.project_local_demand_gateway = Some(demand_gateway);
+    pass.project_local_library_identity_groups = Some(library_identity_groups);
+    pass.install_project_local_type_environment_base(published_types);
+    pass.global_object_type = Some(project_local_global_object);
+    pass.terminalize_unavailable_type_groups();
+    pass.lexical_array_alias = lexical_array_alias;
+    pass.install_library_semantic_identities(library_semantic_identities);
+    let user_modules = module_scopes.iter().copied().collect::<FxHashSet<_>>();
+    pass.project_local_user_modules = Some(user_modules.clone());
+    pass.install_project_local_namespace_seeds(product_namespace_seeds, &user_modules)?;
+    for effects in external_effects.into_values() {
+        let (owner, records) = effects.into_parts();
+        let mut combined = CheckerEffects::new(PrivateCombinedRecordTicket::User(owner));
+        for record in records {
+            combined.records.record(record);
+        }
+        pass.enqueue_effects(combined);
+    }
+
+    pass.fill_type_decls_range(binder.module, user_type_start, pass.type_decls.len());
+    let standalone_modules = module_scopes
+        .iter()
+        .copied()
+        .zip(units)
+        .map(|(scope, unit)| (scope, unit.program.body.as_slice()))
+        .collect::<Vec<_>>();
+    for (scope, unit) in module_scopes.iter().copied().zip(units) {
+        pass.current_module = scope;
+        pass.current_source = SourceUnit::User {
+            module_ordinal: unit.module_ordinal,
+            unit_slot: unit.unit_slot,
+        };
+        pass.reserve_local_type_annotation_surfaces(scope, &unit.program.body);
+        pass.pre_reserve_query_free_var_annotation_surfaces(scope, &unit.program.body);
+    }
+    pass.prepare_project_attached_namespace_values(&standalone_modules);
+    pass.prepare_project_standalone_namespace_values(&standalone_modules);
+    pass.retain_project_local_unsupported_namespace_terminals(&demanded_namespace_ids);
+    pass.publish_class_surfaces();
+    let mut module_surfaces = Vec::with_capacity(units.len());
+    for (scope, unit) in module_scopes.iter().copied().zip(units) {
+        pass.current_module = scope;
+        pass.current_source = SourceUnit::User {
+            module_ordinal: unit.module_ordinal,
+            unit_slot: unit.unit_slot,
+        };
+        module_surfaces.push(pass.reserve_function_surfaces(scope, &unit.program.body));
+    }
+    pass.fill_enum_decls_range(user_type_start, pass.type_decls.len());
+    pass.fill_pending_interfaces_range(binder.module, user_type_start, pass.type_decls.len());
+    pass.finalize_standalone_namespace_values();
+    pass.precompute_standalone_namespace_value_aliases(&standalone_modules);
+    let publication = pass.publish_project_local_user_type_groups();
+    if !pass.commit_project_local_staged_terminals() {
+        return Err("project-local staged terminals failed to commit");
+    }
+    let published_type_groups = pass
+        .type_environment
+        .published()
+        .product_parts()
+        .map_err(|_| "project-local final type publication is incomplete")?
+        .groups;
+    if publication.library_identity_selection_pending() {
+        pass.suppress_effects = true;
+    }
+    pass.validate_published_class_surfaces();
+    for (ticket, validation) in validation_tickets.iter().copied().zip(&library_validations) {
+        pass.with_ticket_effects(PrivateCombinedRecordTicket::Library(ticket), |pass| {
+            pass.schedule_project_local_library_validation(validation, &library_validation_groups);
+        });
+    }
+
+    pass.refresh_private_global_object(Vec::new());
+    for (module_index, (scope, unit)) in module_scopes.iter().copied().zip(units).enumerate() {
+        pass.current_module = scope;
+        pass.current_source = SourceUnit::User {
+            module_ordinal: unit.module_ordinal,
+            unit_slot: unit.unit_slot,
+        };
+        pass.reserve_var_annotation_surfaces(scope, &unit.program.body);
+        pass.reserve_continuation_global_augmentation_surfaces(
+            &unit.program.body,
+            &mut module_surfaces[module_index],
+        );
+    }
+    let global_contributor_names = units
+        .iter()
+        .map(|unit| {
+            source_global_binding_census(unit.program, unit.compilation_unit.binding)
+                .candidates
+                .into_iter()
+                .filter_map(|(name, candidate)| {
+                    (name != "globalThis" && candidate.global_object_contributor).then_some(name)
+                })
+                .collect::<FxHashSet<_>>()
+        })
+        .collect::<Vec<_>>();
+    pass.refresh_user_global_object(
+        module_scopes
+            .iter()
+            .copied()
+            .zip(units)
+            .map(|(scope, unit)| (scope, unit.program, unit.compilation_unit.binding)),
+    );
+    for (((scope, unit), mut surfaces), contributor_names) in module_scopes
+        .iter()
+        .copied()
+        .zip(units)
+        .zip(module_surfaces)
+        .zip(global_contributor_names)
+    {
+        pass.current_module = scope;
+        pass.current_source = SourceUnit::User {
+            module_ordinal: unit.module_ordinal,
+            unit_slot: unit.unit_slot,
+        };
+        pass.build_flow_graph(scope, &unit.program.body);
+        let mut no_return = None;
+        pass.check_statement_list_with_global_contributors(
+            scope,
+            &unit.program.body,
+            None,
+            &mut no_return,
+            &mut surfaces,
+            &contributor_names,
+        );
+        emit_test_incomplete(&mut pass);
+    }
+
+    let batches = finish_semantic_effects(&mut pass);
+    for batch in batches {
+        let (owner, records) = batch.into_parts();
+        match owner {
+            PrivateCombinedRecordTicket::Library(owner) => library_event_ledger
+                .complete(owner, records)
+                .map_err(|_| "project-local library validation completion failed")?,
+            PrivateCombinedRecordTicket::DisabledLibrary(_) => {}
+            PrivateCombinedRecordTicket::User(owner) => event_store
+                .complete(owner, records)
+                .map_err(|_| "project-local user record completion failed")?,
+        }
+    }
+    let library_records = library_event_ledger
+        .finish()
+        .map_err(|_| "project-local library validation replay failed")?
+        .into_iter()
+        .map(|(key, record)| {
+            validation_groups_by_key
+                .get(&key)
+                .copied()
+                .map(|group| (group, key, record))
+                .ok_or("project-local library validation record has no producer")
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let records = event_store
+        .finish()
+        .map_err(|_| "project-local user event replay failed")?;
+    let results = units
+        .iter()
+        .map(|unit| {
+            let mut diagnostics = Vec::new();
+            let mut incomplete = Vec::new();
+            for (key, record) in &records {
+                if key.module_ordinal != unit.module_ordinal {
+                    continue;
+                }
+                match record {
+                    CheckerRecord::Diagnostic(diagnostic) => diagnostics.push(diagnostic.clone()),
+                    CheckerRecord::Incomplete(surface) => incomplete.push(surface.clone()),
+                }
+            }
+            fail_closed_identity_selection(publication, &mut diagnostics, &mut incomplete);
+            CheckResult {
+                module_ordinal: unit.module_ordinal,
+                unit_slot: unit.unit_slot,
+                diagnostics,
+                incomplete,
+            }
+        })
+        .collect();
+    if inject_provisional_unavailable_write {
+        if let Some(namespace) = demanded_namespaces.iter().find_map(|(namespace, _, _)| {
+            matches!(
+                pass.namespace_values.standalone_terminal(*namespace),
+                Some(namespace_values::StandaloneNamespaceTerminal::Unavailable { .. })
+            )
+            .then_some(*namespace)
+        }) {
+            pass.namespace_values
+                .publish_project_local_provisional_write_for_fault(namespace);
+        }
+    }
+    let unavailable_namespaces = demanded_namespaces
+        .into_iter()
+        .filter_map(|(namespace, name, fragments)| {
+            let namespace_values::StandaloneNamespaceTerminal::Unavailable { cause } =
+                pass.namespace_values.standalone_terminal(namespace)?
+            else {
+                return None;
+            };
+            let reason = match cause {
+                namespace_values::NamespaceValueUnavailableCause::DuplicateExportedValue => {
+                    ProjectLocalUserNamespaceUnavailableReason::Invalid
+                }
+                namespace_values::NamespaceValueUnavailableCause::ClassSurfaceUnavailable
+                | namespace_values::NamespaceValueUnavailableCause::ClassValueSurfaceUnavailable
+                | namespace_values::NamespaceValueUnavailableCause::NamespaceContainmentCycle => {
+                    ProjectLocalUserNamespaceUnavailableReason::Cyclic
+                }
+                _ => ProjectLocalUserNamespaceUnavailableReason::Unsupported,
+            };
+            Some(ProjectLocalUserNamespaceUnavailable {
+                name,
+                fragments,
+                reason,
+                discarded_provisional_writes: pass
+                    .namespace_values
+                    .project_local_discarded_writes(namespace),
+                published_provisional_writes: pass
+                    .namespace_values
+                    .project_local_published_provisional_writes(namespace),
+            })
+        })
+        .collect();
+    Ok(ProjectLocalUserPassOutput {
+        results,
+        records,
+        library_records,
+        unavailable_namespaces,
+        published_type_groups,
+    })
+}
+
 fn imported_symbols<Ticket: UserReportingOwner>(
     unit: &ProjectProgram<'_>,
     exports: &[ExportSurface],
@@ -6626,7 +7167,7 @@ where
     reporting.finish(batches, inspect)
 }
 
-fn evaluate_assign_obligation<Ticket: Copy + PartialEq>(
+fn evaluate_assign_obligation<Ticket: Copy + PartialEq + UserReportingOwner>(
     pass: &mut Pass<'_, '_, Ticket>,
     effects: &mut CheckerEffects<Ticket>,
     obligation: &AssignObligation,
@@ -6665,17 +7206,28 @@ fn evaluate_assign_obligation<Ticket: Copy + PartialEq>(
             );
             false
         }
+        RelationOutcome::Exhausted(Exhaustion::AliasProjectionBudget) => {
+            if effects.records.owner().user_ticket().is_ok() {
+                pass.append_effect_diagnostic(
+                    effects,
+                    Diagnostic::excessively_deep(obligation.src_span),
+                );
+            }
+            false
+        }
         RelationOutcome::Exhausted(Exhaustion::ClassNotPublished { .. })
+        | RelationOutcome::Exhausted(Exhaustion::AliasNotPublished { .. })
+        | RelationOutcome::Exhausted(Exhaustion::AliasUnavailable { .. })
         | RelationOutcome::Exhausted(Exhaustion::ClassHeritagePoison { .. })
         | RelationOutcome::Exhausted(Exhaustion::ClassInitializerPoison { .. })
         | RelationOutcome::Exhausted(Exhaustion::ClassSurfacePoison { .. })
-        | RelationOutcome::Exhausted(Exhaustion::ClassApplicationArguments(_))
-        | RelationOutcome::Exhausted(Exhaustion::EvaluationBudget)
+        | RelationOutcome::Exhausted(Exhaustion::ClassApplicationArguments(_)) => false,
+        RelationOutcome::Exhausted(Exhaustion::EvaluationBudget)
         | RelationOutcome::Exhausted(Exhaustion::EvaluationCycle { .. }) => false,
     }
 }
 
-fn evaluate_satisfies_check<Ticket: Copy + PartialEq>(
+fn evaluate_satisfies_check<Ticket: Copy + PartialEq + UserReportingOwner>(
     pass: &mut Pass<'_, '_, Ticket>,
     effects: &mut CheckerEffects<Ticket>,
     check: &context::SatisfiesCheckNode,
@@ -6696,7 +7248,7 @@ fn evaluate_satisfies_check<Ticket: Copy + PartialEq>(
     evaluate_assign_obligation(pass, effects, &check.residual)
 }
 
-fn finish_semantic_effects<Ticket: Copy + PartialEq>(
+fn finish_semantic_effects<Ticket: Copy + PartialEq + UserReportingOwner>(
     pass: &mut Pass<'_, '_, Ticket>,
 ) -> Vec<CheckerRecordBatch<Ticket>> {
     pass.finalize_object_binding_pending_groups();
@@ -7508,11 +8060,19 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
             &mut SemanticQueryCoordinator<'_, replay_index::ConstructionReplayClassLookup<'_>>,
         ) -> R,
     ) -> R {
-        let (staged_classes, inherited_classes) =
-            self.type_environment.semantic_query_class_layers();
-        let lookup = replay_index::ConstructionReplayClassLookup::new(
+        let (
             staged_classes,
             inherited_classes,
+            staged_aliases,
+            inherited_aliases,
+            semantic_publication_identity,
+        ) = self.type_environment.semantic_query_class_layers();
+        let lookup = replay_index::ConstructionReplayClassLookup::new_with_aliases(
+            staged_classes,
+            inherited_classes,
+            staged_aliases,
+            inherited_aliases,
+            semantic_publication_identity,
             self.replay_trace.clone(),
         );
         let mut coordinator = SemanticQueryCoordinator::new(
@@ -8037,6 +8597,243 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
             .push_interface_relation(check, owner);
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(in crate::check::checker) fn schedule_constraint_check(
+        &mut self,
+        check: ConstraintCheckObligation,
+    ) {
+        let owner = self.current_replay_owner();
+        self.effect_stack
+            .last_mut()
+            .expect("constraint check requires a lexical owner")
+            .push_constraint_check(check, owner);
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    fn schedule_project_local_library_validation(
+        &mut self,
+        validation: &project_local::validation::ProjectLocalValidationCandidate,
+        groups: &BTreeMap<usize, TypeGroupId>,
+    ) {
+        use project_local::validation::{
+            ProjectLocalQualifiedPathDiagnosticKind, ProjectLocalValidationCandidate,
+        };
+        use type_groups::{PublishedTypeGroupSurface, PublishedTypeGroupTerminal};
+
+        match validation {
+            ProjectLocalValidationCandidate::Constraint(validation) => {
+                let Ok(published) = self.type_environment.published().product_parts() else {
+                    return;
+                };
+                let Some(target_group) = groups.get(&validation.target_group) else {
+                    return;
+                };
+                let Some(PublishedTypeGroupTerminal::Ready(target)) =
+                    published.groups.get(target_group.index())
+                else {
+                    return;
+                };
+                let Some(parameter) = target.parameters.get(validation.parameter).copied() else {
+                    return;
+                };
+                let Some(constraint) = self.interner.store().type_param_constraint(parameter)
+                else {
+                    return;
+                };
+                let substitutions = target
+                    .parameters
+                    .iter()
+                    .copied()
+                    .zip(validation.application.iter().copied())
+                    .collect();
+                self.schedule_constraint_check(ConstraintCheckObligation {
+                    checks: vec![(
+                        Some(constraint),
+                        validation.argument,
+                        Span::new(validation.site.site.start, validation.site.site.end),
+                    )],
+                    substitutions,
+                });
+            }
+            ProjectLocalValidationCandidate::Heritage(validation) => {
+                let Ok(published) = self.type_environment.published().product_parts() else {
+                    return;
+                };
+                let Some(derived_group) = groups.get(&validation.group) else {
+                    return;
+                };
+                let Some(PublishedTypeGroupTerminal::Ready(derived)) =
+                    published.groups.get(derived_group.index())
+                else {
+                    return;
+                };
+                let PublishedTypeGroupSurface::Template(derived) = &derived.surface else {
+                    return;
+                };
+                let derived = *derived;
+                let derived = match self.evaluate_type(derived) {
+                    DemandOutcome::Ready(derived) => derived,
+                    DemandOutcome::Exhausted(_) => return,
+                };
+                let Some(complete) = self.interner.store().object_type(derived).cloned() else {
+                    return;
+                };
+                let mut own = validation.own.clone();
+                if let Some(user) = self.project_local_user_interface_own.get(derived_group) {
+                    for property in &user.properties {
+                        match own
+                            .properties
+                            .iter_mut()
+                            .find(|candidate| candidate.key == property.key)
+                        {
+                            Some(existing) => *existing = property.clone(),
+                            None => own.properties.push(property.clone()),
+                        }
+                    }
+                    own.string_index = user.string_index.or(own.string_index);
+                    own.number_index = user.number_index.or(own.number_index);
+                    own.call_signatures = user
+                        .call_signatures
+                        .iter()
+                        .copied()
+                        .chain(own.call_signatures)
+                        .collect();
+                    own.construct_signatures = user
+                        .construct_signatures
+                        .iter()
+                        .copied()
+                        .chain(own.construct_signatures)
+                        .collect();
+                }
+                let mut bases = Vec::with_capacity(validation.bases.len());
+                for base in &validation.bases {
+                    let Some(base_group) = groups.get(&base.group) else {
+                        return;
+                    };
+                    let Some(PublishedTypeGroupTerminal::Ready(published_base)) =
+                        published.groups.get(base_group.index())
+                    else {
+                        return;
+                    };
+                    let PublishedTypeGroupSurface::Template(ty) = &published_base.surface else {
+                        return;
+                    };
+                    let mut ty = *ty;
+                    if !base.application.is_empty() {
+                        let substitutions = base
+                            .application
+                            .iter()
+                            .copied()
+                            .collect::<FxHashMap<_, _>>();
+                        ty = substitute(self.interner, ty, &substitutions);
+                    }
+                    let ty = match self.evaluate_type(ty) {
+                        DemandOutcome::Ready(ty) => ty,
+                        DemandOutcome::Exhausted(_) => return,
+                    };
+                    let Some(object) = self.interner.store().object_type(ty).cloned() else {
+                        return;
+                    };
+                    bases.push((base.name.clone(), object));
+                }
+                let span = Span::new(validation.site.site.start, validation.site.site.end);
+                let mut pair = 0_u32;
+                for index in 0..bases.len() {
+                    for right in (index + 1)..bases.len() {
+                        for left_property in &bases[index].1.properties {
+                            let Some(right_property) =
+                                bases[right].1.property_by_key(&left_property.key)
+                            else {
+                                continue;
+                            };
+                            if own.property_by_key(&left_property.key).is_some() {
+                                continue;
+                            }
+                            let source = self.interner.intern_object(ObjectType {
+                                properties: vec![left_property.clone()],
+                                ..ObjectType::default()
+                            });
+                            let target = self.interner.intern_object(ObjectType {
+                                properties: vec![right_property.clone()],
+                                ..ObjectType::default()
+                            });
+                            self.schedule_interface_relation(InterfaceRelationObligation {
+                                source,
+                                target,
+                                span,
+                                kind: InterfaceRelationKind::Heritage {
+                                    left: bases[index].0.clone(),
+                                    right: bases[right].0.clone(),
+                                },
+                                report: InterfaceRelationReport::FirstFailedHeritagePair(pair),
+                            });
+                        }
+                        pair = pair
+                            .checked_add(1)
+                            .expect("project-local heritage pair ordinal fits u32");
+                    }
+                }
+                for (base_name, base) in &bases {
+                    for own_property in &own.properties {
+                        let Some(base_property) = base.property_by_key(&own_property.key) else {
+                            continue;
+                        };
+                        let source = self.interner.intern_object(ObjectType {
+                            properties: vec![own_property.clone()],
+                            ..ObjectType::default()
+                        });
+                        let target = self.interner.intern_object(ObjectType {
+                            properties: vec![base_property.clone()],
+                            ..ObjectType::default()
+                        });
+                        self.schedule_interface_relation(InterfaceRelationObligation {
+                            source,
+                            target,
+                            span,
+                            kind: InterfaceRelationKind::HeritageMember {
+                                derived: validation.derived_name.clone(),
+                                base: base_name.clone(),
+                            },
+                            report: InterfaceRelationReport::Always,
+                        });
+                    }
+                    for (source, target) in [
+                        (complete.string_index, base.string_index),
+                        (complete.number_index, base.number_index),
+                    ] {
+                        let (Some(source), Some(target)) = (source, target) else {
+                            continue;
+                        };
+                        if source == target {
+                            continue;
+                        }
+                        self.schedule_interface_relation(InterfaceRelationObligation {
+                            source,
+                            target,
+                            span,
+                            kind: InterfaceRelationKind::HeritageIndex {
+                                derived: validation.derived_name.clone(),
+                                base: base_name.clone(),
+                            },
+                            report: InterfaceRelationReport::Always,
+                        });
+                    }
+                }
+            }
+            ProjectLocalValidationCandidate::QualifiedPath(validation) => {
+                let span = Span::new(validation.site.site.start, validation.site.site.end);
+                self.emit_diagnostic(match validation.kind {
+                    ProjectLocalQualifiedPathDiagnosticKind::MissingName => {
+                        Diagnostic::cannot_find_name(span, &validation.name)
+                    }
+                    ProjectLocalQualifiedPathDiagnosticKind::MissingNamespace => {
+                        Diagnostic::cannot_find_namespace(span, &validation.name)
+                    }
+                });
+            }
+        }
+    }
+
     /// Record an in-scope AST position the walk skipped (WU2, sprint 2026-07-10). `id`
     /// is the stable `role/surface/slot-or-variant` identity; `span` is the skipped
     /// position. This is the single entry point the checker calls when WU3–5 wire real
@@ -8151,6 +8948,16 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
     let pass = Pass {
         interner,
         binder,
+        #[cfg(any(test, feature = "test-utils"))]
+        project_local_demand_gateway: None,
+        #[cfg(any(test, feature = "test-utils"))]
+        project_local_demand_error: None,
+        #[cfg(any(test, feature = "test-utils"))]
+        project_local_library_identity_groups: None,
+        #[cfg(any(test, feature = "test-utils"))]
+        project_local_user_modules: None,
+        #[cfg(any(test, feature = "test-utils"))]
+        project_local_user_interface_own: FxHashMap::default(),
         eager_application_cache: FxHashMap::default(),
         #[cfg(test)]
         eager_application_cache_measure: context::capture_eager_application_cache_measure(),
@@ -8196,6 +9003,7 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
         suppress_effects: reporting.suppress_effects,
         type_environment: type_groups::TypeEnvironmentState::constructing(ConstructionDrafts {
             staged_published_classes: None,
+            staged_published_aliases: None,
             type_group_construction: Some(type_groups::TypeGroupConstruction::new(
                 type_decls.len(),
             )),

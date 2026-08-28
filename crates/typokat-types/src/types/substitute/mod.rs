@@ -283,7 +283,8 @@ fn for_each_apply_child(
         | TypeTag::Enum
         | TypeTag::EnumMember
         | TypeTag::Infer
-        | TypeTag::MappedValue => {}
+        | TypeTag::MappedValue
+        | TypeTag::AliasTemplate => {}
         TypeTag::Declared => {
             if let Some(declared) = store.declared_type(ty) {
                 for &(_, value) in &declared.mapper {
@@ -813,7 +814,11 @@ impl<'a> Substitution<'a> {
                     }
                 }
                 // Intrinsics and literals contain no type parameter — identity.
-                TypeTag::Intrinsic | TypeTag::Literal | TypeTag::Enum | TypeTag::EnumMember => ty,
+                TypeTag::Intrinsic
+                | TypeTag::Literal
+                | TypeTag::Enum
+                | TypeTag::EnumMember
+                | TypeTag::AliasTemplate => ty,
                 TypeTag::Object => self.apply_object(interner, ty),
                 TypeTag::Function => self.apply_function(interner, ty),
                 TypeTag::Union => self.apply_union(interner, ty),

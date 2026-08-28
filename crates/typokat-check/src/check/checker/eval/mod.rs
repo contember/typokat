@@ -59,7 +59,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         match outcome {
             DemandOutcome::Ready(result) => Some(result),
             DemandOutcome::Exhausted(
-                Exhaustion::EvaluationBudget | Exhaustion::EvaluationCycle { .. },
+                Exhaustion::AliasProjectionBudget
+                | Exhaustion::EvaluationBudget
+                | Exhaustion::EvaluationCycle { .. },
             ) => {
                 self.emit_diagnostic(Diagnostic::excessively_deep(span));
                 None
@@ -82,6 +84,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 None
             }
             DemandOutcome::Exhausted(Exhaustion::ClassNotPublished { .. })
+            | DemandOutcome::Exhausted(Exhaustion::AliasNotPublished { .. })
+            | DemandOutcome::Exhausted(Exhaustion::AliasUnavailable { .. })
             | DemandOutcome::Exhausted(Exhaustion::ClassHeritagePoison { .. })
             | DemandOutcome::Exhausted(Exhaustion::ClassInitializerPoison { .. })
             | DemandOutcome::Exhausted(Exhaustion::ClassSurfacePoison { .. })
@@ -622,7 +626,8 @@ impl<'a> ConditionalEvaluator<'a> {
                 | TypeTag::EnumMember
                 | TypeTag::TypeParam
                 | TypeTag::Infer
-                | TypeTag::MappedValue => {}
+                | TypeTag::MappedValue
+                | TypeTag::AliasTemplate => {}
             }
         }
         false

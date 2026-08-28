@@ -4,7 +4,7 @@
 //! cross-run content hash slot and deliberately returns a zero digest today.
 
 use crate::types::repr::{
-    ClassId, DeclaredRecipeId, EnumMemberType, EnumType, EnumValue, GenericTypeParam,
+    AliasId, ClassId, DeclaredRecipeId, EnumMemberType, EnumType, EnumValue, GenericTypeParam,
     IntrinsicKind, LiteralValue, ModifierOp, ParameterType, PropertyType, TupleType, TypeParamId,
     TypeTag,
 };
@@ -89,6 +89,8 @@ pub enum StructuralKey<'a> {
         class: ClassId,
         args: &'a [TypeId],
     },
+    /// One immutable recursive-alias declaration identity.
+    AliasTemplate(AliasId),
     /// An **`infer` binder** (M25), keyed over its de Bruijn index alone.
     Infer(u32),
     /// A **mapped type** (M26), keyed over its whole shape (homomorphic flag, key
@@ -329,6 +331,10 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
             for arg in *args {
                 arg.0.hash(&mut h);
             }
+        }
+        StructuralKey::AliasTemplate(alias) => {
+            TypeTag::AliasTemplate.hash_discriminant(&mut h);
+            alias.0.hash(&mut h);
         }
         StructuralKey::Infer(index) => {
             TypeTag::Infer.hash_discriminant(&mut h);

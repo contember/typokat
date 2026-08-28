@@ -170,29 +170,37 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     ValueResolution::Resolved {
                         symbol: _,
                         kind: ResolvedValueKind::StandaloneNamespace { namespace, storage },
-                    } => match self.standalone_namespace_terminal_replay(namespace) {
-                        Some(super::namespace_values::StandaloneNamespaceTerminal::Ready {
-                            storage: terminal_storage,
-                            ty,
-                        }) if terminal_storage == storage => Some((ty, span)),
-                        Some(
-                            super::namespace_values::StandaloneNamespaceTerminal::Unavailable {
-                                ..
-                            },
-                        ) => Some((well_known.error, span)),
-                        Some(
-                            super::namespace_values::StandaloneNamespaceTerminal::Planned
-                            | super::namespace_values::StandaloneNamespaceTerminal::Ready { .. },
-                        )
-                        | None => {
-                            self.record_incomplete(
-                                "expr-infer/identifier/standalone-namespace-unavailable",
-                                span,
-                                "standalone namespace value terminal is unavailable",
-                            );
-                            Some((well_known.error, span))
+                    } => {
+                        #[cfg(any(test, feature = "test-utils"))]
+                        if !self.demand_project_local_value(storage) {
+                            return Some((well_known.error, span));
                         }
-                    },
+                        match self.standalone_namespace_terminal_replay(namespace) {
+                            Some(super::namespace_values::StandaloneNamespaceTerminal::Ready {
+                                storage: terminal_storage,
+                                ty,
+                            }) if terminal_storage == storage => Some((ty, span)),
+                            Some(
+                                super::namespace_values::StandaloneNamespaceTerminal::Unavailable {
+                                    ..
+                                },
+                            ) => Some((well_known.error, span)),
+                            Some(
+                                super::namespace_values::StandaloneNamespaceTerminal::Planned
+                                | super::namespace_values::StandaloneNamespaceTerminal::Ready {
+                                    ..
+                                },
+                            )
+                            | None => {
+                                self.record_incomplete(
+                                    "expr-infer/identifier/standalone-namespace-unavailable",
+                                    span,
+                                    "standalone namespace value terminal is unavailable",
+                                );
+                                Some((well_known.error, span))
+                            }
+                        }
+                    }
                     ValueResolution::Resolved {
                         symbol: symbol_id,
                         kind: ResolvedValueKind::Ordinary,
@@ -941,6 +949,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         symbol_id: SymbolId,
         ref_start: u32,
     ) -> TypeId {
+        #[cfg(any(test, feature = "test-utils"))]
+        if let Some(storage) = self.effective_value_storage_for_symbol_replay(symbol_id) {
+            let _ = self.demand_project_local_value(storage);
+        }
         let flow = self
             .reference_flow
             .get(&(self.current_module, ref_start))
@@ -1999,7 +2011,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     ) -> Option<(TypeId, Span)> {
         let wk = self.interner.well_known();
         let span = Span::from_oxc(member.span);
-
         if let Some(endpoint) = self.enum_computed_member_endpoint(scope, member) {
             return Some(match endpoint {
                 EnumMemberEndpoint::Found { member, .. } => (member, span),

@@ -145,6 +145,10 @@ impl<'a> ConditionalEvaluator<'a> {
             values.push(ty);
             return;
         };
+        if self.interner.store().tag(inst.base) == TypeTag::AliasTemplate {
+            values.push(ty);
+            return;
+        }
         if self.in_flight.contains(&ty) {
             self.note_cycle();
             return;
@@ -687,7 +691,8 @@ impl<'a> ConditionalEvaluator<'a> {
             | TypeTag::Conditional
             | TypeTag::Mapped
             | TypeTag::MappedValue
-            | TypeTag::Declared => identity(),
+            | TypeTag::Declared
+            | TypeTag::AliasTemplate => identity(),
             TypeTag::Object => {
                 let Some(object) = self.interner.store().object_type(ty).cloned() else {
                     return identity();

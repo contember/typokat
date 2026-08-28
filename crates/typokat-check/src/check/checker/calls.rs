@@ -3213,7 +3213,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             | TypeTag::Template
             | TypeTag::Keyof
             | TypeTag::DeferredIndexedAccess
-            | TypeTag::Declared => false,
+            | TypeTag::Declared
+            | TypeTag::AliasTemplate => false,
         }
     }
 
@@ -3925,6 +3926,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             | DemandOutcome::Exhausted(Exhaustion::ClassInitializerPoison { .. })
             | DemandOutcome::Exhausted(Exhaustion::ClassSurfacePoison { .. })
             | DemandOutcome::Exhausted(Exhaustion::ClassProjectionBudget)
+            | DemandOutcome::Exhausted(Exhaustion::AliasNotPublished { .. })
+            | DemandOutcome::Exhausted(Exhaustion::AliasUnavailable { .. })
+            | DemandOutcome::Exhausted(Exhaustion::AliasProjectionBudget)
             | DemandOutcome::Exhausted(Exhaustion::EvaluationBudget)
             | DemandOutcome::Exhausted(Exhaustion::EvaluationCycle { .. }) => return None,
         };

@@ -2520,6 +2520,7 @@ fn lower_type(
                     &value.element_type,
                     Some(value.label.name.as_str()),
                     value.optional,
+                    context.oxc_site(value.span),
                 )?;
                 product::TypeRecipeNode::Tuple {
                     elements: vec![element].into_boxed_slice(),
@@ -3902,7 +3903,15 @@ fn lower_tuple(
 ) -> Result<Box<[product::TupleElementRecipe]>, LibraryProductProjectionError> {
     elements
         .iter()
-        .map(|element| lower_tuple_element(context, element, None, false))
+        .map(|element| {
+            lower_tuple_element(
+                context,
+                element,
+                None,
+                false,
+                context.oxc_site(element.span()),
+            )
+        })
         .collect::<Result<Vec<_>, _>>()
         .map(Vec::into_boxed_slice)
 }
@@ -3912,6 +3921,7 @@ fn lower_tuple_element(
     element: &TSTupleElement<'_>,
     label: Option<&str>,
     inherited_optional: bool,
+    site: product::SourceSite,
 ) -> Result<product::TupleElementRecipe, LibraryProductProjectionError> {
     let (value, optional, rest) = match element {
         TSTupleElement::TSOptionalType(value) => {
@@ -3926,6 +3936,7 @@ fn lower_tuple_element(
                 &value.element_type,
                 Some(value.label.name.as_str()),
                 value.optional,
+                site,
             )
         }
         _ => (
@@ -3935,6 +3946,7 @@ fn lower_tuple_element(
         ),
     };
     Ok(product::TupleElementRecipe {
+        site,
         name: label
             .map(|name| context.assembly.intern(name))
             .transpose()?,
@@ -4449,8 +4461,7 @@ mod tests {
         assert_eq!(ordinary_source.len(), abstract_source.len());
 
         let ordinary = project_test_source("constructor-modifier.d.ts", ordinary_source);
-        let abstract_product =
-            project_test_source("constructor-modifier.d.ts", abstract_source);
+        let abstract_product = project_test_source("constructor-modifier.d.ts", abstract_source);
 
         let constructor_modifier = |product: &product::LibraryDeclarationProduct| {
             product

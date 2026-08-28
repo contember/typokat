@@ -1,7 +1,7 @@
 //! Shared immutable domain for ADR-0006 class publication and semantic outcomes.
 
 use crate::types::layered::LayeredMap;
-use crate::types::repr::{ClassId, TypeParamId};
+use crate::types::repr::{AliasId, ClassId, TypeParamId};
 use crate::types::store::TypeId;
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
@@ -36,6 +36,13 @@ pub enum Exhaustion {
     },
     ClassApplicationArguments(ClassApplicationArguments),
     ClassProjectionBudget,
+    AliasNotPublished {
+        alias: AliasId,
+    },
+    AliasUnavailable {
+        alias: AliasId,
+    },
+    AliasProjectionBudget,
     EvaluationBudget,
     EvaluationCycle {
         ty: TypeId,

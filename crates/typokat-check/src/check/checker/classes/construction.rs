@@ -882,7 +882,8 @@ fn walk_identity(
             | TypeTag::EnumMember
             | TypeTag::TypeParam
             | TypeTag::Infer
-            | TypeTag::MappedValue => {}
+            | TypeTag::MappedValue
+            | TypeTag::AliasTemplate => {}
             TypeTag::Object => {
                 if let Some(object) = store.object_type(ty) {
                     for property in &object.properties {

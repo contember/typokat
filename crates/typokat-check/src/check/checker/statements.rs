@@ -642,6 +642,33 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 }
             }
             self.check_stmt_with_return_policy(scope, &statements[index], return_policy, inferred);
+            if let Some(contributors) = global_contributors {
+                let declaration = match &statements[index] {
+                    Statement::VariableDeclaration(declaration) => Some(declaration.as_ref()),
+                    Statement::ExportNamedDeclaration(export) => export
+                        .declaration
+                        .as_ref()
+                        .and_then(|declaration| match declaration {
+                            Declaration::VariableDeclaration(declaration) => {
+                                Some(declaration.as_ref())
+                            }
+                            _ => None,
+                        }),
+                    _ => None,
+                };
+                if let Some(declaration) = declaration {
+                    let names = declaration
+                        .declarations
+                        .iter()
+                        .flat_map(|declarator| declarator.id.get_binding_identifiers())
+                        .map(|identifier| identifier.name.to_string())
+                        .filter(|name| contributors.contains(name))
+                        .collect::<Vec<_>>();
+                    for name in names {
+                        self.refresh_source_global_object_contributor(scope, &name);
+                    }
+                }
+            }
             index += 1;
         }
     }

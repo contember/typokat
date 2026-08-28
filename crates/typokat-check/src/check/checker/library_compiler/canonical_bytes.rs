@@ -350,6 +350,16 @@ pub(super) fn encode_store_row(
             bytes.u32(instance.class.0);
             bytes.type_ids(&instance.args)?;
         }
+        TypeTag::AliasTemplate => bytes.u32(
+            store
+                .alias_template_id(id)
+                .ok_or_else(|| {
+                    InjectedProfileError::CanonicalProjection(
+                        "missing alias-template identity".to_owned(),
+                    )
+                })?
+                .0,
+        ),
         TypeTag::DeferredIndexedAccess => {
             let access = store.deferred_indexed_access_type(id).ok_or_else(|| {
                 InjectedProfileError::CanonicalProjection(
