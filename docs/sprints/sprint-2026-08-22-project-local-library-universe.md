@@ -690,12 +690,30 @@ numbers are invalid without `--no-smt`.
   high-level `CheckerSession` in `typokat-check` that consumes an `Arc<LibraryDeclarationProduct>`,
   owns product binding and one project-local semantic session, and returns real `CheckResult`
   values. The driver remains the non-published owner of parsing, workers, and report assembly.
-  Frozen/sparse and complete-source implementations remain test-only comparison controls until WU6;
-  WU7 performs the production dispatch switch and deletion. Public check signatures remain stable
-  through that switch. GitHub code search found no indexed consumer of `LibraryBaseProvider`,
+  Frozen/sparse and complete-source implementations remain the production comparison controls;
+  the project-local route stays test-only through WU6. WU7 performs the production dispatch switch
+  and deletion. Public check signatures remain stable through that switch. GitHub code search found
+  no indexed consumer of `LibraryBaseProvider`,
   `FrozenLibraryBase`, or `typokat_library` outside this repository, so the low-level public and
   documentation-hidden lifecycle API will be removed as an intentional pre-1.0 break in WU7, not
   wrapped permanently. Initialization precedence remains per public operation: repeated
   `check_source` / `check_files` / `check_project` acquire the immutable product before parsing,
   while standalone and Bundler checks reject user parse/inventory errors before product
   acquisition. Clean projects enter the same session in every mode; only its creation point differs.
+- **2026-08-28 — WU5 session shadow complete.** `eb1c0f99` introduced the one-shot
+  `CheckerSession`; the driver acceptance commits from `340e65cd` through `5bf87bf7`, implementation
+  `f47e8976`, corrected product-structure contract `dab80506`, and operation-shape pair
+  `0c87aaae` / `07ba6091` complete the test-only migration shadow. Source, independent files,
+  repeated projects, standalone/CLI, Bundler, and official-batch-equivalent requests now exercise
+  the same product binder and project-local publisher without switching a public route. Binder
+  import/export diagnostics are reserved before binding, retained on the bound product, and
+  consumed once by the ordinary user `Pass`; strict source-re-export admission remains a separate
+  invariant. Concurrent sessions share the exact product `Arc`, have distinct project, publisher,
+  and cache identities, and retain no mutable state after return. Verification passed the 10-test
+  driver shadow block (`10/10`, `21.28 s`, one test thread, 1 GiB runtime limit), the complete
+  product-project-structure block (`10/10`), default production clippy with warnings denied, test
+  clippy with no new driver warning, formatting, and two independent final reviews. Public frozen,
+  sparse/fallback, and complete-source dispatch remains the production control by the explicit
+  WU5→WU6→WU7 sequencing; the candidate stays test-only until WU6 proves it and WU7 cuts over.
+  Therefore backlog `116`, the low-level lifecycle deletion, and ADR-0029's temporary census
+  feature boundary remain open for WU7 rather than being closed prematurely.
