@@ -4,8 +4,10 @@
 //! continuation that WU6 will compare with the complete-source control.
 
 use super::{
-    check_bundler_project_once, check_project, check_project_local_shadow_for_test,
-    check_project_once, DriverError, FileReport, ProjectLocalShadowRouteForTest,
+    check_bundler_project_once, check_files, check_project,
+    check_project_local_operation_shadow_for_test, check_project_local_shadow_for_test,
+    check_project_once, check_source, CheckOutput, DriverError, FileReport,
+    ProjectLocalShadowOperationForTest, ProjectLocalShadowRouteForTest,
 };
 use crate::check::checker::project_local::{ObservationEventKindForTest, ObservationScopeForTest};
 use crate::frontend::{FileInput, ProjectRoot};
@@ -99,6 +101,32 @@ fn report_shape(reports: &[FileReport]) -> Vec<String> {
             )
         })
         .collect()
+}
+
+fn output_shape(output: &CheckOutput) -> String {
+    let diagnostics = output
+        .diagnostics
+        .iter()
+        .map(|diagnostic| {
+            format!(
+                "{}:{:?}:{}:{:?}:{:?}",
+                diagnostic.code.as_str(),
+                diagnostic.severity,
+                diagnostic.message,
+                diagnostic.span,
+                diagnostic.elaboration(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let incomplete = output
+        .incomplete
+        .iter()
+        .map(|record| format!("{}:{:?}:{}", record.id, record.span, record.context))
+        .collect::<Vec<_>>();
+    format!(
+        "parse={:?}|diagnostics={diagnostics:?}|incomplete={incomplete:?}|notices={:?}",
+        output.parse_errors, output.project_notices,
+    )
 }
 
 fn diagnostic_codes(reports: &[FileReport]) -> Vec<&str> {
@@ -274,6 +302,131 @@ fn project_local_shadow_preserves_operation_specific_initialization_precedence()
         .expect("standalone and Bundler empty projects return before acquisition");
         assert!(empty.reports.is_empty());
         assert_eq!(calls.get(), 0);
+    }
+}
+
+#[test]
+fn project_local_shadow_preserves_all_public_operation_shapes() {
+    let provider = LibraryBaseProvider::new();
+    let source = "const bad: string = 1;\n";
+
+    let source_control = check_source(source).expect("check_source control");
+    let source_candidate = check_project_local_operation_shadow_for_test(
+        vec![input("/wu5/source.ts", source)],
+        ProjectLocalShadowOperationForTest::Source,
+        || provider.declaration_product_for_shadow(),
+    )
+    .expect("check_source shadow");
+    assert_eq!(source_candidate.reports.len(), 1);
+    assert_eq!(
+        output_shape(&source_candidate.reports[0].output),
+        output_shape(&source_control),
+    );
+
+    let files = vec![
+        input("/wu5/files-a.ts", "const bad: string = 1;\n"),
+        input("/wu5/files-b.ts", "const ok: number = 1;\n"),
+    ];
+    let files_control = check_files(files.clone()).expect("check_files control");
+    let file_acquisitions = AtomicU64::new(0);
+    let files_candidate = check_project_local_operation_shadow_for_test(
+        files,
+        ProjectLocalShadowOperationForTest::Files,
+        || {
+            file_acquisitions.fetch_add(1, Ordering::Relaxed);
+            provider.declaration_product_for_shadow()
+        },
+    )
+    .expect("check_files shadow");
+    assert_eq!(
+        report_shape(&files_candidate.reports),
+        report_shape(&files_control)
+    );
+    assert_eq!(file_acquisitions.load(Ordering::Relaxed), 1);
+
+    let project = vec![
+        input(
+            "/wu5/operation-augment.ts",
+            "interface Array<T> { operationHead(): T; }\n",
+        ),
+        input(
+            "/wu5/operation-use.ts",
+            "const bad: string = [1].operationHead();\n",
+        ),
+    ];
+    let repeated_control = check_project(project.clone()).expect("check_project control");
+    for operation in [
+        ProjectLocalShadowOperationForTest::RepeatedProject,
+        ProjectLocalShadowOperationForTest::OfficialBatch,
+    ] {
+        let candidate =
+            check_project_local_operation_shadow_for_test(project.clone(), operation, || {
+                provider.declaration_product_for_shadow()
+            })
+            .expect("repeated operation shadow");
+        assert_eq!(
+            report_shape(&candidate.reports),
+            report_shape(&repeated_control)
+        );
+    }
+
+    let standalone_control = check_project_once(project.clone()).expect("standalone/CLI control");
+    for operation in [
+        ProjectLocalShadowOperationForTest::Standalone,
+        ProjectLocalShadowOperationForTest::Cli,
+    ] {
+        let candidate =
+            check_project_local_operation_shadow_for_test(project.clone(), operation, || {
+                provider.declaration_product_for_shadow()
+            })
+            .expect("standalone operation shadow");
+        assert_eq!(
+            report_shape(&candidate.reports),
+            report_shape(&standalone_control),
+        );
+    }
+}
+
+#[test]
+fn project_local_shadow_preserves_operation_initialization_boundaries() {
+    let malformed = vec![input(
+        "/wu5/operation-malformed.ts",
+        "declare namespace Broken { export = Broken; }\n",
+    )];
+
+    for operation in [
+        ProjectLocalShadowOperationForTest::Source,
+        ProjectLocalShadowOperationForTest::Files,
+        ProjectLocalShadowOperationForTest::RepeatedProject,
+        ProjectLocalShadowOperationForTest::OfficialBatch,
+    ] {
+        let calls = AtomicU64::new(0);
+        let result =
+            check_project_local_operation_shadow_for_test(malformed.clone(), operation, || {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Err(Arc::new(LibraryInitError::injected_initialization_failure(
+                    "WU5 repeated operation failure".to_owned(),
+                )))
+            });
+        assert!(matches!(result, Err(DriverError::LibraryInitialization(_))));
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    for operation in [
+        ProjectLocalShadowOperationForTest::Standalone,
+        ProjectLocalShadowOperationForTest::Cli,
+    ] {
+        let calls = AtomicU64::new(0);
+        let result =
+            check_project_local_operation_shadow_for_test(malformed.clone(), operation, || {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Err(Arc::new(LibraryInitError::injected_initialization_failure(
+                    "WU5 deferred operation failure".to_owned(),
+                )))
+            })
+            .expect("standalone operation reports malformed input first");
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+        assert_eq!(result.reports[0].output.parse_errors.len(), 1);
     }
 }
 
@@ -576,24 +729,41 @@ fn project_local_shadow_reuses_only_the_product_across_fresh_sessions() {
         .declaration_product_for_shadow()
         .expect("cached packaged declaration product");
     assert!(Arc::ptr_eq(&product, &same_product));
-    let observations = ObservationScopeForTest::start();
-    for ordinal in 0..2 {
-        let shared = Arc::clone(&product);
-        let run = check_project_local_shadow_for_test(
-            vec![input(
-                &format!("/wu5/session-{ordinal}.ts"),
-                "const value: number = 1;\n",
-            )],
-            ProjectLocalShadowRouteForTest::RepeatedProject,
-            || Ok(shared),
-        )
-        .expect("fresh repeated project-local session");
-        assert_eq!(run.reports.len(), 1);
-    }
-    let receipt = observations.finish();
-    let identities = receipt
-        .events
+    let runs = std::thread::scope(|scope| {
+        (0..2)
+            .map(|ordinal| {
+                let shared = Arc::clone(&product);
+                scope.spawn(move || {
+                    let product_identity = Arc::as_ptr(&shared).addr();
+                    let observations = ObservationScopeForTest::start();
+                    let run = check_project_local_shadow_for_test(
+                        vec![input(
+                            &format!("/wu5/session-{ordinal}.ts"),
+                            "const value: number = 1;\n",
+                        )],
+                        ProjectLocalShadowRouteForTest::RepeatedProject,
+                        || Ok(shared),
+                    )
+                    .expect("fresh repeated project-local session");
+                    (product_identity, run, observations.finish())
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|handle| handle.join().expect("project-local session worker"))
+            .collect::<Vec<_>>()
+    });
+    assert!(runs.iter().all(|(_, run, _)| run.reports.len() == 1));
+    assert!(runs
         .iter()
+        .all(|(identity, _, _)| *identity == Arc::as_ptr(&product).addr()),);
+    let receipts = runs
+        .into_iter()
+        .map(|(_, _, receipt)| receipt)
+        .collect::<Vec<_>>();
+    let identities = receipts
+        .iter()
+        .flat_map(|receipt| &receipt.events)
         .filter_map(|event| match event.kind {
             ObservationEventKindForTest::SessionCreated { project, publisher } => {
                 Some((project, publisher))
@@ -604,11 +774,13 @@ fn project_local_shadow_reuses_only_the_product_across_fresh_sessions() {
     assert_eq!(identities.len(), 2);
     assert_ne!(identities[0].0, identities[1].0);
     assert_ne!(identities[0].1, identities[1].1);
-    assert_eq!(receipt.session_weak.len(), 2);
-    assert_eq!(receipt.cache_weak.len(), 2);
-    assert!(receipt
-        .session_weak
-        .iter()
-        .chain(&receipt.cache_weak)
-        .all(|weak| !weak.upgraded_at_finish));
+    assert!(receipts.iter().all(|receipt| {
+        receipt.session_weak.len() == 1
+            && receipt.cache_weak.len() == 1
+            && receipt
+                .session_weak
+                .iter()
+                .chain(&receipt.cache_weak)
+                .all(|weak| !weak.upgraded_at_finish)
+    }));
 }
