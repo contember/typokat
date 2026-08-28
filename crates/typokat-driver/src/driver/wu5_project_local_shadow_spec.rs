@@ -4,8 +4,8 @@
 //! continuation that WU6 will compare with the complete-source control.
 
 use super::{
-    check_project_local_shadow_for_test, check_project_once, DriverError, FileReport,
-    ProjectLocalShadowRouteForTest,
+    check_project, check_project_local_shadow_for_test, check_project_once, DriverError,
+    FileReport, ProjectLocalShadowRouteForTest,
 };
 use crate::check::checker::project_local::{ObservationEventKindForTest, ObservationScopeForTest};
 use crate::frontend::{FileInput, ProjectRoot};
@@ -20,6 +20,19 @@ fn input(name: &str, source: &str) -> FileInput {
         name: name.to_owned(),
         source: source.to_owned(),
     }
+}
+
+fn fixture_inputs(project: &std::path::Path, names: &[&str]) -> Vec<FileInput> {
+    names
+        .iter()
+        .map(|name| {
+            let path = project.join(name);
+            FileInput {
+                name: path.to_string_lossy().into_owned(),
+                source: fs::read_to_string(path).expect("read WU5 shadow fixture"),
+            }
+        })
+        .collect()
 }
 
 fn report_shape(reports: &[FileReport]) -> Vec<String> {
@@ -226,11 +239,79 @@ fn project_local_shadow_activates_supported_default_reexports_before_the_notice_
 }
 
 #[test]
+fn project_local_shadow_preserves_each_explicit_routes_pre_cutover_contract() {
+    let root = typokat_core::test_support::repository_root();
+    let projects = [
+        (
+            root.join("tests/cases/b15_default_module_slots/01_named_class"),
+            ["source.ts", "consumer.ts"],
+        ),
+        (
+            root.join("tests/cases/b15_acyclic_source_reexports/route_baseline"),
+            ["barrel.ts", "source.ts"],
+        ),
+    ];
+    let provider = LibraryBaseProvider::new();
+
+    for (project, forward) in projects {
+        for names in [forward, [forward[1], forward[0]]] {
+            let inputs = fixture_inputs(&project, &names);
+
+            let standalone_control =
+                check_project_once(inputs.clone()).expect("standalone pre-cutover control");
+            let standalone_acquisitions = Cell::new(0);
+            let standalone = check_project_local_shadow_for_test(
+                inputs.clone(),
+                ProjectLocalShadowRouteForTest::Standalone,
+                || {
+                    standalone_acquisitions.set(standalone_acquisitions.get() + 1);
+                    provider.declaration_product_for_shadow()
+                },
+            )
+            .expect("standalone project-local shadow");
+            assert_eq!(
+                report_shape(&standalone.reports),
+                report_shape(&standalone_control),
+                "standalone {project:?} {names:?}",
+            );
+            assert_eq!(
+                standalone_acquisitions.get(),
+                0,
+                "blocking explicit notices precede product acquisition",
+            );
+
+            let repeated_control =
+                check_project(inputs.clone()).expect("repeated pre-cutover control");
+            let repeated_acquisitions = Cell::new(0);
+            let repeated = check_project_local_shadow_for_test(
+                inputs,
+                ProjectLocalShadowRouteForTest::RepeatedProject,
+                || {
+                    repeated_acquisitions.set(repeated_acquisitions.get() + 1);
+                    provider.declaration_product_for_shadow()
+                },
+            )
+            .expect("repeated project-local shadow");
+            assert_eq!(
+                report_shape(&repeated.reports),
+                report_shape(&repeated_control),
+                "repeated {project:?} {names:?}",
+            );
+            assert_eq!(repeated_acquisitions.get(), 1);
+        }
+    }
+}
+
+#[test]
 fn project_local_shadow_reuses_only_the_product_across_fresh_sessions() {
     let provider = LibraryBaseProvider::new();
     let product = provider
         .declaration_product_for_shadow()
         .expect("packaged declaration product");
+    let same_product = provider
+        .declaration_product_for_shadow()
+        .expect("cached packaged declaration product");
+    assert!(Arc::ptr_eq(&product, &same_product));
     let observations = ObservationScopeForTest::start();
     for ordinal in 0..2 {
         let shared = Arc::clone(&product);
