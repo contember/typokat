@@ -717,3 +717,19 @@ numbers are invalid without `--no-smt`.
   WU5→WU6→WU7 sequencing; the candidate stays test-only until WU6 proves it and WU7 cuts over.
   Therefore backlog `116`, the low-level lifecycle deletion, and ADR-0029's temporary census
   feature boundary remain open for WU7 rather than being closed prematurely.
+- **2026-08-28 — WU6 pre-timing boundary.** The existing authenticated harness already supplies
+  the cold four-row panel, the exact 82-file TypeScript 6.0.3 profile, and the staged native
+  TypeScript-Go 7.0.2 binary. The pinned upstream revision is locally reproducible at
+  `2bd066d87f5bafd315be9f40889d0a60b9e58e0b`, but no in-process comparator runner existed. The
+  session panel therefore freezes one fresh Program/checker and project-global merge per frame,
+  bound immutable library-`SourceFile` sharing only on TypeScript-Go, immutable declaration-product
+  sharing only on typokat, and a progressive `1 -> 32 -> 687` gate. The collector must stop on the
+  first semantic, lifecycle,
+  speed, or memory failure and enforces a 1 GiB child address-space limit. The authenticated old
+  687-frame control is 12,946,437 us total route time and 144,109,568 bytes peak worker RSS. No WU6
+  candidate timing has run yet. The old wall value is a sum of internal frame-route intervals;
+  WU6 must compare it only to the candidate's same interval sum, while typokat versus TypeScript-Go
+  uses external end-to-end batch wall samples. The four cold rows are the three-way semantic
+  agreement set. The full official corpus uses the committed typokat scoreboard and pinned
+  TypeScript baselines as separate ordered outcome authorities; it does not falsely require the
+  research checker's known coverage gaps to equal TypeScript-Go.

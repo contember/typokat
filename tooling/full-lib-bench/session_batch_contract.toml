@@ -1,0 +1,101 @@
+schema = 1
+panel_project_counts = [1, 32, 687]
+panel_order = "fail-fast"
+speed_gated_project_counts = [32, 687]
+minimum_speedup = 1.0
+max_typokat_rss_kib = 524288
+max_typokat_to_tsgo_median_rss = 1.0
+child_address_space_limit_bytes = 1073741824
+cpu_lease_vcpus = 2
+require_no_smt = true
+bootstrap_resamples = 100000
+bootstrap_seed = 20260828
+typescript_flags = ["--strict", "--target", "es2025", "--module", "preserve", "--noEmit", "--pretty", "false", "--ignoreConfig"]
+forbidden_flags = ["--noLib", "--skipLibCheck", "--skipDefaultLibCheck", "--noCheck", "--incremental", "--watch", "--build"]
+
+[profile]
+typescript_version = "6.0.3"
+upstream_revision = "050880ce59e30b356b686bd3144efe24f875ebc8"
+file_count = 82
+source_bytes = 2936611
+length_framed_sha256 = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d"
+manifest_sha256 = "1edef1b5e870024834762267ec532c3054f3b2279e9181844e21648243eb1407"
+
+[official_frames]
+manifest_relative_path = "tooling/official-suite/corpus/manifest.json"
+manifest_sha256 = "ee68a0bfe165c05fad9761d7b8f6c500fe4ca84413918715dcf04e6170784f04"
+eligible_frame_count = 687
+frame_source_identity_sha256 = "cf5104d353074604d8626864d6f5b7451796409c75113ce213f79c911cb5388f"
+ordered_identity_algorithm = "sha256-canonical-json-v1"
+panel_1_ordered_identity_sha256 = "ab61a38bedaeea39deb13b87d9493807c996fada55b24b30361094eba46a58f4"
+panel_32_ordered_identity_sha256 = "8ec0ad857e9e161bd4388aa5fb970b26041569f2d175ae7ea9cc0cda1ff8b0f5"
+panel_687_ordered_identity_sha256 = "f901b5335e4627731db51737671b4d155005c936dff805b81d1dda74914a86c5"
+
+[oracles]
+cross_tool_rows = ["fast-clean", "fast-errors", "collision", "fanout"]
+cold_oracle_relative_path = "tooling/full-lib-bench/oracles.json"
+cold_oracle_sha256 = "1b1297705791cd4702e3512561b5312c56477d63f8f4e5c14011562a74d220c8"
+typokat_batch_oracle_relative_path = "tooling/official-suite/scoreboard.txt"
+typokat_batch_oracle_sha256 = "d3071df89d689e5d3da43a03cd74b9c7f6c91732699303a8ad33c3131af3575f"
+tsgo_batch_oracle = "pinned-typescript-baselines"
+batch_oracle_rule = "ordered-normalized-frame-outcomes"
+require_tsc_and_tsgo_cross_tool_agreement = true
+require_typokat_cross_tool_agreement = true
+
+[current_typokat_baseline]
+artifact_relative_path = "docs/archive/project-local-library-index-feasibility-2026-08-22/lifecycle-baseline.json"
+artifact_sha256 = "950d5d7b38da7e7b5a0bc87da7ed423968b151ebf731c451021216c1d1880a18"
+normalized_result_sha256 = "021f61f01df98c020189b291de23314d4431464b9455a4b70fef6d8911d33044"
+commit = "58b5b1a80ad49d13dcfc66e6291c8f2932b1ad7f"
+tree = "46f0b7284e401ddb9c035984a4d3f54e02f32bdd"
+frames = 687
+wall_boundary = "sum_frame_route_wall_us"
+wall_us = 12946437
+peak_rss_bytes = 144109568
+
+[tsgo]
+repository = "https://github.com/microsoft/typescript-go.git"
+upstream_revision = "2bd066d87f5bafd315be9f40889d0a60b9e58e0b"
+package_version = "7.0.2"
+cold_binary_sha256 = "4f2de678286401759b3fb4475bafe35b8f32b4b3a07d92642bbf37eadc9b34a4"
+runner_source_relative_path = "tooling/full-lib-bench/tsgo-batch/main.go"
+runner_install_path = "cmd/typokat-wu6-batch/main.go"
+build_argv = ["go", "build", "-trimpath", "-o", "{output}", "./cmd/typokat-wu6-batch"]
+
+[typokat]
+runner_binary = "typokat-session-batch"
+runner_source_relative_path = "crates/typokat-session-batch/src/main.rs"
+build_argv = ["cargo", "build", "--release", "--locked", "-p", "typokat-session-batch"]
+route = "project-local-session-candidate"
+
+[lifecycle]
+typokat_shared = ["library_declaration_product"]
+tsgo_shared = ["bound_immutable_library_source_files"]
+per_frame = ["user_parse", "user_bind", "program", "checker", "project_global_merge", "semantic_state", "diagnostics"]
+forbidden = ["incremental_program", "program_update", "checker_reuse", "user_source_reuse", "cross_frame_semantic_cache"]
+require_zero_retained_frames = true
+
+[sampling]
+schedule = "A,B,B,A"
+warmups_per_tool = 3
+blocks = 15
+samples_per_tool = 30
+panel_timeout_seconds = [10, 60, 600]
+
+[concurrency]
+session_counts = [1, 2, 32]
+require_deterministic_outputs = true
+require_distinct_local_identities = true
+require_zero_retained_sessions = true
+max_typokat_rss_kib = 524288
+
+[negative_controls]
+tsgo = ["reuse-checker", "retain-frame"]
+typokat = ["reuse-session", "retain-cache"]
+require_same_binary = true
+
+[runner_linkage]
+require_same_runner_binary_for_single_and_batch = true
+require_single_mode_cross_tool_oracles = true
+require_tsgo_single_mode_match_cold_binary = true
+require_same_candidate_commit_for_cold_and_batch_evidence = true

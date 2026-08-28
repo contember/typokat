@@ -212,6 +212,56 @@ reused PID anywhere in the artifact, fast crash, semantic mismatch, failed
 perturbation, stale identity, malformed output, or missing memory evidence. Raw
 NO-GO attempts remain evidence and are never overwritten by a later run.
 
+## Project-local session panel (WU6)
+
+`session_batch_contract.toml` defines a second, fail-fast panel for the project-local session
+lifecycle. It does not compare a persistent typokat worker with repeated `tsgo` process startup.
+Both measured binaries start once per sample and process the same ordered frames in-process.
+
+The native comparator is built from the pinned TypeScript-Go revision. It creates a fresh Program,
+checker, user parse/bind, project-global merge, semantic state, and diagnostic state for every
+frame. It may share the bound immutable library `SourceFile` values supported by TypeScript-Go's
+real project parse cache; TypeScript-Go binds such a cached source file once and its Program skips
+already-bound files. Typokat creates a fresh `CheckerSession` and complete project binder for every
+frame and may share only the immutable declaration product. Neither runner may use incremental
+program update, checker reuse, user-source reuse, or a cross-frame semantic cache.
+
+Each session runner also has a single-project mode. The same hashed runner binary must execute its
+single and batch samples. Both single modes reproduce the four cold semantic/control oracles, and
+the TypeScript-Go runner's single mode must additionally reproduce the authenticated packaged
+`tsc` binary. This links the custom in-process runners to the cold comparison without pretending
+that their bytes equal the ordinary CLI binaries.
+
+The full 687-frame performance corpus is not a cross-tool equality claim. Typokat has documented
+coverage gaps on the official suite. Its ordered semantic results must reproduce the committed
+official-suite scoreboard; TypeScript-Go must reproduce the pinned TypeScript baselines. Only the
+four cold rows are the admitted three-way typokat/`tsc`/TypeScript-Go agreement set.
+
+Panels run in strict order: 1, then 32, then 687 projects. The collector must stop after the first
+failed semantic, control, lifecycle, speed, or memory gate. This keeps an unoptimized candidate
+from turning the 687-frame acceptance into an unbounded run. Every child has a 1 GiB address-space
+limit; every retained sample must remain below 512 MiB RSS. The 32- and 687-project panels require
+all three speed ratios to be strictly greater than one, and typokat median RSS must not exceed
+TypeScript-Go median RSS. The 687-project candidate must also beat the authenticated current
+typokat baseline in both total wall time and peak RSS. The old wall receipt is the sum of its 687
+internally measured frame-route intervals, including its first-frame provider initialization; the
+candidate compares the same internal interval sum. The external batch wall samples remain the
+authority only for typokat versus TypeScript-Go, so process/protocol overhead is never compared to
+the old internal receipt.
+
+Verdicts are recomputed from raw ABBA process records, JSONL requests/responses, `/usr/bin/time`
+reports, executable attestations, and monotonic intervals. Runner booleans and derived speed/RSS
+fields are never authorities. Lifecycle fault controls deliberately request checker/session reuse
+and retained frame/cache state from the same binaries; the verifier requires those controls to be
+observed and rejected. Separate 1/2/32 concurrent-session evidence must retain identical normalized
+outputs, distinct project-local identities, zero live sessions/caches after the run, and bounded
+RSS.
+
+The session panel remains RED until `session_batch_bench.py`, the authenticated TypeScript-Go
+runner, and the feature-scoped typokat candidate runner implement this contract. No session timing
+is eligible before their source, binaries, profile, official-frame inventory, semantic controls,
+CPU lease, no-SMT affinity, environment, and address-space limit have been attested.
+
 ## Self-tests
 
 ```sh
