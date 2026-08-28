@@ -161,6 +161,47 @@ class SessionBatchLiveCollectorTests(unittest.TestCase):
         self.assertEqual(list(signature.parameters), ["output"])
         self.assertEqual(signature.parameters["output"].kind, inspect.Parameter.KEYWORD_ONLY)
 
+    def test_system_host_preserves_stdout_and_canonicalizes_frame_projection(self) -> None:
+        response = '{"ordinal":0,"case_id":"case"}\n'
+        measurement = collect._ProcessMeasurement(
+            pid=123,
+            start_ns=10,
+            end_ns=20,
+            returncode=0,
+            stdout=response,
+            stderr="",
+            process_group_empty=True,
+            time_report="Maximum resident set size (kbytes): 1\n",
+            rss_kib=1,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "runner"
+            executable.write_bytes(b"runner")
+            runner = {
+                "path": str(executable),
+                "binary_sha256": hashlib.sha256(b"runner").hexdigest(),
+            }
+            host = object.__new__(collect.SystemLiveHost)
+            host._run_runner = mock.Mock(return_value=measurement)
+            record = host.run_batch(
+                "typokat",
+                runner,
+                '{"case_id":"case","schema":1,"source":""}\n',
+                timeout_seconds=10,
+                address_space_limit_bytes=1 << 30,
+            )
+
+        self.assertEqual(record["stdout"], response)
+        self.assertEqual(record["response_stream"], response)
+        self.assertEqual(
+            record["frames"][0]["raw_response"],
+            '{"case_id":"case","ordinal":0}',
+        )
+        self.assertEqual(
+            record["frames"][0]["raw_response_sha256"],
+            hashlib.sha256(b'{"case_id":"case","ordinal":0}').hexdigest(),
+        )
+
     def test_live_preflight_owns_build_protocol_process_and_fault_sequence(self) -> None:
         host = FakeLiveHost(self.contract)
         with tempfile.TemporaryDirectory() as directory:
