@@ -680,3 +680,7 @@ numbers are invalid without `--no-smt`.
   (`322` diagnostics, `387` incompletes), a reviewed `558 - 8 + 159` diff, and terminal receipt
   `3,406 / 3,377 / 29`; the 709-row multiset becomes the sole authority. →
   [ADR-0028](../decisions/0028-rebaseline-the-production-owned-library-census.md)
+- **2026-08-28 — temporary census feature boundary.** Until WU5 makes the project-local session a
+  production lifecycle, only opt-in verification builds expose `LibraryRecordCensus` and enable
+  its test inspection stack. →
+  [ADR-0029](../decisions/0029-gate-the-library-record-census-behind-an-opt-in-feature.md)

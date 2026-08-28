@@ -44,3 +44,4 @@ a commit message suffices.
 - [`0026`](0026-retain-library-outcomes-after-alias-evaluation.md) — retain named library outcomes after complete recursive-alias evaluation — accepted (2026-08-27)
 - [`0027`](0027-produce-library-census-from-the-project-publisher.md) — produce the library census from the project-local production publisher — superseded by 0028 (2026-08-27)
 - [`0028`](0028-rebaseline-the-production-owned-library-census.md) — rebaseline the production-owned library census — accepted (2026-08-28)
+- [`0029`](0029-gate-the-library-record-census-behind-an-opt-in-feature.md) — gate the library record census behind an opt-in feature — accepted (2026-08-28)
