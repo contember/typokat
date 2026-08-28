@@ -13,5 +13,8 @@ typokat-frontend.workspace = true
 typokat-library = { workspace = true, features = ["session-bench"] }
 typokat-library-product.workspace = true
 
+[dev-dependencies]
+rustix = { workspace = true, features = ["time"] }
+
 [lints]
 workspace = true
