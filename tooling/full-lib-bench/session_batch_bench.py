@@ -23,6 +23,7 @@ ROOT = HERE.parents[1]
 CONTRACT_PATH = HERE / "session_batch_contract.toml"
 CORPUS = ROOT / "tooling/official-suite/corpus"
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
+HEX40 = re.compile(r"^[0-9a-f]{40}$")
 TSGO_DIAGNOSTIC = re.compile(r"\((\d+),(\d+)\):\s*error\s+TS(\d+):")
 RSS = re.compile(r"Maximum resident set size \(kbytes\):\s*(\d+)")
 OPTION = re.compile(r"^//\s*@(\w+)\s*:\s*(.*?)\s*$")
@@ -63,6 +64,14 @@ def _canonical_public(value: Any) -> bytes:
     ).encode()
 
 
+def _is_sha256(value: Any) -> bool:
+    return isinstance(value, str) and HEX64.fullmatch(value) is not None
+
+
+def _is_int(value: Any) -> bool:
+    return type(value) is int
+
+
 def _read_regular(path: Path, label: str) -> bytes:
     if path.is_symlink() or not path.is_file():
         _fail(f"{label} is not a regular file: {path}")
@@ -96,7 +105,7 @@ def verify_contract(path: Path = CONTRACT_PATH) -> dict[str, Any]:
         "bootstrap_resamples", "bootstrap_seed", "typescript_flags", "forbidden_flags",
         "profile", "official_frames", "oracles", "current_typokat_baseline", "tsgo",
         "typokat", "lifecycle", "sampling", "concurrency", "negative_controls",
-        "runner_linkage", "allocation_probe",
+        "single_project", "runner_linkage", "allocation_probe",
     }
     _exact_keys(contract, expected_top, "batch contract")
     nested_shapes = {
@@ -147,6 +156,10 @@ def verify_contract(path: Path = CONTRACT_PATH) -> dict[str, Any]:
             "session_counts",
         },
         "negative_controls": {"require_same_binary", "tsgo", "typokat"},
+        "single_project": {
+            "file_counts", "mode_argument", "normalization", "request_schema",
+            "require_exact_ordered_files", "rows", "timeout_seconds",
+        },
         "runner_linkage": {
             "require_same_candidate_commit_for_cold_and_batch_evidence",
             "require_same_runner_binary_for_single_and_batch",
@@ -216,6 +229,16 @@ def verify_contract(path: Path = CONTRACT_PATH) -> dict[str, Any]:
         "metric": "allocation_count",
     }:
         _fail("allocation probe contract differs")
+    if contract["single_project"] != {
+        "mode_argument": "--single-project",
+        "rows": ["fast-clean", "fast-errors", "collision", "fanout"],
+        "file_counts": [1, 1, 2, 32],
+        "request_schema": 1,
+        "normalization": "relative-path:line:column:code",
+        "timeout_seconds": 60,
+        "require_exact_ordered_files": True,
+    }:
+        _fail("single-project contract differs")
 
     try:
         cold.verify_profile({
@@ -1183,6 +1206,450 @@ def verify_runner_linkage(evidence: dict[str, Any], contract: dict[str, Any]) ->
         _fail("tsgo upstream revision differs")
     if tsgo.get("authenticated_cold_binary_sha256") != contract["tsgo"]["cold_binary_sha256"]:
         _fail("tsgo authenticated cold binary differs")
+
+
+def _single_project_authority(
+    contract: dict[str, Any],
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, dict[str, Any]], str]:
+    single = contract["single_project"]
+    try:
+        cold.verify_workloads()
+        locked = cold.workload_lock()
+        cold_oracles = cold.load_oracles()
+    except cold.ContractError as error:
+        raise BatchContractError(str(error)) from error
+    rows = single["rows"]
+    if list(locked) != rows or list(cold_oracles["rows"]) != rows:
+        _fail("single-project authority row order differs")
+
+    files: dict[str, list[dict[str, Any]]] = {}
+    semantics: dict[str, dict[str, Any]] = {}
+    semantic_rows = []
+    for case_id, expected_count in zip(rows, single["file_counts"], strict=True):
+        entries = locked[case_id]
+        if len(entries) != expected_count:
+            _fail("single-project authority file cardinality differs")
+        current = []
+        for entry in entries:
+            source_bytes = _read_regular(cold.WORKLOADS / entry.path, f"single-project {entry.path}")
+            if (len(source_bytes), _sha(source_bytes)) != (entry.size, entry.sha256):
+                _fail(f"single-project source identity differs: {entry.path}")
+            try:
+                source = source_bytes.decode("utf-8")
+            except UnicodeDecodeError as error:
+                raise BatchContractError(
+                    f"invalid single-project UTF-8 source {entry.path}: {error}"
+                ) from error
+            current.append({"path": entry.path, "source": source})
+        files[case_id] = current
+        oracle = cold_oracles["rows"][case_id]
+        semantic = {
+            "exit_code": oracle["exit"],
+            "parse_errors": [],
+            "diagnostics": list(oracle["diagnostics"]),
+            "incompletes": [],
+        }
+        semantics[case_id] = semantic
+        semantic_rows.append({"case_id": case_id, "semantic": semantic})
+    return files, semantics, _sha(_canonical(semantic_rows))
+
+
+def _verify_single_project_process(
+    process: Any,
+    tool: str,
+    case_id: str,
+    binary_sha256: str,
+    expected_files: list[dict[str, Any]],
+    expected_semantic: dict[str, Any],
+    contract: dict[str, Any],
+) -> dict[str, Any]:
+    required = {
+        "address_space_limit_bytes", "arguments", "case_id",
+        "executable_after_sha256", "executable_before_sha256",
+        "process_group_empty", "request_stream", "request_stream_sha256",
+        "response_stream", "response_stream_sha256", "returncode", "stderr",
+        "stderr_complete", "stdout", "stdout_complete", "timed_out",
+        "timeout_seconds", "tool",
+    }
+    _exact_keys(process, required, f"single-project {tool} {case_id} process")
+    single = contract["single_project"]
+    if (
+        process["tool"] != tool
+        or process["case_id"] != case_id
+        or process["arguments"] != [single["mode_argument"]]
+    ):
+        _fail("single-project process mode or row differs")
+    if (
+        not _is_int(process["returncode"])
+        or process["returncode"] != 0
+        or process["stderr"] != ""
+        or process["stdout_complete"] is not True
+        or process["stderr_complete"] is not True
+        or process["timed_out"] is not False
+        or process["process_group_empty"] is not True
+    ):
+        _fail("single-project process did not complete cleanly")
+    if (
+        process["executable_before_sha256"] != binary_sha256
+        or process["executable_after_sha256"] != binary_sha256
+    ):
+        _fail("single-project process binary differs")
+    if (
+        not _is_int(process["address_space_limit_bytes"])
+        or not _is_int(process["timeout_seconds"])
+        or process["address_space_limit_bytes"] != contract["child_address_space_limit_bytes"]
+        or process["timeout_seconds"] != single["timeout_seconds"]
+    ):
+        _fail("single-project process limit differs")
+
+    request_stream = process["request_stream"]
+    response_stream = process["response_stream"]
+    if not isinstance(request_stream, str) or not isinstance(response_stream, str):
+        _fail("single-project raw stream is not text")
+    if (
+        not _is_sha256(process["request_stream_sha256"])
+        or not _is_sha256(process["response_stream_sha256"])
+        or _sha(request_stream.encode()) != process["request_stream_sha256"]
+        or _sha(response_stream.encode()) != process["response_stream_sha256"]
+        or process["stdout"] != response_stream
+    ):
+        _fail("single-project raw stream identity differs")
+    requests = _parse_json_lines(request_stream, "single-project request stream")
+    responses = _parse_json_lines(response_stream, "single-project response stream")
+    if len(requests) != 1 or len(responses) != 1:
+        _fail("single-project raw stream cardinality differs")
+
+    request = requests[0]
+    _exact_keys(request, {"case_id", "files", "schema"}, "single-project request")
+    if (
+        not _is_int(request["schema"])
+        or request["schema"] != single["request_schema"]
+        or request["case_id"] != case_id
+    ):
+        _fail("single-project request schema or row differs")
+    request_files = request["files"]
+    if not isinstance(request_files, list) or len(request_files) != len(expected_files):
+        _fail("single-project file cardinality differs")
+    for observed, expected in zip(request_files, expected_files, strict=True):
+        _exact_keys(observed, {"path", "source"}, "single-project request file")
+        if observed != expected:
+            _fail("single-project ordered path/source bytes differ")
+    if request_stream != _canonical_public(request).decode() + "\n":
+        _fail("single-project request stream is not canonical")
+
+    response = responses[0]
+    common = {
+        "case_id", "checker_identity", "file_count", "program_identity",
+        "retained_frame_state", "schema", "semantic", "semantic_identity",
+        "shared_product_identity", "tool",
+    }
+    extra = (
+        {"cache_weak_alive_after", "session_weak_alive_after"}
+        if tool == "typokat"
+        else {"retained_frame_handles"}
+    )
+    _exact_keys(response, common | extra, f"single-project {tool} response")
+    if (
+        not _is_int(response["schema"])
+        or response["schema"] != 1
+        or response["tool"] != tool
+        or response["case_id"] != case_id
+        or not _is_int(response["file_count"])
+        or response["file_count"] != len(expected_files)
+        or response["shared_product_identity"]
+        != contract["profile"]["length_framed_sha256"]
+        or not _is_int(response["retained_frame_state"])
+        or response["retained_frame_state"] != 0
+    ):
+        _fail("single-project response identity differs")
+    _exact_keys(
+        response["semantic"],
+        {"diagnostics", "exit_code", "incompletes", "parse_errors"},
+        "single-project semantic",
+    )
+    if not _is_int(response["semantic"]["exit_code"]):
+        _fail("single-project semantic exit code type differs")
+    if response["semantic"] != expected_semantic:
+        _fail("single-project semantic differs from cold oracle")
+    identities = [
+        response["program_identity"], response["checker_identity"],
+        response["semantic_identity"],
+    ]
+    if (
+        any(not isinstance(identity, str) or not identity for identity in identities)
+        or len(set(identities)) != len(identities)
+    ):
+        _fail("single-project local identity differs")
+    if tool == "typokat":
+        if (
+            response["session_weak_alive_after"] is not False
+            or response["cache_weak_alive_after"] is not False
+        ):
+            _fail("single-project typokat state remains alive")
+    else:
+        if (
+            not _is_int(response["retained_frame_handles"])
+            or response["retained_frame_handles"] != 0
+        ):
+            _fail("single-project tsgo frame state remains alive")
+    if response_stream != _canonical_public(response).decode() + "\n":
+        _fail("single-project response stream is not canonical")
+    return response
+
+
+def _verify_single_project_cold_process(
+    process: Any,
+    tool: str,
+    case_id: str,
+    binary_path: str,
+    binary_sha256: str,
+    expected_semantic: dict[str, Any],
+    contract: dict[str, Any],
+    cold_contract: dict[str, Any],
+) -> dict[str, Any]:
+    required = {
+        "address_space_limit_bytes", "argv", "case_id",
+        "executable_after_sha256", "executable_before_sha256",
+        "normalized_semantic", "process_group_empty", "returncode", "stderr",
+        "stderr_complete", "stdout", "stdout_complete", "timed_out",
+        "timeout_seconds", "tool",
+    }
+    _exact_keys(process, required, f"single-project {tool} cold process")
+    flags = (
+        cold_contract["typokat_flags"]
+        if tool == "typokat"
+        else contract["typescript_flags"]
+    )
+    expected_argv = [
+        binary_path,
+        *flags,
+        *(str(path.resolve()) for path in cold.row_sources(case_id)),
+    ]
+    if (
+        process["tool"] != tool
+        or process["case_id"] != case_id
+        or process["argv"] != expected_argv
+    ):
+        _fail("single-project cold argv or source path differs")
+    if (
+        process["stdout_complete"] is not True
+        or process["stderr_complete"] is not True
+        or process["timed_out"] is not False
+        or process["process_group_empty"] is not True
+    ):
+        _fail("single-project cold process did not complete cleanly")
+    if (
+        process["executable_before_sha256"] != binary_sha256
+        or process["executable_after_sha256"] != binary_sha256
+    ):
+        _fail("single-project cold process binary differs")
+    if (
+        not _is_int(process["address_space_limit_bytes"])
+        or not _is_int(process["timeout_seconds"])
+        or process["address_space_limit_bytes"] != contract["child_address_space_limit_bytes"]
+        or process["timeout_seconds"] != contract["single_project"]["timeout_seconds"]
+    ):
+        _fail("single-project cold process limit differs")
+    if (
+        not isinstance(process["stdout"], str)
+        or not isinstance(process["stderr"], str)
+        or not _is_int(process["returncode"])
+    ):
+        _fail("single-project cold raw process result is invalid")
+
+    result = cold.ProcessResult(
+        tuple(process["argv"]),
+        process["returncode"],
+        process["stdout"],
+        process["stderr"],
+        0.0,
+        0,
+    )
+    try:
+        diagnostics = cold.normalize_diagnostics(result, tool, case_id)
+    except cold.ContractError as error:
+        raise BatchContractError(f"single-project cold diagnostic evidence: {error}") from error
+    derived = {
+        "exit_code": process["returncode"],
+        "parse_errors": [],
+        "diagnostics": diagnostics,
+        "incompletes": [],
+    }
+    _exact_keys(
+        process["normalized_semantic"],
+        {"diagnostics", "exit_code", "incompletes", "parse_errors"},
+        "single-project cold normalized semantic",
+    )
+    if not _is_int(process["normalized_semantic"]["exit_code"]):
+        _fail("single-project cold normalized exit code type differs")
+    if process["normalized_semantic"] != derived:
+        _fail("single-project cold normalized semantic differs from raw output")
+    if derived != expected_semantic:
+        _fail("single-project cold semantic differs from frozen oracle")
+    return derived
+
+
+def recompute_single_project_linkage(
+    evidence: Any, contract: dict[str, Any]
+) -> dict[str, Any]:
+    """Recompute linkage from supplied evidence; this is not live authority or a GO gate."""
+    _exact_keys(
+        evidence,
+        {
+            "candidate_commit", "candidate_tree", "cold_candidate_commit",
+            "cold_candidate_tree", "schema", "tools", "typokat_cold_build",
+        },
+        "single-project linkage",
+    )
+    if not _is_int(evidence["schema"]) or evidence["schema"] != 1:
+        _fail("single-project linkage schema differs")
+    candidate = evidence["candidate_commit"]
+    candidate_tree = evidence["candidate_tree"]
+    if (
+        not isinstance(candidate, str)
+        or not HEX40.fullmatch(candidate)
+        or not isinstance(candidate_tree, str)
+        or not HEX40.fullmatch(candidate_tree)
+    ):
+        _fail("single-project candidate commit or tree is invalid")
+    if (
+        evidence["cold_candidate_commit"] != candidate
+        or evidence["cold_candidate_tree"] != candidate_tree
+    ):
+        _fail("single-project cold candidate commit or tree differs")
+    build = evidence["typokat_cold_build"]
+    _exact_keys(
+        build,
+        {
+            "binary_path", "binary_sha256", "candidate_commit", "candidate_tree",
+            "source_identity_sha256",
+        },
+        "single-project typokat cold build",
+    )
+    if build["candidate_commit"] != candidate or build["candidate_tree"] != candidate_tree:
+        _fail("single-project typokat cold build commit or tree differs")
+    if (
+        not isinstance(build["binary_path"], str)
+        or not Path(build["binary_path"]).is_absolute()
+        or not _is_sha256(build["binary_sha256"])
+        or not _is_sha256(build["source_identity_sha256"])
+    ):
+        _fail("single-project typokat cold build identity differs")
+    _exact_keys(evidence["tools"], {"tsgo", "typokat"}, "single-project tools")
+
+    expected_files, expected_semantics, oracle_sha256 = _single_project_authority(contract)
+    try:
+        cold_contract = cold.verify_contract()
+    except cold.ContractError as error:
+        raise BatchContractError(str(error)) from error
+    single = contract["single_project"]
+    for tool in ("typokat", "tsgo"):
+        tool_evidence = evidence["tools"][tool]
+        _exact_keys(
+            tool_evidence,
+            {
+                "authenticated_cold_binary_sha256", "batch_binary_sha256",
+                "cold_binary_candidate_commit", "cold_binary_path", "cold_oracle_sha256",
+                "cold_processes", "processes", "revision",
+                "runner_source_sha256", "single_binary_sha256",
+                "single_oracle_sha256",
+            },
+            f"single-project {tool} linkage",
+        )
+        source_sha256 = tool_evidence["runner_source_sha256"]
+        binary_sha256 = tool_evidence["single_binary_sha256"]
+        if (
+            not _is_sha256(source_sha256)
+            or not _is_sha256(binary_sha256)
+        ):
+            _fail(f"single-project {tool} source or binary identity is invalid")
+        if tool_evidence["batch_binary_sha256"] != binary_sha256:
+            _fail(f"single-project {tool} single/batch binary differs")
+        expected_revision = candidate if tool == "typokat" else contract["tsgo"]["upstream_revision"]
+        if tool_evidence["revision"] != expected_revision:
+            _fail(f"single-project {tool} revision differs")
+        if tool == "typokat":
+            if (
+                tool_evidence["authenticated_cold_binary_sha256"] != build["binary_sha256"]
+                or tool_evidence["cold_binary_path"] != build["binary_path"]
+                or tool_evidence["cold_binary_candidate_commit"] != candidate
+            ):
+                _fail("single-project typokat cold candidate or binary build linkage differs")
+        else:
+            expected_tsgo_path = str(
+                (ROOT / contract["tsgo"]["cold_binary_relative_path"]).resolve()
+            )
+            if (
+                tool_evidence["authenticated_cold_binary_sha256"]
+                != contract["tsgo"]["cold_binary_sha256"]
+                or tool_evidence["cold_binary_path"] != expected_tsgo_path
+                or tool_evidence["cold_binary_candidate_commit"] is not None
+            ):
+                _fail("single-project tsgo authenticated cold binary differs")
+        if tool_evidence["single_oracle_sha256"] != oracle_sha256:
+            _fail(f"single-project {tool} single oracle linkage differs")
+
+        processes = tool_evidence["processes"]
+        if (
+            not isinstance(processes, list)
+            or [process.get("case_id") if isinstance(process, dict) else None for process in processes]
+            != single["rows"]
+        ):
+            _fail("single-project row order or cardinality differs")
+        semantic_rows = []
+        for process, case_id in zip(processes, single["rows"], strict=True):
+            response = _verify_single_project_process(
+                process,
+                tool,
+                case_id,
+                binary_sha256,
+                expected_files[case_id],
+                expected_semantics[case_id],
+                contract,
+            )
+            semantic_rows.append({"case_id": case_id, "semantic": response["semantic"]})
+        if _sha(_canonical(semantic_rows)) != tool_evidence["single_oracle_sha256"]:
+            _fail(f"single-project {tool} raw semantic digest differs")
+
+        cold_processes = tool_evidence["cold_processes"]
+        if (
+            not isinstance(cold_processes, list)
+            or [
+                process.get("case_id") if isinstance(process, dict) else None
+                for process in cold_processes
+            ]
+            != single["rows"]
+        ):
+            _fail("single-project cold process row order or cardinality differs")
+        cold_rows = []
+        for process, case_id in zip(cold_processes, single["rows"], strict=True):
+            semantic = _verify_single_project_cold_process(
+                process,
+                tool,
+                case_id,
+                tool_evidence["cold_binary_path"],
+                tool_evidence["authenticated_cold_binary_sha256"],
+                expected_semantics[case_id],
+                contract,
+                cold_contract,
+            )
+            cold_rows.append({"case_id": case_id, "semantic": semantic})
+        cold_digest = _sha(_canonical(cold_rows))
+        if cold_digest != oracle_sha256:
+            _fail(f"single-project {tool} raw cold semantic differs from frozen oracle")
+        if tool_evidence["cold_oracle_sha256"] != cold_digest:
+            _fail(f"single-project {tool} claimed cold oracle differs from raw processes")
+        if cold_digest != tool_evidence["single_oracle_sha256"]:
+            _fail(f"single-project {tool} cold and single semantics differ")
+
+    return {
+        "verdict": "LINKAGE-RECOMPUTED",
+        "candidate_commit": candidate,
+        "candidate_tree": candidate_tree,
+        "rows": list(single["rows"]),
+        "file_counts": list(single["file_counts"]),
+        "oracle_sha256": oracle_sha256,
+    }
 
 
 def verify_concurrency(evidence: dict[str, Any], contract: dict[str, Any]) -> None:
