@@ -22,7 +22,8 @@ pub(super) use lowerer::{
     accumulate_product_library_records_for_test, lower_product_groups_for_test,
 };
 pub use observation::{
-    ObservationEventForTest, ObservationEventKindForTest, ObservationReceiptForTest,
-    ObservationScopeForTest, ObservationWitnessKindForTest, ProjectLocalFaultSeamForTest,
-    ProjectLocalSemanticPhaseForTest, WeakLivenessForTest,
+    observation_storage_counts_for_test, ObservationEventForTest, ObservationEventKindForTest,
+    ObservationReceiptForTest, ObservationScopeForTest, ObservationWitnessKindForTest,
+    ProjectLocalFaultSeamForTest, ProjectLocalSemanticPhaseForTest, WeakLivenessForTest,
 };
+pub use session::{CheckerSession, CheckerSessionError};

@@ -3,7 +3,7 @@
 use super::cache::DurableCache;
 use super::session::SessionCore;
 use super::ProjectLocalSemanticFaultForTest;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,6 +79,7 @@ pub struct ObservationReceiptForTest {
 }
 
 thread_local! {
+    static ACTIVE_SCOPE_DEPTH: Cell<usize> = const { Cell::new(0) };
     static JOURNAL: RefCell<Vec<ObservationEventForTest>> = const { RefCell::new(Vec::new()) };
     static SESSION_REGISTRY: RefCell<Vec<(u64, Weak<SessionCore>)>> = const { RefCell::new(Vec::new()) };
     static CACHE_REGISTRY: RefCell<Vec<(u64, Weak<DurableCache>)>> = const { RefCell::new(Vec::new()) };
@@ -88,19 +89,29 @@ pub struct ObservationScopeForTest {
     cursor: usize,
     session_cursor: usize,
     cache_cursor: usize,
+    active: bool,
 }
 
 impl ObservationScopeForTest {
     pub fn start() -> Self {
+        ACTIVE_SCOPE_DEPTH.with(|depth| {
+            depth.set(
+                depth
+                    .get()
+                    .checked_add(1)
+                    .expect("observation scope depth overflow"),
+            );
+        });
         Self {
             cursor: JOURNAL.with(|journal| journal.borrow().len()),
             session_cursor: SESSION_REGISTRY.with(|registry| registry.borrow().len()),
             cache_cursor: CACHE_REGISTRY.with(|registry| registry.borrow().len()),
+            active: true,
         }
     }
 
-    pub fn finish(self) -> ObservationReceiptForTest {
-        ObservationReceiptForTest {
+    pub fn finish(mut self) -> ObservationReceiptForTest {
+        let receipt = ObservationReceiptForTest {
             events: JOURNAL.with(|journal| journal.borrow()[self.cursor..].to_vec()),
             witness_kind: ObservationWitnessKindForTest::ActualWeakRegistry,
             session_weak: SESSION_REGISTRY.with(|registry| {
@@ -121,11 +132,46 @@ impl ObservationScopeForTest {
                     })
                     .collect()
             }),
+        };
+        self.deactivate();
+        receipt
+    }
+
+    fn deactivate(&mut self) {
+        if !self.active {
+            return;
+        }
+        self.active = false;
+        let clear = ACTIVE_SCOPE_DEPTH.with(|depth| {
+            let remaining = depth
+                .get()
+                .checked_sub(1)
+                .expect("observation scope depth underflow");
+            depth.set(remaining);
+            remaining == 0
+        });
+        if clear {
+            JOURNAL.with(|journal| journal.borrow_mut().clear());
+            SESSION_REGISTRY.with(|registry| registry.borrow_mut().clear());
+            CACHE_REGISTRY.with(|registry| registry.borrow_mut().clear());
         }
     }
 }
 
+impl Drop for ObservationScopeForTest {
+    fn drop(&mut self) {
+        self.deactivate();
+    }
+}
+
+fn observation_active() -> bool {
+    ACTIVE_SCOPE_DEPTH.with(|depth| depth.get() != 0)
+}
+
 fn append(kind: ObservationEventKindForTest) {
+    if !observation_active() {
+        return;
+    }
     JOURNAL.with(|journal| {
         let mut journal = journal.borrow_mut();
         let stamp = journal.last().map_or(1, |event| {
@@ -136,6 +182,9 @@ fn append(kind: ObservationEventKindForTest) {
 }
 
 pub(super) fn register_session(session: &Rc<SessionCore>, cache: &Rc<DurableCache>) {
+    if !observation_active() {
+        return;
+    }
     SESSION_REGISTRY.with(|registry| {
         registry
             .borrow_mut()
@@ -146,6 +195,14 @@ pub(super) fn register_session(session: &Rc<SessionCore>, cache: &Rc<DurableCach
             .borrow_mut()
             .push((session.publisher_identity(), Rc::downgrade(cache)));
     });
+}
+
+pub fn observation_storage_counts_for_test() -> (usize, usize, usize) {
+    (
+        JOURNAL.with(|journal| journal.borrow().len()),
+        SESSION_REGISTRY.with(|registry| registry.borrow().len()),
+        CACHE_REGISTRY.with(|registry| registry.borrow().len()),
+    )
 }
 
 pub(super) fn record_session_created(project: u64, publisher: u64) {

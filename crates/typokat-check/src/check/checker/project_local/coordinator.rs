@@ -1,6 +1,5 @@
 //! Product-key scheduler and atomic terminal publication.
 
-use super::fault_gate;
 use super::lowerer::{lower_product_groups, ProductLoweringSeed};
 use super::project_local_pass_port::{
     project_local_published_types, ContainerKind, DeclarationPayload, DependencyKind,
@@ -21,8 +20,8 @@ use super::{
     ProjectLocalForceAllTerminalRowForTest, ProjectLocalForceAllTypeKindForTest,
     ProjectLocalMappedProductGroupForTest, ProjectLocalProductDependencyForTest,
     ProjectLocalProductGroupForTest, ProjectLocalProductSccForTest,
-    ProjectLocalPublicationSccCommitForTest, ProjectLocalSemanticFaultForTest,
-    ProjectLocalSemanticPhaseForTest, ProjectLocalTerminalStateForTest,
+    ProjectLocalPublicationSccCommitForTest, ProjectLocalSemanticPhaseForTest,
+    ProjectLocalTerminalStateForTest,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -53,28 +52,27 @@ pub(super) struct ProjectLocalSemanticCoordinator {
     unavailable: BTreeSet<usize>,
     value_unavailable: BTreeSet<usize>,
     overlays: Vec<(TypeGroupId, ProjectLocalTypeOverlayDraft)>,
-    fault: Option<ProjectLocalSemanticFaultForTest>,
-    fault_reached: bool,
-    partial_publication_scc: Option<usize>,
     library_records: LibraryRecordAccumulator,
     validations: ProjectLocalValidationAccumulator,
 }
 
-pub(super) struct ProjectLocalPassDemandGateway<'a> {
+pub(super) struct ProjectLocalPassDemandGateway<'a, Commit> {
     coordinator: &'a mut ProjectLocalSemanticCoordinator,
     product: &'a LibraryDeclarationProduct,
     augmented_groups: &'a BTreeMap<usize, TypeGroupId>,
     native_array_groups: [Option<usize>; 2],
     type_products: BTreeMap<TypeGroupId, usize>,
     value_products: BTreeMap<usize, usize>,
+    commit: Commit,
 }
 
-impl<'a> ProjectLocalPassDemandGateway<'a> {
-    pub(super) fn new(
+impl<'a, Commit> ProjectLocalPassDemandGateway<'a, Commit> {
+    fn new_inner(
         coordinator: &'a mut ProjectLocalSemanticCoordinator,
         product: &'a LibraryDeclarationProduct,
         augmented_groups: &'a BTreeMap<usize, TypeGroupId>,
         native_array_groups: [Option<usize>; 2],
+        commit: Commit,
     ) -> Self {
         let type_products = coordinator
             .mapped_groups
@@ -105,9 +103,31 @@ impl<'a> ProjectLocalPassDemandGateway<'a> {
             native_array_groups,
             type_products,
             value_products,
+            commit,
         }
     }
 
+    pub(super) fn with_commit(
+        coordinator: &'a mut ProjectLocalSemanticCoordinator,
+        product: &'a LibraryDeclarationProduct,
+        augmented_groups: &'a BTreeMap<usize, TypeGroupId>,
+        native_array_groups: [Option<usize>; 2],
+        commit: Commit,
+    ) -> Self {
+        Self::new_inner(
+            coordinator,
+            product,
+            augmented_groups,
+            native_array_groups,
+            commit,
+        )
+    }
+}
+
+impl<Commit> ProjectLocalPassDemandGateway<'_, Commit>
+where
+    Commit: FnMut(&mut ProjectLocalSemanticCoordinator) -> Result<(), &'static str>,
+{
     fn demand(
         &mut self,
         interner: &mut super::project_local_pass_port::Interner,
@@ -125,7 +145,7 @@ impl<'a> ProjectLocalPassDemandGateway<'a> {
             self.native_array_groups,
             ProjectLocalSemanticPhaseForTest::Ordinary,
         );
-        self.coordinator.commit_demanded_checked()?;
+        (self.commit)(self.coordinator)?;
         self.verify_requested_ready(product_group)?;
         self.snapshot()
     }
@@ -237,7 +257,10 @@ impl<'a> ProjectLocalPassDemandGateway<'a> {
     }
 }
 
-impl ProjectLocalUserDemandGateway for ProjectLocalPassDemandGateway<'_> {
+impl<Commit> ProjectLocalUserDemandGateway for ProjectLocalPassDemandGateway<'_, Commit>
+where
+    Commit: FnMut(&mut ProjectLocalSemanticCoordinator) -> Result<(), &'static str>,
+{
     fn demand_type_group(
         &mut self,
         interner: &mut super::project_local_pass_port::Interner,
@@ -271,17 +294,124 @@ impl ProjectLocalUserDemandGateway for ProjectLocalPassDemandGateway<'_> {
     }
 
     fn commit_staged(&mut self) -> Result<ProjectLocalDemandSnapshot, &'static str> {
-        self.coordinator.commit_demanded_checked()?;
+        (self.commit)(self.coordinator)?;
         self.snapshot()
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PublicationInjection {
+    None,
+    PublishBeforeSccComplete,
+    WriteResolvingToDurableCache,
+}
+
+trait PublicationFaultPolicy {
+    fn publish_before_scc_complete(&mut self, member_count: usize) -> bool;
+    fn write_resolving_to_durable_cache(&mut self) -> bool;
+    fn record_partial_publication(&mut self, scc: usize);
+    fn should_stop(&self) -> bool;
+}
+
+struct OrdinaryPublication;
+
+impl PublicationFaultPolicy for OrdinaryPublication {
+    fn publish_before_scc_complete(&mut self, _member_count: usize) -> bool {
+        false
+    }
+
+    fn write_resolving_to_durable_cache(&mut self) -> bool {
+        false
+    }
+
+    fn record_partial_publication(&mut self, _scc: usize) {}
+
+    fn should_stop(&self) -> bool {
+        false
+    }
+}
+
+struct InjectedPublication<Activate> {
+    injection: PublicationInjection,
+    reached: bool,
+    stop: bool,
+    activate: Activate,
+}
+
+impl<Activate> InjectedPublication<Activate> {
+    fn new(injection: PublicationInjection, activate: Activate) -> Self {
+        Self {
+            injection,
+            reached: false,
+            stop: false,
+            activate,
+        }
+    }
+}
+
+impl<Activate: FnMut(PublicationInjection)> PublicationFaultPolicy
+    for InjectedPublication<Activate>
+{
+    fn publish_before_scc_complete(&mut self, member_count: usize) -> bool {
+        let reached = !self.reached
+            && member_count > 1
+            && self.injection == PublicationInjection::PublishBeforeSccComplete;
+        if reached {
+            self.reached = true;
+            (self.activate)(self.injection);
+        }
+        reached
+    }
+
+    fn write_resolving_to_durable_cache(&mut self) -> bool {
+        let reached =
+            !self.reached && self.injection == PublicationInjection::WriteResolvingToDurableCache;
+        if reached {
+            self.reached = true;
+            (self.activate)(self.injection);
+        }
+        reached
+    }
+
+    fn record_partial_publication(&mut self, _scc: usize) {
+        self.stop = true;
+    }
+
+    fn should_stop(&self) -> bool {
+        self.stop
+    }
+}
+
 impl ProjectLocalSemanticCoordinator {
-    pub(super) fn new(
+    pub(super) fn new_ordinary(
         product: &LibraryDeclarationProduct,
         mapped_groups: Vec<ProjectLocalMappedProductGroupForTest>,
         session: Rc<SessionCore>,
-        fault: Option<ProjectLocalSemanticFaultForTest>,
+    ) -> Self {
+        let dependencies = product_dependencies(product);
+        Self::new_inner(product, mapped_groups, session, dependencies)
+    }
+
+    pub(super) fn new_with_dependencies(
+        product: &LibraryDeclarationProduct,
+        mapped_groups: Vec<ProjectLocalMappedProductGroupForTest>,
+        session: Rc<SessionCore>,
+        dependencies: Vec<ProjectLocalProductDependencyForTest>,
+    ) -> Self {
+        Self::new_inner(product, mapped_groups, session, dependencies)
+    }
+
+    pub(super) fn dependency_rows(
+        product: &LibraryDeclarationProduct,
+    ) -> Vec<ProjectLocalProductDependencyForTest> {
+        product_dependencies(product)
+    }
+
+    fn new_inner(
+        product: &LibraryDeclarationProduct,
+        mapped_groups: Vec<ProjectLocalMappedProductGroupForTest>,
+        session: Rc<SessionCore>,
+        dependencies: Vec<ProjectLocalProductDependencyForTest>,
     ) -> Self {
         let groups = product
             .groups()
@@ -298,29 +428,6 @@ impl ProjectLocalSemanticCoordinator {
                 has_namespace: group.slots.namespace,
             })
             .collect::<Vec<_>>();
-        let mut dependencies = product
-            .dependency_rows()
-            .iter()
-            .filter_map(|row| {
-                let DependencyTarget::Group(target) = row.target else {
-                    return None;
-                };
-                let source = &product.sources()[row.site.source.index()];
-                Some(ProjectLocalProductDependencyForTest {
-                    owner: row.owner.index(),
-                    target: target.index(),
-                    kind: dependency_kind_name(row.kind).to_owned(),
-                    source_path: product.strings()[source.name.index()].clone(),
-                    source_start: row.site.start,
-                })
-            })
-            .collect::<Vec<_>>();
-        dependencies.sort();
-        let fault_reached =
-            fault_gate::activate_if(fault, ProjectLocalSemanticFaultForTest::OmitDependencyEdge);
-        if fault_reached {
-            dependencies.pop();
-        }
         let mut dependency_targets = BTreeMap::<usize, Vec<usize>>::new();
         for row in &dependencies {
             dependency_targets
@@ -418,9 +525,6 @@ impl ProjectLocalSemanticCoordinator {
             unavailable: BTreeSet::new(),
             value_unavailable: BTreeSet::new(),
             overlays: Vec::new(),
-            fault,
-            fault_reached,
-            partial_publication_scc: None,
             library_records: LibraryRecordAccumulator::default(),
             validations: ProjectLocalValidationAccumulator::default(),
         }
@@ -591,7 +695,7 @@ impl ProjectLocalSemanticCoordinator {
         &self.demand_roots
     }
 
-    pub(super) fn commit_demanded(&mut self) {
+    fn commit_demanded<Policy: PublicationFaultPolicy>(&mut self, policy: &mut Policy) {
         let pending_sccs = self.pending_sccs.clone();
         self.pending_sccs.clear();
         for scc in pending_sccs {
@@ -599,16 +703,36 @@ impl ProjectLocalSemanticCoordinator {
             let group_value_types = self.semantic_group_value_types.clone();
             let mut unavailable = self.unavailable.clone();
             unavailable.extend(self.value_unavailable.iter().copied());
-            self.commit_component(scc, &group_types, &group_value_types, &unavailable);
-            if self.partial_publication_scc.is_some() {
+            self.commit_component(scc, &group_types, &group_value_types, &unavailable, policy);
+            if policy.should_stop() {
                 break;
             }
         }
     }
 
     pub(super) fn commit_demanded_checked(&mut self) -> Result<(), &'static str> {
+        let mut policy = OrdinaryPublication;
+        self.commit_demanded_checked_inner(&mut policy)
+    }
+
+    pub(super) fn commit_demanded_checked_with_injection<Activate>(
+        &mut self,
+        injection: PublicationInjection,
+        activate: Activate,
+    ) -> Result<(), &'static str>
+    where
+        Activate: FnMut(PublicationInjection),
+    {
+        let mut policy = InjectedPublication::new(injection, activate);
+        self.commit_demanded_checked_inner(&mut policy)
+    }
+
+    fn commit_demanded_checked_inner<Policy: PublicationFaultPolicy>(
+        &mut self,
+        policy: &mut Policy,
+    ) -> Result<(), &'static str> {
         self.validate_publication_snapshot()?;
-        self.commit_demanded();
+        self.commit_demanded(policy);
         self.validate_publication_snapshot()
     }
 
@@ -739,19 +863,6 @@ impl ProjectLocalSemanticCoordinator {
             .collect()
     }
 
-    pub(super) fn invoke_force_all_from_ordinary_if_faulted(&mut self) -> bool {
-        if self.fault_reached
-            || !fault_gate::activate_if(
-                self.fault,
-                ProjectLocalSemanticFaultForTest::InvokeForceAllFromOrdinaryDemand,
-            )
-        {
-            return false;
-        }
-        self.fault_reached = true;
-        true
-    }
-
     fn force_all_ready_surface(
         &self,
         interner: &Interner,
@@ -842,12 +953,13 @@ impl ProjectLocalSemanticCoordinator {
         closure
     }
 
-    fn commit_component(
+    fn commit_component<Policy: PublicationFaultPolicy>(
         &mut self,
         scc_index: usize,
         group_types: &[Option<super::project_local_pass_port::TypeId>],
         group_value_types: &[Option<super::project_local_pass_port::TypeId>],
         unavailable: &BTreeSet<usize>,
+        policy: &mut Policy,
     ) {
         let scc = self.sccs[scc_index].clone();
         if scc
@@ -861,15 +973,9 @@ impl ProjectLocalSemanticCoordinator {
             .members
             .iter()
             .any(|member| unavailable.contains(&member.product_key));
-        let premature = !self.fault_reached
-            && scc.members.len() > 1
-            && fault_gate::activate_if(
-                self.fault,
-                ProjectLocalSemanticFaultForTest::PublishBeforeSccComplete,
-            );
+        let premature = policy.publish_before_scc_complete(scc.members.len());
         if premature {
-            self.fault_reached = true;
-            self.partial_publication_scc = Some(scc_index);
+            policy.record_partial_publication(scc_index);
             let member = scc
                 .members
                 .first()
@@ -902,14 +1008,7 @@ impl ProjectLocalSemanticCoordinator {
             });
             return;
         }
-        let resolving_cache = !self.fault_reached
-            && fault_gate::activate_if(
-                self.fault,
-                ProjectLocalSemanticFaultForTest::WriteResolvingToDurableCache,
-            );
-        if resolving_cache {
-            self.fault_reached = true;
-        }
+        let resolving_cache = policy.write_resolving_to_durable_cache();
         let mut published = Vec::with_capacity(scc.members.len());
         for member in &scc.members {
             let (terminal, state) = if component_unavailable {
@@ -1037,6 +1136,30 @@ fn force_all_type_kind(interner: &Interner, ty: TypeId) -> ProjectLocalForceAllT
         TypeTag::EnumMember => ProjectLocalForceAllTypeKindForTest::EnumMember,
         TypeTag::AliasTemplate => ProjectLocalForceAllTypeKindForTest::AliasTemplate,
     }
+}
+
+fn product_dependencies(
+    product: &LibraryDeclarationProduct,
+) -> Vec<ProjectLocalProductDependencyForTest> {
+    let mut dependencies = product
+        .dependency_rows()
+        .iter()
+        .filter_map(|row| {
+            let DependencyTarget::Group(target) = row.target else {
+                return None;
+            };
+            let source = &product.sources()[row.site.source.index()];
+            Some(ProjectLocalProductDependencyForTest {
+                owner: row.owner.index(),
+                target: target.index(),
+                kind: dependency_kind_name(row.kind).to_owned(),
+                source_path: product.strings()[source.name.index()].clone(),
+                source_start: row.site.start,
+            })
+        })
+        .collect::<Vec<_>>();
+    dependencies.sort();
+    dependencies
 }
 
 const fn dependency_kind_name(kind: DependencyKind) -> &'static str {

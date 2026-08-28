@@ -1,15 +1,20 @@
 //! Capability-limited entry for the project-local semantic candidate.
 
-use super::coordinator::{ProjectLocalPassDemandGateway, ProjectLocalSemanticCoordinator};
+use super::coordinator::{
+    ProjectLocalPassDemandGateway, ProjectLocalSemanticCoordinator, PublicationInjection,
+};
+use super::fault_gate::FaultStateForTest;
 use super::global_owner::publish_final_global_contributors;
 use super::lowerer::{build_semantic_probes, SemanticProbeInput};
 use super::project_local_pass_port::{
     project_local_final_product_dependencies, project_local_final_type_group_fragment_counts,
     project_local_final_value_declaration_counts, project_local_probe_authority,
     project_local_published_types, project_local_semantic_query_state,
-    project_local_user_augmented_product_groups, run_project_local_user_pass, sha256_hex,
-    BoundProjectBinder, ContainerKind, LibraryBinderUnit, LibraryDeclarationProduct, NamespaceId,
-    ProjectLocalNamespaceSeed, ProjectLocalUserPassRequest, ProjectProgram, TypeGroupId,
+    project_local_user_augmented_product_groups, project_local_user_pass_observables,
+    run_project_local_user_pass, run_project_local_user_pass_for_test, sha256_hex,
+    BoundProjectBinder, CheckResult, ContainerKind, LibraryBinderUnit, LibraryDeclarationProduct,
+    NamespaceId, ProjectLocalNamespaceSeed, ProjectLocalUserPassOutput,
+    ProjectLocalUserPassRequest, ProjectProgram, TypeGroupId,
 };
 use super::session::SessionCore;
 use super::{
@@ -59,9 +64,177 @@ pub fn project_local_semantic_candidate_for_test<'ast>(
     programs: &[ProjectProgram<'ast>],
     request: ProjectLocalSemanticRequestForTest,
 ) -> Result<ProjectLocalSemanticTraceForTest, ProjectLocalCandidateErrorForTest> {
+    let prepared = prepare_project_local_execution_for_test(
+        product,
+        library_units,
+        bound,
+        programs,
+        &request.demand_roots,
+        request.fault,
+        request.force_all,
+    )?;
+    run_project_local_semantic_candidate(prepared, request)
+}
+
+pub(super) fn run_ordinary_project_local_semantics<'ast>(
+    product: &LibraryDeclarationProduct,
+    library_units: Vec<LibraryBinderUnit>,
+    bound: BoundProjectBinder,
+    programs: &[ProjectProgram<'ast>],
+) -> Result<Vec<CheckResult>, ProjectLocalCandidateErrorForTest> {
+    let mut prepared =
+        prepare_ordinary_project_local_execution(product, library_units, bound, programs)?;
+    let ordinary_validation_keys = prepared.ordinary_validation_keys.clone();
+    let ordinary_materialized_keys = prepared.ordinary_materialized_keys.clone();
+    let library_validations = prepared.coordinator.validations_for(
+        ordinary_validation_keys.iter().copied(),
+        ordinary_materialized_keys.iter().copied(),
+    );
+    let library_validation_groups = library_validation_groups(&prepared.coordinator);
+    let output = run_ordinary_project_local_user_pass(
+        &mut prepared,
+        library_validations,
+        library_validation_groups,
+    )?;
+    finish_project_local_publication(&mut prepared, &output)?;
+    Ok(output.results)
+}
+
+struct PreparedProjectLocalExecution<'run, 'ast> {
+    product: &'run LibraryDeclarationProduct,
+    library_units: Vec<LibraryBinderUnit>,
+    bound: Option<BoundProjectBinder>,
+    programs: &'run [ProjectProgram<'ast>],
+    session: Rc<SessionCore>,
+    coordinator: ProjectLocalSemanticCoordinator,
+    library_identity_groups: [Option<TypeGroupId>; 8],
+    native_array_groups: [Option<usize>; 2],
+    augmented_product_groups: std::collections::BTreeMap<usize, TypeGroupId>,
+    ordinary_demand_root_keys: Vec<usize>,
+    ordinary_validation_keys: Vec<usize>,
+    ordinary_materialized_keys: Vec<usize>,
+}
+
+struct PreparedProjectLocalExecutionForTest<'run, 'ast> {
+    prepared: PreparedProjectLocalExecution<'run, 'ast>,
+    fault_state: FaultStateForTest,
+}
+
+fn prepare_ordinary_project_local_execution<'run, 'ast>(
+    product: &'run LibraryDeclarationProduct,
+    library_units: Vec<LibraryBinderUnit>,
+    bound: BoundProjectBinder,
+    programs: &'run [ProjectProgram<'ast>],
+) -> Result<PreparedProjectLocalExecution<'run, 'ast>, ProjectLocalCandidateErrorForTest> {
     let session = SessionCore::start();
-    let project_session_identity = session.project_identity();
-    let publisher_session_identity = session.publisher_identity();
+    let mapped_groups = mapped_product_groups(product, &bound)?;
+    let coordinator =
+        ProjectLocalSemanticCoordinator::new_ordinary(product, mapped_groups, Rc::clone(&session));
+    let final_product_dependencies =
+        final_product_dependencies(product, &bound, programs, coordinator.mapped_groups())?;
+    prepare_project_local_execution(
+        product,
+        library_units,
+        bound,
+        programs,
+        session,
+        coordinator,
+        final_product_dependencies,
+        no_additional_product_demands,
+        ProjectLocalSemanticCoordinator::commit_demanded_checked,
+    )
+}
+
+fn prepare_project_local_execution_for_test<'run, 'ast>(
+    product: &'run LibraryDeclarationProduct,
+    library_units: Vec<LibraryBinderUnit>,
+    bound: BoundProjectBinder,
+    programs: &'run [ProjectProgram<'ast>],
+    demand_roots: &[super::ProjectLocalDemandRootForTest],
+    fault: Option<super::ProjectLocalSemanticFaultForTest>,
+    force_all: bool,
+) -> Result<PreparedProjectLocalExecutionForTest<'run, 'ast>, ProjectLocalCandidateErrorForTest> {
+    let session = SessionCore::start();
+    let mapped_groups = mapped_product_groups(product, &bound)?;
+    let mut fault_state = FaultStateForTest::new(fault);
+    let mut dependencies = ProjectLocalSemanticCoordinator::dependency_rows(product);
+    if fault_state.activate(super::ProjectLocalSemanticFaultForTest::OmitDependencyEdge) {
+        dependencies.pop();
+    }
+    let coordinator = ProjectLocalSemanticCoordinator::new_with_dependencies(
+        product,
+        mapped_groups,
+        Rc::clone(&session),
+        dependencies,
+    );
+    let requested_product_keys = demand_roots
+        .iter()
+        .filter_map(|root| match root {
+            super::ProjectLocalDemandRootForTest::ProductGroup(group) => Some(group),
+            _ => None,
+        })
+        .map(|group| {
+            (coordinator.groups().get(group.product_key) == Some(group))
+                .then_some(group.product_key)
+                .ok_or(
+                    ProjectLocalCandidateErrorForTest::MissingMappedProductGroup(group.product_key),
+                )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let final_product_dependencies = if force_all {
+        Vec::new()
+    } else {
+        final_product_dependencies(product, &bound, programs, coordinator.mapped_groups())?
+    };
+    let prepared = prepare_project_local_execution(
+        product,
+        library_units,
+        bound,
+        programs,
+        session,
+        coordinator,
+        final_product_dependencies,
+        move |coordinator, product, augmented_product_groups, native_array_groups| {
+            if requested_product_keys.is_empty() {
+                return Ok(());
+            }
+            for root in &requested_product_keys {
+                let _ = coordinator.demand_product_groups(
+                    product,
+                    &[*root],
+                    augmented_product_groups,
+                    native_array_groups,
+                );
+            }
+            Ok(())
+        },
+        |coordinator| commit_demanded_for_test(coordinator, &mut fault_state),
+    )?;
+    Ok(PreparedProjectLocalExecutionForTest {
+        prepared,
+        fault_state,
+    })
+}
+
+fn final_product_dependencies(
+    product: &LibraryDeclarationProduct,
+    bound: &BoundProjectBinder,
+    programs: &[ProjectProgram<'_>],
+    mapped_groups: &[ProjectLocalMappedProductGroupForTest],
+) -> Result<Vec<(usize, usize)>, ProjectLocalCandidateErrorForTest> {
+    let augmented_product_groups =
+        project_local_user_augmented_product_groups(bound, mapped_groups);
+    if augmented_product_groups.is_empty() {
+        return Ok(Vec::new());
+    }
+    project_local_final_product_dependencies(product, bound, programs)
+        .map_err(ProjectLocalCandidateErrorForTest::UserPass)
+}
+
+fn mapped_product_groups(
+    product: &LibraryDeclarationProduct,
+    bound: &BoundProjectBinder,
+) -> Result<Vec<ProjectLocalMappedProductGroupForTest>, ProjectLocalCandidateErrorForTest> {
     let map = bound
         .library_product_map_for_test()
         .ok_or(ProjectLocalCandidateErrorForTest::MissingProductBinderMap)?;
@@ -82,7 +255,7 @@ pub fn project_local_semantic_candidate_for_test<'ast>(
             },
         )
         .collect::<Vec<_>>();
-    let mapped_groups = product_groups
+    product_groups
         .iter()
         .map(|product_group| {
             let key = product.group_key_at(product_group.product_key).ok_or(
@@ -103,13 +276,38 @@ pub fn project_local_semantic_candidate_for_test<'ast>(
                 local_namespace: binding.namespace().map(|identity| identity.index()),
             })
         })
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut coordinator = ProjectLocalSemanticCoordinator::new(
-        product,
-        mapped_groups,
-        Rc::clone(&session),
-        request.fault,
-    );
+        .collect()
+}
+
+fn no_additional_product_demands(
+    _coordinator: &mut ProjectLocalSemanticCoordinator,
+    _product: &LibraryDeclarationProduct,
+    _augmented_product_groups: &std::collections::BTreeMap<usize, TypeGroupId>,
+    _native_array_groups: [Option<usize>; 2],
+) -> Result<(), &'static str> {
+    Ok(())
+}
+
+fn prepare_project_local_execution<'run, 'ast, Demand, Commit>(
+    product: &'run LibraryDeclarationProduct,
+    library_units: Vec<LibraryBinderUnit>,
+    bound: BoundProjectBinder,
+    programs: &'run [ProjectProgram<'ast>],
+    session: Rc<SessionCore>,
+    mut coordinator: ProjectLocalSemanticCoordinator,
+    final_product_dependencies: Vec<(usize, usize)>,
+    mut demand: Demand,
+    mut commit: Commit,
+) -> Result<PreparedProjectLocalExecution<'run, 'ast>, ProjectLocalCandidateErrorForTest>
+where
+    Demand: FnMut(
+        &mut ProjectLocalSemanticCoordinator,
+        &LibraryDeclarationProduct,
+        &std::collections::BTreeMap<usize, TypeGroupId>,
+        [Option<usize>; 2],
+    ) -> Result<(), &'static str>,
+    Commit: FnMut(&mut ProjectLocalSemanticCoordinator) -> Result<(), &'static str>,
+{
     let library_identity_groups = [
         "Array",
         "ReadonlyArray",
@@ -142,18 +340,6 @@ pub fn project_local_semantic_candidate_for_test<'ast>(
         });
     let augmented_product_groups =
         project_local_user_augmented_product_groups(&bound, coordinator.mapped_groups());
-    let final_product_dependencies = if request.force_all || augmented_product_groups.is_empty() {
-        Vec::new()
-    } else {
-        project_local_final_product_dependencies(product, &bound, programs)
-            .map_err(ProjectLocalCandidateErrorForTest::UserPass)?
-    };
-    let final_type_group_fragment_counts =
-        project_local_final_type_group_fragment_counts(&bound, coordinator.mapped_groups());
-    let final_value_declaration_counts =
-        project_local_final_value_declaration_counts(&bound, coordinator.mapped_groups());
-    let probe_authority = project_local_probe_authority(product, &bound)
-        .ok_or(ProjectLocalCandidateErrorForTest::MissingProductBinderMap)?;
     let augmented_roots = augmented_product_groups.keys().copied().collect::<Vec<_>>();
     for root in augmented_roots {
         let _ = coordinator.demand_product_groups(
@@ -163,6 +349,13 @@ pub fn project_local_semantic_candidate_for_test<'ast>(
             native_array_groups,
         );
     }
+    demand(
+        &mut coordinator,
+        product,
+        &augmented_product_groups,
+        native_array_groups,
+    )
+    .map_err(ProjectLocalCandidateErrorForTest::UserPass)?;
     let ordinary_demand_root_keys = coordinator.demand_roots().to_vec();
     let ordinary_validation_closure = coordinator.validation_owner_closure(
         augmented_product_groups.keys().copied(),
@@ -174,63 +367,58 @@ pub fn project_local_semantic_candidate_for_test<'ast>(
         &augmented_product_groups,
         native_array_groups,
     );
-    coordinator
-        .commit_demanded_checked()
-        .map_err(ProjectLocalCandidateErrorForTest::UserPass)?;
+    commit(&mut coordinator).map_err(ProjectLocalCandidateErrorForTest::UserPass)?;
     let ordinary_materialized_keys = coordinator.materialized();
     let ordinary_validation_keys = ordinary_validation_closure
         .into_iter()
         .filter(|key| coordinator.ready().contains(key))
         .collect::<Vec<_>>();
-    let ordinary_incomplete_records = coordinator.library_records();
-    let (force_all_visited_keys, force_all_additional_materialized_keys) = if request.force_all {
-        let all_groups = coordinator
-            .groups()
-            .iter()
-            .map(|group| group.product_key)
-            .collect::<Vec<_>>();
-        let ordinary_materialized = ordinary_materialized_keys
-            .iter()
-            .copied()
-            .collect::<BTreeSet<_>>();
-        let _ = coordinator.demand_product_groups_for_phase(
-            product,
-            &all_groups,
-            &augmented_product_groups,
-            native_array_groups,
-            ProjectLocalSemanticPhaseForTest::ForceAll,
-        );
-        coordinator
-            .commit_demanded_checked()
-            .map_err(ProjectLocalCandidateErrorForTest::UserPass)?;
-        let additional = coordinator
-            .materialized()
-            .into_iter()
-            .filter(|key| !ordinary_materialized.contains(key))
-            .collect::<Vec<_>>();
-        (all_groups, additional)
+    Ok(PreparedProjectLocalExecution {
+        product,
+        library_units,
+        bound: Some(bound),
+        programs,
+        session,
+        coordinator,
+        library_identity_groups,
+        native_array_groups,
+        augmented_product_groups,
+        ordinary_demand_root_keys,
+        ordinary_validation_keys,
+        ordinary_materialized_keys,
+    })
+}
+
+fn commit_demanded_for_test(
+    coordinator: &mut ProjectLocalSemanticCoordinator,
+    fault_state: &mut FaultStateForTest,
+) -> Result<(), &'static str> {
+    let (injection, reached) = if fault_state.is_available() {
+        match fault_state.requested() {
+            Some(super::ProjectLocalSemanticFaultForTest::PublishBeforeSccComplete) => (
+                PublicationInjection::PublishBeforeSccComplete,
+                Some(super::ProjectLocalSemanticFaultForTest::PublishBeforeSccComplete),
+            ),
+            Some(super::ProjectLocalSemanticFaultForTest::WriteResolvingToDurableCache) => (
+                PublicationInjection::WriteResolvingToDurableCache,
+                Some(super::ProjectLocalSemanticFaultForTest::WriteResolvingToDurableCache),
+            ),
+            _ => (PublicationInjection::None, None),
+        }
     } else {
-        (Vec::new(), Vec::new())
+        (PublicationInjection::None, None)
     };
-    let force_all_validation_keys = request.force_all.then(|| coordinator.ready_groups());
-    let force_all_incomplete_records = request.force_all.then(|| coordinator.library_records());
-    let scheduled_validation_keys = if request.force_all {
-        force_all_validation_keys
-            .as_ref()
-            .expect("force_all validation roots were captured")
-    } else {
-        &ordinary_validation_keys
-    };
-    let visited_validation_keys = if request.force_all {
-        &force_all_visited_keys
-    } else {
-        &ordinary_materialized_keys
-    };
-    let library_validations = coordinator.validations_for(
-        scheduled_validation_keys.iter().copied(),
-        visited_validation_keys.iter().copied(),
-    );
-    let library_validation_groups = coordinator
+    coordinator.commit_demanded_checked_with_injection(injection, |activated| {
+        debug_assert_eq!(activated, injection);
+        fault_state
+            .record_publication(reached.expect("publication injection has an authenticated fault"));
+    })
+}
+
+fn library_validation_groups(
+    coordinator: &ProjectLocalSemanticCoordinator,
+) -> std::collections::BTreeMap<usize, TypeGroupId> {
+    coordinator
         .mapped_groups()
         .iter()
         .filter_map(|row| {
@@ -241,39 +429,58 @@ pub fn project_local_semantic_candidate_for_test<'ast>(
                 )
             })
         })
-        .collect();
-    let library_source_paths = product
-        .sources()
-        .iter()
-        .map(|source| {
-            (
-                super::project_local_pass_port::LibraryFileOrdinal::new(
-                    usize::try_from(source.ordinal).expect("library source ordinal fits usize"),
-                ),
-                product.strings()[source.name.index()].clone(),
-            )
-        })
-        .collect();
-    let mut source_programs = programs.iter().collect::<Vec<_>>();
-    source_programs.sort_by_key(|program| match program.compilation_unit.origin {
-        super::project_local_pass_port::CompilationOrigin::User(ordinal) => ordinal.index(),
-        super::project_local_pass_port::CompilationOrigin::Library(ordinal) => ordinal.index(),
-    });
-    let source_inputs = source_programs
-        .iter()
-        .map(|program| ProjectLocalSourceInputForTest {
-            path: program.normalized_path.clone(),
-            byte_len: program.program.source_text.len(),
-            sha256: sha256_hex(program.program.source_text.as_bytes()),
-        })
-        .collect::<Vec<_>>();
-    let source_visit_rows = source_inputs
-        .iter()
-        .map(|input| input.path.clone())
-        .collect::<Vec<_>>();
-    let global_publication =
-        publish_final_global_contributors(product, &bound, programs, request.fault)
-            .map_err(ProjectLocalCandidateErrorForTest::GlobalObject)?;
+        .collect()
+}
+
+fn run_ordinary_project_local_user_pass(
+    prepared: &mut PreparedProjectLocalExecution<'_, '_>,
+    library_validations: Vec<super::validation::ProjectLocalValidationCandidate>,
+    library_validation_groups: std::collections::BTreeMap<usize, TypeGroupId>,
+) -> Result<ProjectLocalUserPassOutput, ProjectLocalCandidateErrorForTest> {
+    let bound = prepared
+        .bound
+        .take()
+        .expect("prepared project-local execution owns its binder");
+    run_project_local_user_pass_core(
+        prepared.product,
+        prepared.programs,
+        &prepared.session,
+        &mut prepared.coordinator,
+        &prepared.augmented_product_groups,
+        prepared.native_array_groups,
+        bound,
+        prepared.library_identity_groups,
+        library_validations,
+        library_validation_groups,
+        Vec::new(),
+        ProjectLocalSemanticCoordinator::commit_demanded_checked,
+        run_project_local_user_pass,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_project_local_user_pass_core<'ast, Commit, Run>(
+    product: &LibraryDeclarationProduct,
+    programs: &[ProjectProgram<'ast>],
+    session: &Rc<SessionCore>,
+    coordinator: &mut ProjectLocalSemanticCoordinator,
+    augmented_product_groups: &std::collections::BTreeMap<usize, TypeGroupId>,
+    native_array_groups: [Option<usize>; 2],
+    bound: BoundProjectBinder,
+    library_identity_groups: [Option<TypeGroupId>; 8],
+    library_validations: Vec<super::validation::ProjectLocalValidationCandidate>,
+    library_validation_groups: std::collections::BTreeMap<usize, TypeGroupId>,
+    user_namespace_demands: Vec<String>,
+    commit: Commit,
+    run: Run,
+) -> Result<ProjectLocalUserPassOutput, ProjectLocalCandidateErrorForTest>
+where
+    Commit: FnMut(&mut ProjectLocalSemanticCoordinator) -> Result<(), &'static str>,
+    Run: for<'pass> FnOnce(
+        &'pass mut super::project_local_pass_port::Interner,
+        ProjectLocalUserPassRequest<'pass, 'ast>,
+    ) -> Result<ProjectLocalUserPassOutput, &'static str>,
+{
     let published_types = project_local_published_types(
         product,
         coordinator.mapped_groups(),
@@ -334,24 +541,17 @@ pub fn project_local_semantic_candidate_for_test<'ast>(
             })
         })
         .collect();
-    let user_namespace_demands = request
-        .demand_roots
-        .iter()
-        .filter_map(|root| match root {
-            super::ProjectLocalDemandRootForTest::UserNamespace(name) => Some(name.clone()),
-            _ => None,
-        })
-        .collect();
     let product_type_overlays = coordinator.overlays().to_vec();
-    let user_output = session
+    session
         .with_interner(|interner| {
-            let mut demand_gateway = ProjectLocalPassDemandGateway::new(
-                &mut coordinator,
+            let mut demand_gateway = ProjectLocalPassDemandGateway::with_commit(
+                coordinator,
                 product,
-                &augmented_product_groups,
+                augmented_product_groups,
                 native_array_groups,
+                commit,
             );
-            run_project_local_user_pass(
+            run(
                 interner,
                 ProjectLocalUserPassRequest {
                     bound,
@@ -367,15 +567,51 @@ pub fn project_local_semantic_candidate_for_test<'ast>(
                     demand_gateway: &mut demand_gateway,
                     library_validations,
                     library_validation_groups,
-                    library_source_paths,
-                    fault: request.fault,
                 },
             )
         })
-        .map_err(ProjectLocalCandidateErrorForTest::UserPass)?;
+        .map_err(ProjectLocalCandidateErrorForTest::UserPass)
+}
+
+fn finish_project_local_publication(
+    prepared: &mut PreparedProjectLocalExecution<'_, '_>,
+    output: &ProjectLocalUserPassOutput,
+) -> Result<(), ProjectLocalCandidateErrorForTest> {
+    finish_project_local_publication_parts(&mut prepared.coordinator, output)
+}
+
+fn finish_project_local_publication_parts(
+    coordinator: &mut ProjectLocalSemanticCoordinator,
+    output: &ProjectLocalUserPassOutput,
+) -> Result<(), ProjectLocalCandidateErrorForTest> {
+    finish_project_local_publication_parts_inner(
+        coordinator,
+        output,
+        ProjectLocalSemanticCoordinator::commit_demanded_checked,
+    )
+}
+
+fn finish_project_local_publication_parts_for_test(
+    coordinator: &mut ProjectLocalSemanticCoordinator,
+    output: &ProjectLocalUserPassOutput,
+    fault_state: &mut FaultStateForTest,
+) -> Result<(), ProjectLocalCandidateErrorForTest> {
+    finish_project_local_publication_parts_inner(coordinator, output, |coordinator| {
+        commit_demanded_for_test(coordinator, fault_state)
+    })
+}
+
+fn finish_project_local_publication_parts_inner<Commit>(
+    coordinator: &mut ProjectLocalSemanticCoordinator,
+    output: &ProjectLocalUserPassOutput,
+    mut commit: Commit,
+) -> Result<(), ProjectLocalCandidateErrorForTest>
+where
+    Commit: FnMut(&mut ProjectLocalSemanticCoordinator) -> Result<(), &'static str>,
+{
     for (local, overlay) in coordinator.overlays() {
         let stable = matches!(
-            user_output.published_type_groups.get(local.index()),
+            output.published_type_groups.get(local.index()),
             Some(super::project_local_pass_port::PublishedTypeGroupTerminal::Ready(group))
                 if group.surface
                     == super::project_local_pass_port::PublishedTypeGroupSurface::Template(
@@ -388,9 +624,157 @@ pub fn project_local_semantic_candidate_for_test<'ast>(
             ));
         }
     }
-    coordinator
-        .commit_demanded_checked()
-        .map_err(ProjectLocalCandidateErrorForTest::UserPass)?;
+    commit(coordinator).map_err(ProjectLocalCandidateErrorForTest::UserPass)
+}
+
+fn run_project_local_semantic_candidate(
+    prepared_for_test: PreparedProjectLocalExecutionForTest<'_, '_>,
+    request: ProjectLocalSemanticRequestForTest,
+) -> Result<ProjectLocalSemanticTraceForTest, ProjectLocalCandidateErrorForTest> {
+    let PreparedProjectLocalExecutionForTest {
+        prepared,
+        mut fault_state,
+    } = prepared_for_test;
+    let PreparedProjectLocalExecution {
+        product,
+        library_units,
+        mut bound,
+        programs,
+        session,
+        mut coordinator,
+        library_identity_groups,
+        native_array_groups,
+        augmented_product_groups,
+        ordinary_demand_root_keys,
+        ordinary_validation_keys,
+        ordinary_materialized_keys,
+    } = prepared;
+    let project_session_identity = session.project_identity();
+    let publisher_session_identity = session.publisher_identity();
+    let bound = bound
+        .take()
+        .expect("prepared project-local execution owns its binder");
+    let trace_projection_inputs = (
+        project_local_final_type_group_fragment_counts(&bound, coordinator.mapped_groups()),
+        project_local_final_value_declaration_counts(&bound, coordinator.mapped_groups()),
+        project_local_probe_authority(product, &bound)
+            .ok_or(ProjectLocalCandidateErrorForTest::MissingProductBinderMap)?,
+    );
+    let ordinary_incomplete_records = coordinator.library_records();
+    let (force_all_visited_keys, force_all_additional_materialized_keys) = if request.force_all {
+        let all_groups = coordinator
+            .groups()
+            .iter()
+            .map(|group| group.product_key)
+            .collect::<Vec<_>>();
+        let ordinary_materialized = ordinary_materialized_keys
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let _ = coordinator.demand_product_groups_for_phase(
+            product,
+            &all_groups,
+            &augmented_product_groups,
+            native_array_groups,
+            ProjectLocalSemanticPhaseForTest::ForceAll,
+        );
+        commit_demanded_for_test(&mut coordinator, &mut fault_state)
+            .map_err(ProjectLocalCandidateErrorForTest::UserPass)?;
+        let additional = coordinator
+            .materialized()
+            .into_iter()
+            .filter(|key| !ordinary_materialized.contains(key))
+            .collect::<Vec<_>>();
+        (all_groups, additional)
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    let force_all_validation_keys = request.force_all.then(|| coordinator.ready_groups());
+    let force_all_incomplete_records = request.force_all.then(|| coordinator.library_records());
+    let scheduled_validation_keys = if request.force_all {
+        force_all_validation_keys
+            .as_ref()
+            .expect("force_all validation roots were captured")
+    } else {
+        &ordinary_validation_keys
+    };
+    let visited_validation_keys = if request.force_all {
+        &force_all_visited_keys
+    } else {
+        &ordinary_materialized_keys
+    };
+    let library_validations = coordinator.validations_for(
+        scheduled_validation_keys.iter().copied(),
+        visited_validation_keys.iter().copied(),
+    );
+    let library_validation_groups = library_validation_groups(&coordinator);
+    let global_publication =
+        publish_final_global_contributors(product, &bound, programs, request.fault)
+            .map_err(ProjectLocalCandidateErrorForTest::GlobalObject)?;
+    let user_namespace_demands = request
+        .demand_roots
+        .iter()
+        .filter_map(|root| match root {
+            super::ProjectLocalDemandRootForTest::UserNamespace(name) => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+    let raw_user_output = run_project_local_user_pass_core(
+        product,
+        programs,
+        &session,
+        &mut coordinator,
+        &augmented_product_groups,
+        native_array_groups,
+        bound,
+        library_identity_groups,
+        library_validations,
+        library_validation_groups,
+        user_namespace_demands,
+        |coordinator| commit_demanded_for_test(coordinator, &mut fault_state),
+        |interner, pass_request| {
+            run_project_local_user_pass_for_test(interner, pass_request, request.fault)
+        },
+    )?;
+    finish_project_local_publication_parts_for_test(
+        &mut coordinator,
+        &raw_user_output,
+        &mut fault_state,
+    )?;
+    let (final_type_group_fragment_counts, final_value_declaration_counts, probe_authority) =
+        trace_projection_inputs;
+    let library_source_paths = product
+        .sources()
+        .iter()
+        .map(|source| {
+            (
+                super::project_local_pass_port::LibraryFileOrdinal::new(
+                    usize::try_from(source.ordinal).expect("library source ordinal fits usize"),
+                ),
+                product.strings()[source.name.index()].clone(),
+            )
+        })
+        .collect();
+    let mut source_programs = programs.iter().collect::<Vec<_>>();
+    source_programs.sort_by_key(|program| match program.compilation_unit.origin {
+        super::project_local_pass_port::CompilationOrigin::User(ordinal) => ordinal.index(),
+        super::project_local_pass_port::CompilationOrigin::Library(ordinal) => ordinal.index(),
+    });
+    let source_inputs = source_programs
+        .iter()
+        .map(|program| ProjectLocalSourceInputForTest {
+            path: program.normalized_path.clone(),
+            byte_len: program.program.source_text.len(),
+            sha256: sha256_hex(program.program.source_text.as_bytes()),
+        })
+        .collect::<Vec<_>>();
+    let source_visit_rows = source_inputs
+        .iter()
+        .map(|input| input.path.clone())
+        .collect::<Vec<_>>();
+    let user_output =
+        project_local_user_pass_observables(&raw_user_output, programs, &library_source_paths)
+            .map_err(ProjectLocalCandidateErrorForTest::UserPass)?;
     let materialized_keys = ordinary_materialized_keys;
     let materialized_product_groups = materialized_keys
         .iter()
@@ -570,12 +954,14 @@ pub fn project_local_semantic_candidate_for_test<'ast>(
             }
         })
         .collect();
-    let ordinary_force_all_invocations = if coordinator.invoke_force_all_from_ordinary_if_faulted()
+    let ordinary_force_all_invocations = if fault_state
+        .activate(super::ProjectLocalSemanticFaultForTest::InvokeForceAllFromOrdinaryDemand)
     {
         Vec::from(["fault".to_owned()])
     } else {
         Vec::new()
     };
+    let check_results = raw_user_output.results;
     let trace = ProjectLocalSemanticTraceForTest {
         case_id: request.case_id.to_owned(),
         project_session_identity,
@@ -610,5 +996,6 @@ pub fn project_local_semantic_candidate_for_test<'ast>(
     session.receipt_built();
     drop((coordinator, library_units));
     drop(session);
+    drop(check_results);
     Ok(trace)
 }

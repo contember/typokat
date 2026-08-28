@@ -1,11 +1,19 @@
 //! Project and publisher lifetime ownership.
 
 use super::cache::DurableCache;
+use super::entry::run_ordinary_project_local_semantics;
 use super::observation;
 use super::project_local_pass_port::Interner;
+use crate::check::checker::{
+    bind_library_product_project_programs, CheckResult, LibraryProductProjectBindingError,
+};
+use crate::frontend::{AdmittedSourceReexports, DefaultModuleCandidates, ProjectProgram};
 use std::cell::RefCell;
+use std::fmt;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use typokat_library_product::LibraryDeclarationProduct;
 
 static NEXT_IDENTITY: AtomicU64 = AtomicU64::new(1);
 
@@ -16,6 +24,51 @@ fn next_identity() -> u64 {
         })
         .expect("project-local identity overflow")
 }
+
+/// One project-local check against one immutable library declaration product.
+pub struct CheckerSession {
+    product: Arc<LibraryDeclarationProduct>,
+}
+
+impl CheckerSession {
+    pub fn new(product: Arc<LibraryDeclarationProduct>) -> Self {
+        Self { product }
+    }
+
+    pub fn check_project_programs<'ast>(
+        self,
+        programs: &[ProjectProgram<'ast>],
+        source_reexports: &AdmittedSourceReexports,
+        default_modules: &DefaultModuleCandidates,
+    ) -> Result<Vec<CheckResult>, CheckerSessionError> {
+        let (library_units, bound) = bind_library_product_project_programs(
+            &self.product,
+            programs,
+            source_reexports,
+            default_modules,
+        )
+        .map_err(CheckerSessionError::Binding)?;
+        run_ordinary_project_local_semantics(&self.product, library_units, bound, programs)
+            .map_err(|error| CheckerSessionError::Semantic(error.to_string()))
+    }
+}
+
+#[derive(Debug)]
+pub enum CheckerSessionError {
+    Binding(LibraryProductProjectBindingError),
+    Semantic(String),
+}
+
+impl fmt::Display for CheckerSessionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Binding(error) => error.fmt(formatter),
+            Self::Semantic(error) => formatter.write_str(error),
+        }
+    }
+}
+
+impl std::error::Error for CheckerSessionError {}
 
 pub(super) struct SessionCore {
     project: u64,

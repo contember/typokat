@@ -37,7 +37,8 @@ pub(super) use crate::check::checker::type_groups::{
     PublishedTypeGroupSurface, PublishedTypeGroupTerminal,
 };
 pub(super) use crate::check::checker::{
-    check_bound_project_local_programs, BoundProjectBinder, ProjectLocalUserPassPlan,
+    check_bound_project_local_programs, BoundProjectBinder, CheckResult,
+    ProjectLocalUserPassOutput, ProjectLocalUserPassPlan,
 };
 pub(super) use crate::check::query::{SemanticQueryCoordinator, SemanticQueryState};
 pub(super) use crate::class_semantics::{DemandOutcome, PublishedClasses};
@@ -521,7 +522,6 @@ pub(super) struct ProjectLocalUserPassObservables {
     pub(super) event_ledger: Vec<ProjectLocalUserEventRecordForTest>,
     pub(super) check_results: Vec<ProjectLocalCheckResultForTest>,
     pub(super) unavailable_audits: Vec<ProjectLocalUnavailableAuditForTest>,
-    pub(super) published_type_groups: Vec<PublishedTypeGroupTerminal>,
     pub(super) library_records: Vec<(usize, super::ProjectLocalLibraryRecordForTest)>,
 }
 
@@ -539,14 +539,44 @@ pub(super) struct ProjectLocalUserPassRequest<'a, 'ast> {
     pub(super) demand_gateway: &'a mut dyn ProjectLocalUserDemandGateway,
     pub(super) library_validations: Vec<ProjectLocalValidationCandidate>,
     pub(super) library_validation_groups: BTreeMap<usize, TypeGroupId>,
-    pub(super) library_source_paths: BTreeMap<LibraryFileOrdinal, String>,
-    pub(super) fault: Option<ProjectLocalSemanticFaultForTest>,
 }
 
 pub(super) fn run_project_local_user_pass<'ast>(
     interner: &mut Interner,
     request: ProjectLocalUserPassRequest<'_, 'ast>,
-) -> Result<ProjectLocalUserPassObservables, &'static str> {
+) -> Result<ProjectLocalUserPassOutput, &'static str> {
+    run_project_local_user_pass_inner(interner, request, false)
+}
+
+pub(super) fn run_project_local_user_pass_for_test<'ast>(
+    interner: &mut Interner,
+    request: ProjectLocalUserPassRequest<'_, 'ast>,
+    fault: Option<ProjectLocalSemanticFaultForTest>,
+) -> Result<ProjectLocalUserPassOutput, &'static str> {
+    let output = run_project_local_user_pass_inner(
+        interner,
+        request,
+        fault == Some(ProjectLocalSemanticFaultForTest::PublishProvisionalUnavailableWrite),
+    )?;
+    if output
+        .unavailable_namespaces
+        .iter()
+        .any(|namespace| !namespace.published_provisional_writes.is_empty())
+    {
+        let reached = super::fault_gate::activate_if(
+            fault,
+            ProjectLocalSemanticFaultForTest::PublishProvisionalUnavailableWrite,
+        );
+        debug_assert!(reached);
+    }
+    Ok(output)
+}
+
+fn run_project_local_user_pass_inner<'ast>(
+    interner: &mut Interner,
+    request: ProjectLocalUserPassRequest<'_, 'ast>,
+    inject_provisional_unavailable_write: bool,
+) -> Result<ProjectLocalUserPassOutput, &'static str> {
     let ProjectLocalUserPassRequest {
         bound,
         programs,
@@ -561,10 +591,8 @@ pub(super) fn run_project_local_user_pass<'ast>(
         demand_gateway,
         library_validations,
         library_validation_groups,
-        library_source_paths,
-        fault,
     } = request;
-    let output = check_bound_project_local_programs(
+    check_bound_project_local_programs(
         interner,
         programs,
         ProjectLocalUserPassPlan {
@@ -580,21 +608,16 @@ pub(super) fn run_project_local_user_pass<'ast>(
             demand_gateway,
             library_validations,
             library_validation_groups,
-            inject_provisional_unavailable_write: fault
-                == Some(ProjectLocalSemanticFaultForTest::PublishProvisionalUnavailableWrite),
+            inject_provisional_unavailable_write,
         },
-    )?;
-    if output
-        .unavailable_namespaces
-        .iter()
-        .any(|namespace| !namespace.published_provisional_writes.is_empty())
-    {
-        let reached = super::fault_gate::activate_if(
-            fault,
-            ProjectLocalSemanticFaultForTest::PublishProvisionalUnavailableWrite,
-        );
-        debug_assert!(reached);
-    }
+    )
+}
+
+pub(super) fn project_local_user_pass_observables(
+    output: &ProjectLocalUserPassOutput,
+    programs: &[ProjectProgram<'_>],
+    library_source_paths: &BTreeMap<LibraryFileOrdinal, String>,
+) -> Result<ProjectLocalUserPassObservables, &'static str> {
     let event_ledger = output
         .records
         .iter()
@@ -637,22 +660,22 @@ pub(super) fn run_project_local_user_pass<'ast>(
         .collect::<Result<Vec<_>, &'static str>>()?;
     let unavailable_audits = output
         .unavailable_namespaces
-        .into_iter()
+        .iter()
         .map(|namespace| {
             let fragments = namespace
                 .fragments
-                .into_iter()
+                .iter()
                 .map(|(origin, source_start)| {
                     let source_path = programs
                         .iter()
-                        .find(|program| program.compilation_unit.origin == origin)
+                        .find(|program| program.compilation_unit.origin == *origin)
                         .ok_or("project-local namespace fragment has no source program")?
                         .normalized_path
                         .clone();
                     Ok(ProjectLocalNamespaceFragmentForTest {
                         source_path,
                         origin: ProjectLocalContributorOriginForTest::User,
-                        source_start,
+                        source_start: *source_start,
                     })
                 })
                 .collect::<Result<Vec<_>, &'static str>>()?;
@@ -669,12 +692,12 @@ pub(super) fn run_project_local_user_pass<'ast>(
             };
             Ok(ProjectLocalUnavailableAuditForTest {
                 terminal: ProjectLocalUnavailableTerminalForTest {
-                    name: namespace.name,
+                    name: namespace.name.clone(),
                     fragments,
                     reason,
                 },
-                discarded_provisional_writes: namespace.discarded_provisional_writes,
-                published_provisional_writes: namespace.published_provisional_writes,
+                discarded_provisional_writes: namespace.discarded_provisional_writes.clone(),
+                published_provisional_writes: namespace.published_provisional_writes.clone(),
             })
         })
         .collect::<Result<Vec<_>, &'static str>>()?;
@@ -700,7 +723,6 @@ pub(super) fn run_project_local_user_pass<'ast>(
         event_ledger,
         check_results,
         unavailable_audits,
-        published_type_groups: output.published_type_groups,
         library_records,
     })
 }
