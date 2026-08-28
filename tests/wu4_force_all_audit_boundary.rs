@@ -24,18 +24,26 @@ fn project_local_force_all_has_one_semantic_producer() {
 }
 
 #[test]
-fn force_all_record_authority_starts_from_the_adr_0018_multiset() {
+fn force_all_record_authority_is_the_adr_0028_production_pin() {
     let root = repo_root();
-    let oracle = read(
+    let oracle_source = read(
         &root.join("tests/cases/sr_project_local_library_candidate/semantic-demand-oracle.json"),
     );
-    let oracle: serde_json::Value = serde_json::from_str(&oracle).expect("semantic demand oracle");
-    assert_eq!(oracle["library_force_all"]["count"], 558);
-    assert_eq!(oracle["library_force_all"]["diagnostics"], 267);
-    assert_eq!(oracle["library_force_all"]["incompletes"], 291);
+    let oracle: serde_json::Value =
+        serde_json::from_str(&oracle_source).expect("semantic demand oracle");
+    assert_eq!(oracle["library_force_all"]["count"], 709);
+    assert_eq!(oracle["library_force_all"]["diagnostics"], 322);
+    assert_eq!(oracle["library_force_all"]["incompletes"], 387);
+    assert!(!oracle_source.contains("\"count\": 558"));
 
     let named_census = read(&root.join("tests/fixtures/library-owned-records.txt"));
-    assert!(named_census.contains("# diagnostics: 267, incompletes: 291, records: 558"));
+    assert!(
+        named_census.starts_with("# typokat production-owned library record census (ADR-0028).\n")
+    );
+    assert!(named_census.contains("# diagnostics: 322, incompletes: 387, records: 709"));
+    assert!(!named_census.contains("ForceAllRecordAudit"));
+    assert!(!named_census.contains("ADR-0018"));
+    assert!(!named_census.contains("# diagnostics: 267, incompletes: 291, records: 558"));
 }
 
 fn repo_root() -> PathBuf {

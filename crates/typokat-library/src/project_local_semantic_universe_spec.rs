@@ -41,7 +41,7 @@ use typokat_library_product::{
 const ORACLE_BYTES: &[u8] = include_bytes!(
     "../../../tests/cases/sr_project_local_library_candidate/semantic-demand-oracle.json"
 );
-const ORACLE_SHA256: &str = "7c9cb807e2ade41b5eb550383ac805bf81bdd4352d9b6f9031bdd0c973c8da30";
+const ORACLE_SHA256: &str = "53473e09525e3c28051cb3af615edcdefb4d8d8eea01b06d4d223fe5147dd492";
 const PROFILE_IDENTITY: &str = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
 const TYPESCRIPT_REVISION: &str = "050880ce59e30b356b686bd3144efe24f875ebc8";
 const OFFICIAL_FRAME_PATH: &str = "conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatBetweenTupleAndArray.ts";
@@ -1622,13 +1622,18 @@ fn complete_source_black_box_oracle_matches_frozen_wu4_receipt() {
     let native = native_product_evidence(&product);
     let actual = complete_source_oracles(&provider);
     assert_black_box_controls(&actual);
-    let library_records = actual[0].1.library_records.clone();
-    for (case_id, oracle) in &actual {
-        assert_eq!(
-            oracle.library_records, library_records,
-            "library force_all drifted for {case_id}"
-        );
-    }
+    let inputs = case_inputs("array");
+    let mapped = mapped_native_evidence(&provider, &product, &inputs, &native);
+    let roots = case_demand_roots("array", &mapped);
+    let production = candidate_trace(
+        &provider,
+        candidate_request("array", inputs, roots, true, None),
+    );
+    let library_records = production
+        .trace
+        .force_all
+        .expect("production force-all receipt")
+        .library_records;
     let value = json!({
         "schema": 3,
         "profile_identity": PROFILE_IDENTITY,
@@ -2474,13 +2479,7 @@ fn request_product_roots_do_not_change_source_driven_output_or_passive_work() {
 
 #[test]
 fn project_local_production_force_all_census_emits_named_attributed_diff() {
-    const STARTING_BASELINE: &str =
-        include_str!("../../../tests/fixtures/library-owned-records.txt");
-    const CLOSED_EVIDENCE: [&str; 3] = [
-        "certified-intrinsic-marker",
-        "published-type-parameter-default",
-        "global-augmentation-region",
-    ];
+    const PRODUCTION_PIN: &str = include_str!("../../../tests/fixtures/library-owned-records.txt");
 
     let provider = LibraryBaseProvider::new();
     let product = provider.declaration_product().expect("declaration product");
@@ -2568,13 +2567,13 @@ fn project_local_production_force_all_census_emits_named_attributed_diff() {
         .collect::<Vec<_>>();
     current.sort();
 
-    let baseline = STARTING_BASELINE
+    let pinned = PRODUCTION_PIN
         .lines()
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
         .map(str::to_owned)
         .collect::<Vec<_>>();
     let mut delta = BTreeMap::<String, i64>::new();
-    for row in &baseline {
+    for row in &pinned {
         *delta.entry(row.clone()).or_default() -= 1;
     }
     for row in &current {
@@ -2591,54 +2590,6 @@ fn project_local_production_force_all_census_emits_named_attributed_diff() {
         }
     }
 
-    let attributions = BTreeMap::from([
-        (
-            "incomplete\tannotation-lower/intrinsic-keyword/self\tlib.es2015.iterable.d.ts:68:30\tintrinsic keyword type not modeled".to_owned(),
-            "certified-intrinsic-marker",
-        ),
-        (
-            "incomplete\tannotation-lower/intrinsic-keyword/self\tlib.es5.d.ts:1658:36\tintrinsic keyword type not modeled".to_owned(),
-            "certified-intrinsic-marker",
-        ),
-        (
-            "incomplete\tannotation-lower/intrinsic-keyword/self\tlib.es5.d.ts:1663:36\tintrinsic keyword type not modeled".to_owned(),
-            "certified-intrinsic-marker",
-        ),
-        (
-            "incomplete\tannotation-lower/intrinsic-keyword/self\tlib.es5.d.ts:1668:37\tintrinsic keyword type not modeled".to_owned(),
-            "certified-intrinsic-marker",
-        ),
-        (
-            "incomplete\tannotation-lower/intrinsic-keyword/self\tlib.es5.d.ts:1673:39\tintrinsic keyword type not modeled".to_owned(),
-            "certified-intrinsic-marker",
-        ),
-        (
-            "incomplete\tannotation-lower/intrinsic-keyword/self\tlib.es5.d.ts:1678:19\tintrinsic keyword type not modeled".to_owned(),
-            "certified-intrinsic-marker",
-        ),
-        (
-            "incomplete\tannotation-lower/type-parameter-default/self\tlib.scripthost.d.ts:225:29\ttype-parameter default not lowered".to_owned(),
-            "published-type-parameter-default",
-        ),
-        (
-            "incomplete\tdecl/global-declaration/self\tlib.es2025.iterator.d.ts:36:1\tglobal augmentation value publication not modeled".to_owned(),
-            "global-augmentation-region",
-        ),
-    ]);
-    assert!(attributions
-        .values()
-        .all(|evidence| CLOSED_EVIDENCE.contains(evidence)));
-    assert_eq!(
-        attributions.keys().cloned().collect::<Vec<_>>(),
-        removed,
-        "reviewed removal evidence must cover the exact removed multiset without unused rows",
-    );
-    let unattributed = removed
-        .iter()
-        .filter(|row| !attributions.contains_key(*row))
-        .cloned()
-        .collect::<Vec<_>>();
-
     let ready = force_all
         .terminal_census
         .iter()
@@ -2652,13 +2603,11 @@ fn project_local_production_force_all_census_emits_named_attributed_diff() {
     let unavailable = force_all
         .terminal_census
         .iter()
-        .filter_map(|row| match &row.terminal {
-            ProjectLocalForceAllTerminalForTest::Unavailable(reason) => {
-                Some(format!("{}={reason:?}", row.group.name))
-            }
-            ProjectLocalForceAllTerminalForTest::Ready { .. } => None,
+        .filter(|row| match &row.terminal {
+            ProjectLocalForceAllTerminalForTest::Unavailable(_) => true,
+            ProjectLocalForceAllTerminalForTest::Ready { .. } => false,
         })
-        .collect::<Vec<_>>();
+        .count();
     let mut receipt_rows = current.clone();
     receipt_rows.extend(force_all.terminal_census.iter().map(|row| {
         format!(
@@ -2668,106 +2617,20 @@ fn project_local_production_force_all_census_emits_named_attributed_diff() {
     }));
     let receipt_digest = rows_digest(&receipt_rows);
 
-    let mut added_groups = BTreeMap::<String, usize>::new();
-    for row in &added {
-        let (kind, rest) = row.split_once('\t').expect("named row kind");
-        let (name, _) = rest.split_once('\t').expect("named row identity");
-        *added_groups.entry(format!("{kind}\t{name}")).or_default() += 1;
-    }
-    assert_eq!(baseline.len(), 558);
     assert_eq!(current.len(), 709);
     assert_eq!(diagnostics, 322);
     assert_eq!(incompletes, 387);
-    assert_eq!(removed.len(), 8);
-    assert_eq!(added.len(), 159);
-    assert_eq!(
-        added_groups,
-        BTreeMap::from([
-            ("diagnostic\tTK2344".to_owned(), 21),
-            ("diagnostic\tTK2430".to_owned(), 34),
-            (
-                "incomplete\tannotation-lower/constructor-type/abstract".to_owned(),
-                6,
-            ),
-            (
-                "incomplete\tannotation-lower/index-signature/key-type".to_owned(),
-                1,
-            ),
-            (
-                "incomplete\tannotation-lower/interface-accessor/self".to_owned(),
-                65,
-            ),
-            (
-                "incomplete\tannotation-lower/optional-method/self".to_owned(),
-                22,
-            ),
-            (
-                "incomplete\tannotation-lower/type-operator/keyof-operand".to_owned(),
-                2,
-            ),
-            (
-                "incomplete\tannotation-lower/type-query/typeof".to_owned(),
-                6,
-            ),
-            (
-                "incomplete\tannotation-lower/type-reference/unresolved".to_owned(),
-                2,
-            ),
-        ]),
+    assert!(
+        removed.is_empty(),
+        "production pin removed rows: {removed:#?}"
     );
+    assert!(added.is_empty(), "production pin added rows: {added:#?}");
     assert_eq!(force_all.terminal_census.len(), 3_406);
     assert_eq!(ready, 3_377);
-    assert_eq!(unavailable.len(), 29);
+    assert_eq!(unavailable, 29);
     assert_eq!(
         receipt_digest,
         "9a7360705ad8d51c47a3ab7475e2d95059ddd8033dc87ea410fde1f1c0668981",
-    );
-
-    let mut report = format!(
-        "production force_all census: baseline={} current={} diagnostics={} incompletes={} removed={} added={} unattributed={}\nterminal census: total={} ready={} unavailable={}\nreceipt digest: {}\n",
-        baseline.len(),
-        current.len(),
-        diagnostics,
-        incompletes,
-        removed.len(),
-        added.len(),
-        unattributed.len(),
-        force_all.terminal_census.len(),
-        ready,
-        unavailable.len(),
-        receipt_digest,
-    );
-    for row in &unavailable {
-        report.push_str("  terminal - ");
-        report.push_str(row);
-        report.push('\n');
-    }
-    for row in &removed {
-        report.push_str("  - ");
-        report.push_str(row);
-        if let Some(evidence) = attributions.get(row) {
-            report.push_str("\t[attributed: ");
-            report.push_str(evidence);
-            report.push(']');
-        }
-        report.push('\n');
-    }
-    for row in &added {
-        report.push_str("  + ");
-        report.push_str(row);
-        report.push('\n');
-    }
-    let output_path = std::env::temp_dir().join(format!(
-        "typokat-project-local-force-all-named-diff-{}.txt",
-        std::process::id()
-    ));
-    std::fs::write(&output_path, &report).expect("write full named production diff");
-    println!("{report}full named diff: {}", output_path.display());
-    assert!(
-        unattributed.is_empty(),
-        "production force_all census removed {} unattributed rows; full named diff: {}",
-        unattributed.len(),
-        output_path.display(),
     );
 }
 
@@ -3824,7 +3687,6 @@ fn validate_force_all(
             .any(|(row, expected)| row.group != *expected)
         || force_all.production_validation_roots != ready
         || force_all.semantic_probes != oracle.force_all_semantic_probes
-        || force_all.library_records != oracle.library_records
     {
         return Err(CandidateValidationError::ForceAllCensus);
     }

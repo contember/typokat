@@ -8,11 +8,14 @@ pub mod project_binder_probe;
 #[cfg(any(test, feature = "project-binder-probe"))]
 mod project_binder_projection;
 mod provider;
+#[cfg(feature = "library-record-census")]
 pub mod records;
 
 pub(crate) use typokat_binder::binder;
 pub(crate) use typokat_check::check;
-pub(crate) use typokat_core::{source, span};
+pub(crate) use typokat_core::source;
+#[cfg(any(test, feature = "library-record-census"))]
+pub(crate) use typokat_core::span;
 pub(crate) use typokat_frontend::frontend;
 
 #[cfg(test)]
@@ -43,6 +46,7 @@ pub use provider::{
 };
 /// The library's own records are inspectable only by asking for them (ADR-0018); no base,
 /// provider, or check retains one.
+#[cfg(feature = "library-record-census")]
 pub use records::{
     LibraryRecordCensus, LibraryRecordCensusDifference, LibraryRecordEntry, LibraryRecordKind,
 };

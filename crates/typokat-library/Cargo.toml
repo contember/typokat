@@ -4,6 +4,14 @@ version.workspace = true
 edition.workspace = true
 
 [features]
+library-record-census = [
+    "typokat-binder/test-utils",
+    "typokat-check/test-utils",
+    "typokat-core/test-utils",
+    "typokat-frontend/test-utils",
+    "typokat-relate/test-utils",
+    "typokat-types/test-utils",
+]
 project-binder-probe = [
     "dep:typokat-relate",
     "dep:typokat-types",

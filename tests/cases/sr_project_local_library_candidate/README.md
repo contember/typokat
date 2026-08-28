@@ -42,6 +42,7 @@ backlog-121 symbol fixture and on the marked `TS`/`TK2322` diagnostics here. The
 `Reflect.ownKeys` terminal publishes through the canonical project-local `symbol` identity.
 
 The stopped feasibility run reported 44 newly active library-owned records but retained no named
-`(code, site)` multiset. WU0 could not reproduce that movement. WU1 established the actual delta:
-one obsolete `lib.es2015.reflect.d.ts:111:5` incomplete was removed, diagnostics stayed at 267, and
-the total census moved from 559 to 558 records. A count-only assertion is not an acceptable witness.
+`(code, site)` multiset. WU0 could not reproduce that movement. WU1 later established the
+historical complete-source movement from 559 to 558 records. ADR-0028 replaced that producer with
+the production-owned census. Its sole current authority is the named 709-row pin: 322 diagnostics
+and 387 incompletes. A count-only assertion is not an acceptable witness.

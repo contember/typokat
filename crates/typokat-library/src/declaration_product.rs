@@ -53,7 +53,7 @@ pub(crate) fn build_packaged_declaration_product() -> Result<
     build_declaration_product(&profile).map(Arc::new)
 }
 
-fn build_declaration_product(
+pub(super) fn build_declaration_product(
     profile: &ExactLibraryProfile,
 ) -> Result<typokat_library_product::LibraryDeclarationProduct, LibraryDeclarationProductBuildError>
 {

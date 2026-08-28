@@ -10,10 +10,10 @@
     "publication_scc_digest": "5daea002f8ea676aea3ce7949576af3e712f0161014a3b66c0298aaa8d120cdf"
   },
   "library_force_all": {
-    "count": 558,
-    "diagnostics": 267,
-    "incompletes": 291,
-    "digest": "8ffe8f358449365f8a26994b40289e6c72b51759b2776730c7375d9c6ba3d6b6"
+    "count": 709,
+    "diagnostics": 322,
+    "incompletes": 387,
+    "digest": "90e6722655e62272784ca5ba2a0be43b7c8fc995998ba9a2593aef9cfd69fdb8"
   },
   "cases": [
     {

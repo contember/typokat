@@ -1,20 +1,27 @@
-//! The library's own records, named and materialized only when asked (ADR-0018).
+//! The library's own records, named and materialized only when asked (ADR-0018, ADR-0029).
 //!
 //! Compiling the pinned profile produces diagnostics and incomplete surfaces that belong to
 //! the library, not to any user file: they are typokat's own model gaps against a library the
-//! real `tsc` checks clean. No process retains them — the frozen base carries none, and the
-//! compile behind this census drops its semantic product. The census exists so a checker
+//! real `tsc` checks clean. No process retains them, and the project-local session behind this
+//! census drops its semantic product. The census exists so a checker
 //! change that adds or removes one of those outcomes shows up as a named `(code, site)`
 //! difference against the committed pin instead of as a moved count.
 
-use super::compiler::{injected_library_sources, owned_library_sources, LibraryCompilerError};
+use super::compiler::LibraryCompilerError;
 use super::profile::ExactLibraryProfile;
-use crate::check::checker::library_compiler::compile_owned_injected_records;
+use crate::check::checker::library_compiler::NormalizedCheckerRecordForTest;
+use crate::check::checker::project_local::{
+    project_local_semantic_candidate_for_test, ProjectLocalOrderForTest,
+    ProjectLocalSemanticRequestForTest,
+};
+#[cfg(test)]
 use crate::check::checker::reporting_record::CheckerRecord;
+#[cfg(test)]
 use crate::source::LibraryFileOrdinal;
 use crate::span::LineIndex;
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Arc;
 
 /// The channel a library-owned record came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -108,10 +115,10 @@ pub struct LibraryRecordCensus {
 }
 
 impl LibraryRecordCensus {
-    /// Compile the packaged 82-file profile and collect the records it reports against itself.
+    /// Publish the packaged 82-file profile and collect the records it reports against itself.
     ///
-    /// The deliberate inspection entry point: it pays a full source compilation, so nothing
-    /// calls it on a checking path. The semantic product is dropped as this returns.
+    /// The deliberate inspection entry point uses one project-local force-all session. Nothing
+    /// calls it on an ordinary checking path, and the semantic product is dropped as this returns.
     pub fn compile_packaged_profile() -> Result<Self, LibraryCompilerError> {
         let profile = ExactLibraryProfile::load_packaged().map_err(|error| {
             LibraryCompilerError::Compilation {
@@ -123,13 +130,65 @@ impl LibraryRecordCensus {
 
     /// [`compile_packaged_profile`](Self::compile_packaged_profile) for an already-loaded profile.
     pub fn compile(profile: &ExactLibraryProfile) -> Result<Self, LibraryCompilerError> {
-        let owned = owned_library_sources(profile.sources())?;
-        let injected = injected_library_sources(&owned);
-        let records = compile_owned_injected_records(&injected).map_err(|error| {
-            LibraryCompilerError::Compilation {
-                message: format!("{error:?}"),
-            }
-        })?;
+        let product = Arc::new(
+            super::declaration_product::build_declaration_product(profile).map_err(|error| {
+                LibraryCompilerError::Compilation {
+                    message: error.to_string(),
+                }
+            })?,
+        );
+        let product_for_run = Arc::clone(&product);
+        let run = crate::frontend::run_prepared_project_frontend(
+            vec![crate::frontend::FileInput {
+                name: "/__typokat_library_record_census__.ts".to_owned(),
+                source: String::new(),
+            }],
+            move |programs, source_reexports, default_modules| {
+                let (library_units, bound) =
+                    crate::check::checker::bind_library_product_project_programs(
+                        &product_for_run,
+                        programs,
+                        source_reexports,
+                        default_modules,
+                    )?;
+                Ok::<_, crate::check::checker::LibraryProductProjectBindingError>(
+                    project_local_semantic_candidate_for_test(
+                        &product_for_run,
+                        library_units,
+                        bound,
+                        programs,
+                        ProjectLocalSemanticRequestForTest {
+                            case_id: "library-record-census",
+                            source_order: ProjectLocalOrderForTest::Forward,
+                            demand_order: ProjectLocalOrderForTest::Forward,
+                            demand_roots: Vec::new(),
+                            force_all: true,
+                            fault: None,
+                        },
+                    ),
+                )
+            },
+        );
+        let trace = run
+            .product
+            .ok_or_else(|| LibraryCompilerError::Compilation {
+                message: run.preparation_error.map_or_else(
+                    || format!("benign census project parse failed: {:?}", run.parse_errors),
+                    |error| error.to_string(),
+                ),
+            })?
+            .map_err(|error| LibraryCompilerError::Compilation {
+                message: error.to_string(),
+            })?
+            .map_err(|error| LibraryCompilerError::Compilation {
+                message: error.to_string(),
+            })?;
+        let records = trace
+            .force_all
+            .ok_or_else(|| LibraryCompilerError::Compilation {
+                message: "project-local census did not return force-all output".to_owned(),
+            })?
+            .library_records;
 
         let mut sites = BTreeMap::new();
         for source in profile.sources() {
@@ -139,12 +198,42 @@ impl LibraryRecordCensus {
                     name: source.name().to_owned(),
                 }
             })?;
-            sites.insert(source.ordinal(), (source.name(), LineIndex::new(text)));
+            sites.insert(source.name(), LineIndex::new(text));
         }
 
         let mut entries = Vec::with_capacity(records.len());
-        for (key, record) in &records {
-            entries.push(entry(&sites, key.file_ordinal, record)?);
+        for record in records {
+            let lines = sites.get(record.source_path.as_str()).ok_or_else(|| {
+                LibraryCompilerError::Compilation {
+                    message: format!(
+                        "project-local record names source {:?} outside the profile",
+                        record.source_path
+                    ),
+                }
+            })?;
+            let (kind, span_start, name, detail) = match record.record {
+                NormalizedCheckerRecordForTest::Diagnostic(diagnostic) => (
+                    LibraryRecordKind::Diagnostic,
+                    diagnostic.span.start,
+                    diagnostic.code,
+                    diagnostic.message,
+                ),
+                NormalizedCheckerRecordForTest::Incomplete(incomplete) => (
+                    LibraryRecordKind::Incomplete,
+                    incomplete.span.start,
+                    incomplete.id,
+                    incomplete.context,
+                ),
+            };
+            let position = lines.line_col(span_start);
+            entries.push(LibraryRecordEntry {
+                file: record.source_path,
+                line: position.line,
+                column: position.column,
+                kind,
+                name,
+                detail,
+            });
         }
         entries.sort();
         Ok(Self {
@@ -174,7 +263,7 @@ impl LibraryRecordCensus {
     /// The census as committed pin text: a comment header, then one line per record.
     pub fn render(&self) -> String {
         let mut rendered = String::new();
-        rendered.push_str("# typokat library-owned record census (ADR-0018).\n");
+        rendered.push_str("# typokat production-owned library record census (ADR-0028).\n");
         rendered.push_str(
             "# Regenerate: TYPOKAT_BLESS_LIBRARY_RECORDS=1 cargo test --test library_owned_records\n",
         );
@@ -270,6 +359,7 @@ fn census_lines(pinned: &str) -> impl Iterator<Item = &str> {
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
 }
 
+#[cfg(test)]
 fn entry(
     sites: &BTreeMap<LibraryFileOrdinal, (&str, LineIndex)>,
     file_ordinal: LibraryFileOrdinal,

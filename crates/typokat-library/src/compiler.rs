@@ -372,18 +372,11 @@ fn aggregate_identity<'identity>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::check::checker::library_compiler::{
-        canonical_library_evidence_for_test, run_injected_profile,
-    };
 
     fn assert_send_sync_static<T: Send + Sync + 'static>(_: &T) {}
 
     const PROFILE_IDENTITY: &str =
         "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
-
-    fn digest(bytes: impl AsRef<[u8]>) -> String {
-        format!("{:x}", Sha256::digest(bytes.as_ref()))
-    }
 
     #[test]
     fn library_compiler_produces_one_frozen_runtime_product() {
@@ -404,45 +397,5 @@ mod tests {
             compiled.semantic_identity().runtime_projection(),
             compiled.runtime_projection().semantic_identity()
         );
-    }
-
-    /// The canonical evidence projection is a suite assertion, not compile work (ADR-0017).
-    ///
-    /// It pins the library's own records byte-for-byte, but a digest only ever says that
-    /// something moved. What moved is named by `tests/library_owned_records.rs` against
-    /// `tests/fixtures/library-owned-records.txt` (ADR-0018); read that pin first.
-    #[test]
-    fn library_records_project_to_their_pinned_canonical_evidence() {
-        let profile = ExactLibraryProfile::load_packaged().expect("exact packaged profile");
-        let owned_sources = owned_library_sources(profile.sources()).expect("UTF-8 sources");
-        let injected = injected_library_sources(&owned_sources);
-        let run = run_injected_profile(&injected).expect("source-backed library compilation");
-        let evidence = canonical_library_evidence_for_test(&injected, &run.library_records)
-            .expect("canonical evidence projection");
-
-        let diagnostic_count = run
-            .library_records
-            .iter()
-            .filter(|(_, record)| record.is_diagnostic())
-            .count();
-        assert_eq!(diagnostic_count, 267);
-        assert_eq!(evidence.diagnostics.len(), 125_629);
-        assert_eq!(
-            digest(&evidence.diagnostics),
-            "640fb065d80690ba28de25430cb65b51935b9f34488d4d01a83c187bbc960ab6"
-        );
-        assert_eq!(run.library_records.len() - diagnostic_count, 291);
-        assert_eq!(evidence.incompletes.len(), 45_176);
-        assert_eq!(
-            digest(&evidence.incompletes),
-            "82444cb52cf26954a107d520ff04c29743022678cc8d50cb81367b2f7b044773"
-        );
-        assert_eq!(run.library_records.len(), 558);
-        assert_eq!(evidence.ledger.len(), 170_774);
-        assert_eq!(
-            digest(&evidence.ledger),
-            "1c9dd0ab78d0f1e9fa5ff4eff1a24f90d1da0ef11053c6c3700552480047d302"
-        );
-        assert_eq!(owned_sources.len(), 82);
     }
 }
