@@ -4,8 +4,8 @@
 //! continuation that WU6 will compare with the complete-source control.
 
 use super::{
-    check_project, check_project_local_shadow_for_test, check_project_once, DriverError,
-    FileReport, ProjectLocalShadowRouteForTest,
+    check_bundler_project_once, check_project, check_project_local_shadow_for_test,
+    check_project_once, DriverError, FileReport, ProjectLocalShadowRouteForTest,
 };
 use crate::check::checker::project_local::{ObservationEventKindForTest, ObservationScopeForTest};
 use crate::frontend::{FileInput, ProjectRoot};
@@ -64,6 +64,25 @@ fn report_shape(reports: &[FileReport]) -> Vec<String> {
                 "{}|parse={:?}|diagnostics={diagnostics:?}|incomplete={incomplete:?}|notices={:?}",
                 report.name, report.output.parse_errors, report.output.project_notices,
             )
+        })
+        .collect()
+}
+
+fn diagnostic_codes(reports: &[FileReport]) -> Vec<&str> {
+    reports
+        .iter()
+        .flat_map(|report| &report.output.diagnostics)
+        .map(|diagnostic| diagnostic.code.as_str())
+        .collect()
+}
+
+fn bundler_roots(inputs: &[FileInput]) -> Vec<ProjectRoot> {
+    inputs
+        .iter()
+        .map(|input| ProjectRoot {
+            identity: input.name.clone(),
+            path: PathBuf::from(&input.name),
+            exists: true,
         })
         .collect()
 }
@@ -275,6 +294,182 @@ fn project_local_shadow_finalizes_default_reexport_notice_before_the_gate() {
     assert!(run.reports[1..]
         .iter()
         .all(|report| report.output.project_notices.is_empty()));
+}
+
+#[test]
+fn project_local_shadow_runs_admitted_bundler_defaults_through_the_session() {
+    let project_directory = typokat_core::test_support::repository_root()
+        .join("tests/cases/b15_default_module_slots/01_named_class");
+    let inputs = fixture_inputs(&project_directory, &["consumer.ts", "source.ts"]);
+    let roots = inputs
+        .iter()
+        .map(|input| ProjectRoot {
+            identity: input.name.clone(),
+            path: PathBuf::from(&input.name),
+            exists: true,
+        })
+        .collect();
+    let provider = LibraryBaseProvider::new();
+    let acquisitions = Cell::new(0);
+    let observations = ObservationScopeForTest::start();
+    let run = check_project_local_shadow_for_test(
+        inputs,
+        ProjectLocalShadowRouteForTest::Bundler {
+            project_directory,
+            roots,
+        },
+        || {
+            acquisitions.set(acquisitions.get() + 1);
+            provider.declaration_product_for_shadow()
+        },
+    )
+    .expect("admitted Bundler defaults reach the project-local session");
+    let receipt = observations.finish();
+
+    assert_eq!(acquisitions.get(), 1);
+    assert!(run.inventory.notices.is_empty(), "{:#?}", run.inventory);
+    assert_eq!(
+        run.reports
+            .iter()
+            .flat_map(|report| &report.output.diagnostics)
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>(),
+        ["TK2322"],
+    );
+    assert_eq!(
+        receipt
+            .events
+            .iter()
+            .filter(|event| matches!(
+                event.kind,
+                ObservationEventKindForTest::SessionCreated { .. }
+            ))
+            .count(),
+        1,
+    );
+}
+
+#[test]
+fn project_local_shadow_preserves_reportable_import_diagnostics() {
+    let cases = [
+        (
+            "missing module",
+            vec![input(
+                "/wu5/import-errors/missing-module.ts",
+                "import { missing } from './absent.js';\nmissing;\n",
+            )],
+            vec!["TK2307"],
+        ),
+        (
+            "missing named export",
+            vec![
+                input(
+                    "/wu5/import-errors/source.ts",
+                    "export const present = 1;\n",
+                ),
+                input(
+                    "/wu5/import-errors/missing-export.ts",
+                    "import { missing } from './source.js';\nmissing;\n",
+                ),
+            ],
+            vec!["TK2305"],
+        ),
+    ];
+    let provider = LibraryBaseProvider::new();
+
+    for (case, inputs, expected_codes) in cases {
+        let standalone_control =
+            check_project_once(inputs.clone()).expect("standalone import-error control");
+        assert_eq!(
+            diagnostic_codes(&standalone_control),
+            expected_codes,
+            "{case}"
+        );
+        let standalone = check_project_local_shadow_for_test(
+            inputs.clone(),
+            ProjectLocalShadowRouteForTest::Standalone,
+            || provider.declaration_product_for_shadow(),
+        )
+        .expect("standalone import-error shadow");
+        assert_eq!(
+            report_shape(&standalone.reports),
+            report_shape(&standalone_control),
+            "standalone {case}",
+        );
+
+        let repeated_control =
+            check_project(inputs.clone()).expect("repeated import-error control");
+        assert_eq!(
+            diagnostic_codes(&repeated_control),
+            expected_codes,
+            "{case}"
+        );
+        let repeated = check_project_local_shadow_for_test(
+            inputs,
+            ProjectLocalShadowRouteForTest::RepeatedProject,
+            || provider.declaration_product_for_shadow(),
+        )
+        .expect("repeated import-error shadow");
+        assert_eq!(
+            report_shape(&repeated.reports),
+            report_shape(&repeated_control),
+            "repeated {case}",
+        );
+    }
+}
+
+#[test]
+fn project_local_shadow_preserves_bundler_import_diagnostics() {
+    let project_directory = PathBuf::from("/wu5/bundler-import-errors");
+    let cases = [
+        (
+            "missing module",
+            vec![input(
+                "/wu5/bundler-import-errors/missing-module.ts",
+                "import { missing } from './absent.js';\nmissing;\n",
+            )],
+            vec!["TK2307"],
+        ),
+        (
+            "missing named export",
+            vec![
+                input(
+                    "/wu5/bundler-import-errors/source.ts",
+                    "export const present = 1;\n",
+                ),
+                input(
+                    "/wu5/bundler-import-errors/missing-export.ts",
+                    "import { missing } from './source.js';\nmissing;\n",
+                ),
+            ],
+            vec!["TK2305"],
+        ),
+    ];
+    let provider = LibraryBaseProvider::new();
+
+    for (case, inputs, expected_codes) in cases {
+        let roots = bundler_roots(&inputs);
+        let control =
+            check_bundler_project_once(inputs.clone(), project_directory.clone(), roots.clone())
+                .expect("Bundler import-error control");
+        assert_eq!(diagnostic_codes(&control.reports), expected_codes, "{case}");
+        let candidate = check_project_local_shadow_for_test(
+            inputs,
+            ProjectLocalShadowRouteForTest::Bundler {
+                project_directory: project_directory.clone(),
+                roots,
+            },
+            || provider.declaration_product_for_shadow(),
+        )
+        .expect("Bundler import-error shadow");
+
+        assert_eq!(candidate.inventory, control.inventory, "{case}");
+        assert_eq!(
+            report_shape(&candidate.reports),
+            report_shape(&control.reports),
+            "Bundler {case}",
+        );
+    }
 }
 
 #[test]
