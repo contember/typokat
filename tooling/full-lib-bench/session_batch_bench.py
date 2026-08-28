@@ -309,6 +309,7 @@ def _parse_scoreboard(data: bytes) -> dict[str, dict[str, Any]]:
             "status": status,
             "case_id": case_id,
             "exit_code": 3 if incompletes else (1 if diagnostics else 0),
+            "parse_errors": [],
             "diagnostics": diagnostics,
             "incompletes": sorted(incompletes),
         }
@@ -409,8 +410,10 @@ def load_authenticated_batch_oracles(
         outcome = {key: value for key, value in scoreboard_row.items() if key != "status"}
         if scoreboard_row["status"] == "OOS:parse-error":
             outcome["exit_code"] = 2
+            outcome["parse_errors"] = ["parse-error"]
         elif scoreboard_row["status"] == "OOS:unresolved":
             outcome["exit_code"] = 3
+            outcome["incompletes"] = ["unresolved"]
         elif scoreboard_row["status"] not in ("IN", "OOS:unsupported"):
             _fail(f"eligible frame has an unauthenticated scoreboard class: {case_id}")
         typokat.append(outcome)
@@ -433,6 +436,7 @@ def load_authenticated_batch_oracles(
         tsgo.append({
             "case_id": case_id,
             "exit_code": 1 if diagnostics else 0,
+            "parse_errors": [],
             "diagnostics": diagnostics,
             "incompletes": [],
         })
