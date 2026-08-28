@@ -342,6 +342,17 @@ class SessionBatchContractTests(unittest.TestCase):
         with self.assertRaisesRegex(batch.BatchContractError, "source"):
             batch.recompute_panel(forged, expected, self.contract)
 
+        wrong_schema = copy.deepcopy(evidence)
+        for sample in wrong_schema["samples"]:
+            request = json.loads(sample["frames"][0]["raw_request"])
+            request["schema"] = 2
+            sample["frames"][0]["raw_request"] = json.dumps(
+                request, sort_keys=True, separators=(",", ":")
+            )
+            refresh_sample_streams(sample)
+        with self.assertRaisesRegex(batch.BatchContractError, "schema"):
+            batch.recompute_panel(wrong_schema, expected, self.contract)
+
     def test_speed_and_memory_thresholds_are_strict(self) -> None:
         green = verified_panel(32, 1.1, 100_000, 100_000, self.contract)
         self.assertFalse(
@@ -647,6 +658,25 @@ class SessionBatchContractTests(unittest.TestCase):
         with self.assertRaisesRegex(batch.BatchContractError, "determin"):
             batch.verify_concurrency(changed_semantics, self.contract)
 
+        missing_weak = copy.deepcopy(evidence)
+        del missing_weak["1"]["sessions"][0]["session_weak_alive_after"]
+        refresh_concurrency_raw(missing_weak["1"])
+        with self.assertRaisesRegex(batch.BatchContractError, "session"):
+            batch.verify_concurrency(missing_weak, self.contract)
+
+        missing_identity = copy.deepcopy(evidence)
+        missing_identity["1"]["sessions"][0]["identity"] = None
+        missing_identity["1"]["session_identities"][0] = None
+        refresh_concurrency_raw(missing_identity["1"])
+        with self.assertRaisesRegex(batch.BatchContractError, "identity"):
+            batch.verify_concurrency(missing_identity, self.contract)
+
+        invalid_boundary = copy.deepcopy(evidence)
+        invalid_boundary["1"]["sessions"][0]["barrier_ns"] = None
+        refresh_concurrency_raw(invalid_boundary["1"])
+        with self.assertRaisesRegex(batch.BatchContractError, "boundary"):
+            batch.verify_concurrency(invalid_boundary, self.contract)
+
     def test_687_panel_must_beat_the_authenticated_typokat_baseline(self) -> None:
         candidate = verified_panel(
             687,
@@ -777,7 +807,19 @@ def frame_receipt(index: int) -> dict[str, object]:
 
 
 def expected_oracles(evidence: dict[str, object]) -> dict[str, object]:
-    result = {}
+    source_sample = next(item for item in evidence["samples"] if item["tool"] == "typokat")
+    result = {
+        "request_identities": [
+            {
+                "case_id": frame["case_id"],
+                "source_bytes": len(json.loads(frame["raw_request"])["source"].encode()),
+                "source_sha256": hashlib.sha256(
+                    json.loads(frame["raw_request"])["source"].encode()
+                ).hexdigest(),
+            }
+            for frame in source_sample["frames"]
+        ]
+    }
     for tool in ("typokat", "tsgo"):
         sample = next(item for item in evidence["samples"] if item["tool"] == tool)
         result[tool] = {
