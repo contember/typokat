@@ -21,8 +21,13 @@ func TestSingleProjectChecksOrderedCrossFileProgram(t *testing.T) {
 		Schema: protocolSchema,
 		CaseID: "cross-file",
 		Files: []singleProjectFile{
-			{Path: "pkg/value.ts", Source: "export const value: number = 1;\n"},
-			{Path: "pkg/use.ts", Source: "import { value } from \"./value\";\nconst result: string = value;\n"},
+			{Path: "pkg/value.ts", Source: "export const value: number = 1; // ž\n"},
+			{
+				Path: "pkg/use.ts",
+				Source: "import { value } from \"./value\";\n" +
+					"const result: string = value;\n\n\n\n\n\n\n\n" +
+					"const later: string = value;\n",
+			},
 		},
 	}
 
@@ -39,7 +44,10 @@ func TestSingleProjectChecksOrderedCrossFileProgram(t *testing.T) {
 	if receipt.Semantic.ExitCode != 1 || len(receipt.Semantic.ParseErrors) != 0 || len(receipt.Semantic.Incompletes) != 0 {
 		t.Fatalf("unexpected semantic class: %#v", receipt.Semantic)
 	}
-	if got, want := receipt.Semantic.Diagnostics, []string{"pkg/use.ts:2:7:2322"}; !equalStrings(got, want) {
+	if got, want := receipt.Semantic.Diagnostics, []string{
+		"pkg/use.ts:2:7:2322",
+		"pkg/use.ts:10:7:2322",
+	}; !equalStrings(got, want) {
 		t.Fatalf("diagnostics = %#v, want %#v", got, want)
 	}
 	if receipt.SharedProductIdentity != profileIdentity {
@@ -96,7 +104,7 @@ func TestDecodeSingleProjectRequestRejectsMalformedFiles(t *testing.T) {
 func TestSingleProjectModeRequiresExactlyOneRequestAndResponse(t *testing.T) {
 	t.Parallel()
 
-	raw := `{"case_id":"one","files":[{"path":"one.ts","source":"export {};"}],"schema":1}`
+	raw := `{"case_id":"one","files":[{"path":"one.ts","source":"const marker = \"<&ž\";"}],"schema":1}`
 	for name, input := range map[string]string{
 		"empty":        "",
 		"multiple":     raw + "\n" + raw + "\n",

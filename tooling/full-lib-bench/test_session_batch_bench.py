@@ -699,6 +699,7 @@ class SessionBatchContractTests(unittest.TestCase):
             {
                 "verdict": "LINKAGE-PASS",
                 "candidate_commit": "a" * 40,
+                "candidate_tree": "b" * 40,
                 "rows": ["fast-clean", "fast-errors", "collision", "fanout"],
                 "file_counts": [1, 1, 2, 32],
                 "oracle_sha256": single_project_oracle_sha256(self.contract),
@@ -774,6 +775,49 @@ class SessionBatchContractTests(unittest.TestCase):
         go_claim["verdict"] = "GO"
         with self.assertRaisesRegex(batch.BatchContractError, "GO|verdict"):
             batch.verify_single_project_linkage(go_claim, self.contract)
+
+    def test_single_project_linkage_requires_raw_cold_processes(self) -> None:
+        missing = single_project_evidence(self.contract)
+        del missing["tools"]["typokat"]["cold_processes"]
+        with self.assertRaisesRegex(batch.BatchContractError, "cold|process|shape"):
+            batch.verify_single_project_linkage(missing, self.contract)
+
+        forged = single_project_evidence(self.contract)
+        process = forged["tools"]["typokat"]["cold_processes"][1]
+        process["stderr"] = process["stderr"].replace("(4,7)", "(4,8)", 1)
+        process["normalized_semantic"]["diagnostics"][0] = (
+            "fast-errors/main.ts:4:8:2322"
+        )
+        refresh_claimed_cold_oracle(forged, "typokat")
+        with self.assertRaisesRegex(
+            batch.BatchContractError, "cold|oracle|semantic|diagnostic"
+        ):
+            batch.verify_single_project_linkage(forged, self.contract)
+
+    def test_single_project_linkage_authenticates_cold_binary_provenance(self) -> None:
+        wrong_candidate = single_project_evidence(self.contract)
+        wrong_candidate["tools"]["typokat"]["cold_binary_candidate_commit"] = "b" * 40
+        with self.assertRaisesRegex(batch.BatchContractError, "candidate|revision|build"):
+            batch.verify_single_project_linkage(wrong_candidate, self.contract)
+
+        wrong_tree = single_project_evidence(self.contract)
+        wrong_tree["typokat_cold_build"]["candidate_tree"] = "c" * 40
+        with self.assertRaisesRegex(batch.BatchContractError, "tree|build"):
+            batch.verify_single_project_linkage(wrong_tree, self.contract)
+
+        wrong_typokat_binary = single_project_evidence(self.contract)
+        tool = wrong_typokat_binary["tools"]["typokat"]
+        tool["authenticated_cold_binary_sha256"] = "7" * 64
+        for process in tool["cold_processes"]:
+            process["executable_before_sha256"] = "7" * 64
+            process["executable_after_sha256"] = "7" * 64
+        with self.assertRaisesRegex(batch.BatchContractError, "binary|build"):
+            batch.verify_single_project_linkage(wrong_typokat_binary, self.contract)
+
+        wrong_tsgo_binary = single_project_evidence(self.contract)
+        wrong_tsgo_binary["tools"]["tsgo"]["authenticated_cold_binary_sha256"] = "8" * 64
+        with self.assertRaisesRegex(batch.BatchContractError, "binary"):
+            batch.verify_single_project_linkage(wrong_tsgo_binary, self.contract)
 
     def test_raw_frame_outputs_drive_oracles_and_lifecycle_controls(self) -> None:
         evidence = raw_panel_evidence(1, 1.0, 100_000, 110_000)
@@ -1094,14 +1138,35 @@ def single_project_oracle_sha256(contract: dict[str, object]) -> str:
 
 def single_project_evidence(contract: dict[str, object]) -> dict[str, object]:
     oracle_digest = single_project_oracle_sha256(contract)
+    typokat_cold_binary = str((Path("/tmp") / ("typokat-cold-" + "a" * 40)).resolve())
+    typokat_cold_hash = "6" * 64
     evidence = {
         "schema": 1,
         "verdict": "LINKAGE-PASS",
         "candidate_commit": "a" * 40,
+        "candidate_tree": "b" * 40,
         "cold_candidate_commit": "a" * 40,
+        "cold_candidate_tree": "b" * 40,
+        "typokat_cold_build": {
+            "candidate_commit": "a" * 40,
+            "candidate_tree": "b" * 40,
+            "source_identity_sha256": "9" * 64,
+            "binary_path": typokat_cold_binary,
+            "binary_sha256": typokat_cold_hash,
+        },
         "tools": {},
     }
     for tool, binary in (("typokat", "2" * 64), ("tsgo", "3" * 64)):
+        cold_binary = (
+            typokat_cold_binary
+            if tool == "typokat"
+            else str((batch.ROOT / contract["tsgo"]["cold_binary_relative_path"]).resolve())
+        )
+        cold_binary_sha256 = (
+            typokat_cold_hash
+            if tool == "typokat"
+            else contract["tsgo"]["cold_binary_sha256"]
+        )
         tool_evidence = {
             "runner_source_sha256": ("4" if tool == "typokat" else "5") * 64,
             "revision": (
@@ -1113,16 +1178,69 @@ def single_project_evidence(contract: dict[str, object]) -> dict[str, object]:
             "batch_binary_sha256": binary,
             "single_oracle_sha256": oracle_digest,
             "cold_oracle_sha256": oracle_digest,
-            "authenticated_cold_binary_sha256": (
-                None if tool == "typokat" else contract["tsgo"]["cold_binary_sha256"]
-            ),
+            "authenticated_cold_binary_sha256": cold_binary_sha256,
+            "cold_binary_path": cold_binary,
+            "cold_binary_candidate_commit": "a" * 40 if tool == "typokat" else None,
             "processes": [
                 make_single_project_process(tool, case_id, binary, ordinal, contract)
                 for ordinal, case_id in enumerate(contract["single_project"]["rows"])
             ],
+            "cold_processes": [
+                make_cold_process(
+                    tool, case_id, cold_binary, cold_binary_sha256, contract
+                )
+                for case_id in contract["single_project"]["rows"]
+            ],
         }
         evidence["tools"][tool] = tool_evidence
     return evidence
+
+
+def make_cold_process(
+    tool: str,
+    case_id: str,
+    binary_path: str,
+    binary_sha256: str,
+    contract: dict[str, object],
+) -> dict[str, object]:
+    cold_contract = cold.verify_contract()
+    sources = [str(path.resolve()) for path in cold.row_sources(case_id)]
+    flags = (
+        cold_contract["typokat_flags"]
+        if tool == "typokat"
+        else contract["typescript_flags"]
+    )
+    oracle = cold.load_oracles()["rows"][case_id]
+    lines = []
+    prefix = "TK" if tool == "typokat" else "TS"
+    for diagnostic in oracle["diagnostics"]:
+        relative, line, column, code = diagnostic.rsplit(":", 3)
+        path = (cold.WORKLOADS / relative).resolve()
+        lines.append(f"{path}({line},{column}): error {prefix}{code}: synthetic")
+    output = "".join(line + "\n" for line in lines)
+    semantic = {
+        "exit_code": oracle["exit"],
+        "parse_errors": [],
+        "diagnostics": list(oracle["diagnostics"]),
+        "incompletes": [],
+    }
+    return {
+        "tool": tool,
+        "case_id": case_id,
+        "argv": [binary_path, *flags, *sources],
+        "returncode": oracle["exit"],
+        "stdout": output if tool == "tsgo" else "",
+        "stderr": "" if tool == "tsgo" else output,
+        "stdout_complete": True,
+        "stderr_complete": True,
+        "timed_out": False,
+        "process_group_empty": True,
+        "executable_before_sha256": binary_sha256,
+        "executable_after_sha256": binary_sha256,
+        "address_space_limit_bytes": contract["child_address_space_limit_bytes"],
+        "timeout_seconds": contract["single_project"]["timeout_seconds"],
+        "normalized_semantic": semantic,
+    }
 
 
 def make_single_project_process(
@@ -1231,6 +1349,20 @@ def refresh_single_project_claimed_oracle(
         json.dumps(rows, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     evidence["tools"][tool]["single_oracle_sha256"] = digest
+
+
+def refresh_claimed_cold_oracle(evidence: dict[str, object], tool: str) -> None:
+    rows = [
+        {
+            "case_id": process["case_id"],
+            "semantic": process["normalized_semantic"],
+        }
+        for process in evidence["tools"][tool]["cold_processes"]
+    ]
+    digest = hashlib.sha256(
+        json.dumps(rows, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    evidence["tools"][tool]["cold_oracle_sha256"] = digest
 
 
 def protocol_info(tool: str) -> dict[str, object]:
