@@ -5,6 +5,7 @@ edition.workspace = true
 
 [features]
 project-local-driver-shadow = []
+session-bench = ["typokat-check/session-bench"]
 library-record-census = [
     "typokat-binder/test-utils",
     "typokat-check/test-utils",

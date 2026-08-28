@@ -1353,7 +1353,7 @@ impl<'ast> TypeDeclTable<'ast> {
         Some(self.published.get(index)?.params.as_slice())
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
     pub(in crate::check::checker) fn can_install_project_local_published(
         &self,
         index: usize,
@@ -1361,7 +1361,7 @@ impl<'ast> TypeDeclTable<'ast> {
         index < self.published.len() && self.published.prefix_overrides_enabled()
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
     pub(in crate::check::checker) fn install_project_local_published(
         &mut self,
         index: usize,
@@ -1436,7 +1436,7 @@ impl TypeResolvedTable {
         self.local.get_mut(index.checked_sub(self.published.len())?)
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
     pub(in crate::check::checker) fn can_install_project_local_published(
         &self,
         index: usize,
@@ -1444,7 +1444,7 @@ impl TypeResolvedTable {
         index < self.published.len() && self.published.prefix_overrides_enabled()
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
     pub(in crate::check::checker) fn install_project_local_published(
         &mut self,
         index: usize,
@@ -1887,7 +1887,7 @@ pub(in crate::check::checker) fn record_cycle_tainted_application_cache_measure(
 /// pass writes to. Bundled into one struct so the many recursive `infer_*`/
 /// `lower_*` helpers take a single `&mut` rather than a long, churn-prone argument
 /// list.
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 pub(in crate::check::checker) struct ProjectLocalDemandSnapshot {
     pub(in crate::check::checker) aliases: typokat_types::alias_semantics::PublishedAliases,
     pub(in crate::check::checker) type_terminals:
@@ -1897,7 +1897,7 @@ pub(in crate::check::checker) struct ProjectLocalDemandSnapshot {
         Vec<super::namespace_values::ProjectLocalNamespaceSeed>,
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 pub(in crate::check::checker) trait ProjectLocalUserDemandGateway {
     fn demand_type_group(
         &mut self,
@@ -1917,17 +1917,17 @@ pub(in crate::check::checker) trait ProjectLocalUserDemandGateway {
 pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = UserRecordTicket> {
     pub(in crate::check::checker) interner: &'a mut Interner,
     pub(in crate::check::checker) binder: &'a Binder,
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
     pub(in crate::check::checker) project_local_demand_gateway:
         Option<&'a mut dyn ProjectLocalUserDemandGateway>,
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
     pub(in crate::check::checker) project_local_demand_error: Option<&'static str>,
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
     pub(in crate::check::checker) project_local_library_identity_groups:
         Option<[Option<TypeGroupId>; 8]>,
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
     pub(in crate::check::checker) project_local_user_modules: Option<FxHashSet<ScopeId>>,
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
     pub(in crate::check::checker) project_local_user_interface_own:
         FxHashMap<TypeGroupId, ObjectType>,
     /// Completed eager generic applications in this pass's type universe.

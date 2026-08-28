@@ -1,32 +1,40 @@
 //! Neutral observable output types for the project-local checker pass.
 
 use super::validation::ProjectLocalValidationCandidate;
+use super::ProjectLocalMappedProductGroupForTest;
+#[cfg(any(test, feature = "test-utils"))]
 use super::{
     ProjectLocalCheckResultForTest, ProjectLocalContributorOriginForTest,
-    ProjectLocalMappedProductGroupForTest, ProjectLocalNamespaceFragmentForTest,
-    ProjectLocalSemanticFaultForTest, ProjectLocalUnavailableAuditForTest,
-    ProjectLocalUnavailableReasonForTest, ProjectLocalUnavailableTerminalForTest,
-    ProjectLocalUserEventRecordForTest,
+    ProjectLocalNamespaceFragmentForTest, ProjectLocalSemanticFaultForTest,
+    ProjectLocalUnavailableAuditForTest, ProjectLocalUnavailableReasonForTest,
+    ProjectLocalUnavailableTerminalForTest, ProjectLocalUserEventRecordForTest,
 };
 pub(super) use crate::binder::bind::LibraryBinderUnit;
 use crate::binder::declaration::SourceDeclarationManifest;
+#[cfg(any(test, feature = "test-utils"))]
 pub(super) use crate::binder::declaration::SourceGlobalContributorKind;
 pub(super) use crate::binder::declaration::TypeGroupId;
 pub(super) use crate::binder::declaration::ValueStorageId;
+#[cfg(any(test, feature = "test-utils"))]
 pub(super) use crate::binder::declaration::{
     source_global_binding_census_with_provenance, SourceBindingSlot,
 };
 pub(super) use crate::binder::namespace::NamespaceId;
+#[cfg(any(test, feature = "test-utils"))]
 pub(super) use crate::binder::roots::collect_final_global_object_contributors;
+#[cfg(any(test, feature = "test-utils"))]
 use crate::binder::scope::ScopeId;
+#[cfg(any(test, feature = "test-utils"))]
 use crate::binder::symbol::SymbolId;
 use crate::check::checker::annotations::project_local_well_known_symbol_from_name;
 pub(super) use crate::check::checker::context::{
     ProjectLocalDemandSnapshot, ProjectLocalTypeOverlayDraft, ProjectLocalUserDemandGateway,
 };
 pub(super) use crate::check::checker::eval::keyof_of_type;
+#[cfg(any(test, feature = "test-utils"))]
 use crate::check::checker::library_identities::LibrarySemanticIdentities;
 pub(super) use crate::check::checker::namespace_values::ProjectLocalNamespaceSeed;
+#[cfg(any(test, feature = "test-utils"))]
 use crate::check::checker::reporting_record::CheckerRecord;
 pub(super) use crate::check::checker::type_groups::PublishedTypeParameterDefault;
 use crate::check::checker::type_groups::{
@@ -40,29 +48,38 @@ pub(super) use crate::check::checker::{
     check_bound_project_local_programs, BoundProjectBinder, CheckResult,
     ProjectLocalUserPassOutput, ProjectLocalUserPassPlan,
 };
+#[cfg(any(test, feature = "test-utils"))]
 pub(super) use crate::check::query::{SemanticQueryCoordinator, SemanticQueryState};
+#[cfg(any(test, feature = "test-utils"))]
 pub(super) use crate::class_semantics::{DemandOutcome, PublishedClasses};
+#[cfg(any(test, feature = "test-utils"))]
 pub(super) use crate::diagnostics::render_type;
+#[cfg(any(test, feature = "test-utils"))]
 use crate::diagnostics::{Diagnostic, IncompleteSurface, Severity};
 pub(super) use crate::frontend::ProjectProgram;
 pub(super) use crate::source::CompilationOrigin;
 pub(super) use crate::source::LibraryFileOrdinal;
+#[cfg(any(test, feature = "test-utils"))]
 use crate::source::{ModuleOrdinal, UnitSlot};
 pub(super) use crate::types::repr::{
     number_to_string, AliasId, ConditionalType, FunctionType, MappedType, ModifierOp, ObjectType,
     ParameterType, PropertyType, TemplateType, TupleRestType, TupleType, TypeTag, WellKnownSymbol,
 };
+#[cfg(any(test, feature = "test-utils"))]
+pub(super) use crate::types::IntrinsicKind;
 pub(super) use crate::types::{
-    substitute, GenericTypeParam, Interner, IntrinsicKind, LiteralValue, PropertyKey, TypeId,
-    TypeParamId, Visibility,
+    substitute, GenericTypeParam, Interner, LiteralValue, PropertyKey, TypeId, TypeParamId,
+    Visibility,
 };
 pub(super) use rustc_hash::FxHashMap;
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(any(test, feature = "test-utils"))]
+pub(super) use typokat_library_product::sha256_hex;
 pub(super) use typokat_library_product::{
-    sha256_hex, Accessibility, ContainerKind, DeclarationGroupRecipe, DeclarationKey,
-    DeclarationPayload, DependencyKind, DependencyTarget, IntrinsicMarker, KeywordKind,
-    LibraryDeclarationProduct, LiteralRecipe, MappedModifier, MemberKey, MemberKind, MemberRecipe,
-    ParameterPattern, PropertyNameRecipe, QualifiedPathResolutionOutcome, QualifiedPathRole,
+    Accessibility, ContainerKind, DeclarationGroupRecipe, DeclarationKey, DeclarationPayload,
+    DependencyKind, DependencyTarget, IntrinsicMarker, KeywordKind, LibraryDeclarationProduct,
+    LiteralRecipe, MappedModifier, MemberKey, MemberKind, MemberRecipe, ParameterPattern,
+    PropertyNameRecipe, QualifiedPathResolutionOutcome, QualifiedPathRole,
     QualifiedPathUnresolvedCause, RegionKey, SignatureKey, SourceSite, SymbolicValueNameRecipe,
     TypeOperator, TypeParameterKey, TypeRecipeKey, TypeRecipeNode, TypeReferenceResolution,
     ValueReferenceResolution,
@@ -75,6 +92,7 @@ pub(super) fn well_known_symbol_from_name(name: &str) -> Option<WellKnownSymbol>
     project_local_well_known_symbol_from_name(name)
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 pub(super) fn project_local_semantic_query_state(
     groups: [Option<TypeGroupId>; 8],
     published: &PublishedTypeEnvironment,
@@ -174,6 +192,7 @@ pub(in crate::check::checker) fn project_local_final_product_dependencies(
     Ok(rows)
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 pub(super) fn project_local_final_type_group_fragment_counts(
     bound: &BoundProjectBinder,
     mapped: &[ProjectLocalMappedProductGroupForTest],
@@ -188,6 +207,7 @@ pub(super) fn project_local_final_type_group_fragment_counts(
         .collect()
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 pub(super) fn project_local_final_value_declaration_counts(
     bound: &BoundProjectBinder,
     mapped: &[ProjectLocalMappedProductGroupForTest],
@@ -202,6 +222,7 @@ pub(super) fn project_local_final_value_declaration_counts(
         .collect()
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone)]
 pub(super) struct ProjectLocalTypeProbeCoordinate {
     pub(super) identity: usize,
@@ -210,6 +231,7 @@ pub(super) struct ProjectLocalTypeProbeCoordinate {
     pub(super) source_path: Option<String>,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone)]
 pub(super) struct ProjectLocalValueProbeCoordinate {
     pub(super) identity: usize,
@@ -218,11 +240,13 @@ pub(super) struct ProjectLocalValueProbeCoordinate {
     pub(super) name: String,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 pub(super) struct ProjectLocalProbeAuthority {
     pub(super) types: Vec<ProjectLocalTypeProbeCoordinate>,
     pub(super) values: Vec<ProjectLocalValueProbeCoordinate>,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 pub(super) fn project_local_probe_authority(
     product: &LibraryDeclarationProduct,
     bound: &BoundProjectBinder,
@@ -340,6 +364,7 @@ pub(super) fn project_local_probe_authority(
     Some(ProjectLocalProbeAuthority { types, values })
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SignatureProbe {
     pub parameter_types: Vec<String>,
@@ -352,6 +377,7 @@ pub struct NormalizedSpanForTest {
     pub end: u32,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NormalizedDiagnosticForTest {
     pub span: NormalizedSpanForTest,
@@ -370,10 +396,12 @@ pub struct NormalizedIncompleteForTest {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum NormalizedCheckerRecordForTest {
+    #[cfg(any(test, feature = "test-utils"))]
     Diagnostic(NormalizedDiagnosticForTest),
     Incomplete(NormalizedIncompleteForTest),
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NormalizedUserEventRecordForTest {
     pub source_ordinal: LibraryFileOrdinal,
@@ -384,6 +412,7 @@ pub struct NormalizedUserEventRecordForTest {
     pub record: NormalizedCheckerRecordForTest,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NormalizedLibraryRecordForTest {
     pub source_ordinal: LibraryFileOrdinal,
@@ -391,6 +420,7 @@ pub struct NormalizedLibraryRecordForTest {
     pub record: NormalizedCheckerRecordForTest,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NormalizedCheckResultForTest {
     pub source_ordinal: LibraryFileOrdinal,
@@ -400,6 +430,7 @@ pub struct NormalizedCheckResultForTest {
     pub incomplete: Vec<NormalizedIncompleteForTest>,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NormalizedTypeProbeForTest {
     pub name: String,
@@ -407,12 +438,14 @@ pub struct NormalizedTypeProbeForTest {
     pub member_names: Vec<String>,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NormalizedModuleTypeProbeForTest {
     pub source_ordinal: LibraryFileOrdinal,
     pub probe: NormalizedTypeProbeForTest,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NormalizedCallableMemberProbeForTest {
     pub name: String,
@@ -423,6 +456,7 @@ pub struct NormalizedCallableMemberProbeForTest {
     pub signatures: Vec<SignatureProbe>,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NormalizedValueProbeForTest {
     pub name: String,
@@ -433,6 +467,7 @@ pub struct NormalizedValueProbeForTest {
     pub callable_members: Vec<NormalizedCallableMemberProbeForTest>,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NormalizedSemanticProbesForTest {
     pub global_types: Vec<NormalizedTypeProbeForTest>,
@@ -440,16 +475,28 @@ pub struct NormalizedSemanticProbesForTest {
     pub global_values: Vec<NormalizedValueProbeForTest>,
 }
 
+pub(super) struct ProjectLocalPublishedTypeInputs<'a> {
+    pub(super) group_types: &'a [Option<TypeId>],
+    pub(super) type_parameter_ids: &'a [TypeParamId],
+    pub(super) type_parameter_defaults: &'a [PublishedTypeParameterDefault],
+    pub(super) ready_product_groups: &'a BTreeSet<usize>,
+    pub(super) unavailable_product_groups: &'a BTreeSet<usize>,
+    pub(super) aliases: PublishedAliases,
+}
+
 pub(super) fn project_local_published_types(
     product: &LibraryDeclarationProduct,
     mapped: &[ProjectLocalMappedProductGroupForTest],
-    group_types: &[Option<TypeId>],
-    type_parameter_ids: &[TypeParamId],
-    type_parameter_defaults: &[PublishedTypeParameterDefault],
-    ready_product_groups: &BTreeSet<usize>,
-    unavailable_product_groups: &BTreeSet<usize>,
-    aliases: PublishedAliases,
+    inputs: ProjectLocalPublishedTypeInputs<'_>,
 ) -> PublishedTypeEnvironment {
+    let ProjectLocalPublishedTypeInputs {
+        group_types,
+        type_parameter_ids,
+        type_parameter_defaults,
+        ready_product_groups,
+        unavailable_product_groups,
+        aliases,
+    } = inputs;
     let terminal_count = mapped
         .iter()
         .filter_map(|row| row.local_type_group)
@@ -518,6 +565,7 @@ pub(super) fn project_local_published_types(
     PublishedTypeEnvironment::from_project_local_terminals_with_aliases(terminals, aliases)
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 pub(super) struct ProjectLocalUserPassObservables {
     pub(super) event_ledger: Vec<ProjectLocalUserEventRecordForTest>,
     pub(super) check_results: Vec<ProjectLocalCheckResultForTest>,
@@ -545,9 +593,15 @@ pub(super) fn run_project_local_user_pass<'ast>(
     interner: &mut Interner,
     request: ProjectLocalUserPassRequest<'_, 'ast>,
 ) -> Result<ProjectLocalUserPassOutput, &'static str> {
-    run_project_local_user_pass_inner(interner, request, false)
+    run_project_local_user_pass_inner(
+        interner,
+        request,
+        #[cfg(any(test, feature = "test-utils"))]
+        false,
+    )
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 pub(super) fn run_project_local_user_pass_for_test<'ast>(
     interner: &mut Interner,
     request: ProjectLocalUserPassRequest<'_, 'ast>,
@@ -575,7 +629,7 @@ pub(super) fn run_project_local_user_pass_for_test<'ast>(
 fn run_project_local_user_pass_inner<'ast>(
     interner: &mut Interner,
     request: ProjectLocalUserPassRequest<'_, 'ast>,
-    inject_provisional_unavailable_write: bool,
+    #[cfg(any(test, feature = "test-utils"))] inject_provisional_unavailable_write: bool,
 ) -> Result<ProjectLocalUserPassOutput, &'static str> {
     let ProjectLocalUserPassRequest {
         bound,
@@ -608,11 +662,13 @@ fn run_project_local_user_pass_inner<'ast>(
             demand_gateway,
             library_validations,
             library_validation_groups,
+            #[cfg(any(test, feature = "test-utils"))]
             inject_provisional_unavailable_write,
         },
     )
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 pub(super) fn project_local_user_pass_observables(
     output: &ProjectLocalUserPassOutput,
     programs: &[ProjectProgram<'_>],
@@ -727,6 +783,7 @@ pub(super) fn project_local_user_pass_observables(
     })
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 fn normalize_diagnostic(diagnostic: &Diagnostic) -> NormalizedDiagnosticForTest {
     NormalizedDiagnosticForTest {
         span: NormalizedSpanForTest {
@@ -744,6 +801,7 @@ fn normalize_diagnostic(diagnostic: &Diagnostic) -> NormalizedDiagnosticForTest 
     }
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 fn normalize_incomplete(incomplete: &IncompleteSurface) -> NormalizedIncompleteForTest {
     NormalizedIncompleteForTest {
         span: NormalizedSpanForTest {
@@ -755,6 +813,7 @@ fn normalize_incomplete(incomplete: &IncompleteSurface) -> NormalizedIncompleteF
     }
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 fn normalize_checker_record(record: &CheckerRecord) -> NormalizedCheckerRecordForTest {
     match record {
         CheckerRecord::Diagnostic(diagnostic) => {

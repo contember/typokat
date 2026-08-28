@@ -1,8 +1,11 @@
 //! Project-local semantic publication terminals.
 
+#[cfg(any(test, feature = "test-utils"))]
 use super::observation;
+#[cfg(any(test, feature = "test-utils"))]
+use super::observation::ProjectLocalSemanticPhaseForTest;
 use super::project_local_pass_port::TypeId;
-use super::{ProjectLocalSemanticPhaseForTest, ProjectLocalUnavailableReasonForTest};
+use super::ProjectLocalUnavailableReasonForTest;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ProductTerminal {
@@ -16,6 +19,7 @@ pub(super) enum ProductTerminal {
 }
 
 impl ProductTerminal {
+    #[cfg(any(test, feature = "test-utils"))]
     pub(super) fn identity(&self) -> String {
         match self {
             Self::Resolving => "resolving".to_owned(),
@@ -41,6 +45,7 @@ impl ProductTerminal {
         }
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     pub(super) fn materialize(phase: ProjectLocalSemanticPhaseForTest, product_group: usize) {
         observation::record_owner_materialized(phase, product_group);
     }

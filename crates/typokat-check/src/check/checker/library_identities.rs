@@ -261,7 +261,7 @@ impl LibrarySemanticIdentities {
         }
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
     pub(in crate::check::checker) fn select_project_local_exact(
         groups: [Option<TypeGroupId>; 8],
         published: &PublishedTypeEnvironment,
@@ -574,7 +574,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         ty: TypeId,
         span: Span,
     ) -> LibraryMemberProjection {
-        #[cfg(any(test, feature = "test-utils"))]
+        #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
         if let Some(surface) = classify_native_source_surface(self.interner, ty) {
             let identity = match surface {
                 NativeSourceSurface::Array { readonly: true, .. } => 1,
@@ -830,7 +830,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             return LibraryComposedMember::Missing;
         }
 
-        #[cfg(any(test, feature = "test-utils"))]
+        #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
         let _ = self.demand_project_local_library_identity(6);
         let terminal = self
             .library_semantic_identities
@@ -852,7 +852,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     }
 
     pub(in crate::check::checker) fn regexp_literal_type(&mut self, span: Span) -> Option<TypeId> {
-        #[cfg(any(test, feature = "test-utils"))]
+        #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
         let _ = self.demand_project_local_library_identity(5);
         let identities = self.library_semantic_identities.as_ref()?;
         match &identities.inner.regexp {

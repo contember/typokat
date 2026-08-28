@@ -473,11 +473,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 selected_binders,
             ),
             TSType::TSArrayType(array) => {
+                #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
+                let _ = self.demand_project_local_library_identity(0);
                 #[cfg(any(test, feature = "test-utils"))]
-                {
-                    let _ = self.demand_project_local_library_identity(0);
-                    self.record_declared_array_dependency_for_oracle();
-                }
+                self.record_declared_array_dependency_for_oracle();
                 let element = self.plan_declared_recipe(
                     scope,
                     &array.element_type,
@@ -488,11 +487,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 Some(PlannedRecipe::array(element))
             }
             TSType::TSTupleType(tuple) => {
+                #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
+                let _ = self.demand_project_local_library_identity(0);
                 #[cfg(any(test, feature = "test-utils"))]
-                {
-                    let _ = self.demand_project_local_library_identity(0);
-                    self.record_declared_array_dependency_for_oracle();
-                }
+                self.record_declared_array_dependency_for_oracle();
                 let mut elements = Vec::with_capacity(tuple.element_types.len());
                 for element in &tuple.element_types {
                     elements.push(self.plan_declared_tuple_element(

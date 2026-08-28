@@ -1,7 +1,8 @@
 //! Canonical candidate fault activation sites.
 
 use super::observation;
-use super::{ProjectLocalFaultSeamForTest, ProjectLocalSemanticFaultForTest};
+use super::observation::ProjectLocalFaultSeamForTest;
+use super::ProjectLocalSemanticFaultForTest;
 
 pub(super) struct FaultStateForTest {
     requested: Option<ProjectLocalSemanticFaultForTest>,

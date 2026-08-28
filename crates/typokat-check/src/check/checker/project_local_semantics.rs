@@ -1,6 +1,8 @@
 //! Project-owned demand scheduling for immutable library declaration products.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+#[cfg(any(test, feature = "test-utils"))]
+use std::collections::BTreeSet;
 
 use crate::binder::namespace::LibraryProductBinderMap;
 use crate::binder::symbol::SymbolId;
@@ -8,6 +10,7 @@ use crate::binder::Binder;
 use crate::check::checker::decls::inventory::BoundTypeDeclarationInventory;
 use oxc_ast::ast::TSTypeName;
 use oxc_ast_visit::{walk, Visit};
+#[cfg(any(test, feature = "test-utils"))]
 use rustc_hash::FxHashMap;
 use typokat_library_product::{DependencyTarget, LibraryDeclarationProduct};
 
@@ -35,6 +38,7 @@ pub(super) fn library_type_dependencies(
     Ok(rows)
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 pub(super) fn project_local_semantic_owners(
     product: &LibraryDeclarationProduct,
     map: &LibraryProductBinderMap,
@@ -322,6 +326,7 @@ fn flatten_type_name<'a>(name: &'a TSTypeName<'_>, output: &mut Vec<&'a str>) ->
     }
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::check) enum ProjectLocalTerminal<Ready, Unavailable> {
     Unresolved,
@@ -330,6 +335,7 @@ pub(in crate::check) enum ProjectLocalTerminal<Ready, Unavailable> {
     Unavailable(Unavailable),
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::check) enum ProjectLocalObservation<'a, Ready, Unavailable> {
     Unresolved,
@@ -338,6 +344,7 @@ pub(in crate::check) enum ProjectLocalObservation<'a, Ready, Unavailable> {
     Unavailable(&'a Unavailable),
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 pub(in crate::check) trait ProjectLocalSemanticPublisher {
     type Ready;
     type Unavailable: Clone;
@@ -352,9 +359,11 @@ pub(in crate::check) trait ProjectLocalSemanticPublisher {
     fn rollback_component(&mut self, members: &[SymbolId]);
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 type ProjectLocalComponentResults<Ready, Unavailable, Error> =
     Result<Vec<Result<Ready, Unavailable>>, Error>;
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Debug, PartialEq, Eq)]
 pub(in crate::check) enum ProjectLocalDemandError<Error> {
     UnknownGroup(SymbolId),
@@ -362,6 +371,7 @@ pub(in crate::check) enum ProjectLocalDemandError<Error> {
     Publisher(Error),
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 pub(in crate::check) struct ProjectLocalSemanticCoordinator<Ready, Unavailable> {
     components: Vec<Box<[SymbolId]>>,
     owner_indices: FxHashMap<SymbolId, usize>,
@@ -370,6 +380,7 @@ pub(in crate::check) struct ProjectLocalSemanticCoordinator<Ready, Unavailable> 
     terminals: Vec<ProjectLocalTerminal<Ready, Unavailable>>,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 impl<Ready, Unavailable> ProjectLocalSemanticCoordinator<Ready, Unavailable> {
     pub(in crate::check) fn new(
         owners: impl IntoIterator<Item = SymbolId>,
@@ -570,6 +581,7 @@ impl<Ready, Unavailable> ProjectLocalSemanticCoordinator<Ready, Unavailable> {
     }
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 fn dependency_sccs(edges: &[Vec<usize>]) -> Vec<Vec<usize>> {
     struct Tarjan<'a> {
         edges: &'a [Vec<usize>],

@@ -1,18 +1,20 @@
 //! Direct immutable-product semantic lowering.
 
 use super::project_local_pass_port::{
-    keyof_of_type, render_type, substitute, Accessibility, AliasId, ConditionalType,
-    DeclarationKey, DeclarationPayload, DemandOutcome, FunctionType, FxHashMap, GenericTypeParam,
-    Interner, IntrinsicMarker, KeywordKind, LibraryDeclarationProduct, LiteralRecipe,
-    MappedModifier, MappedType, MemberKey, MemberKind, NormalizedCheckerRecordForTest,
-    NormalizedIncompleteForTest, NormalizedSpanForTest, ObjectType, ParameterPattern,
-    ParameterType, ProjectLocalTypeOverlayDraft, PropertyKey, PropertyNameRecipe, PropertyType,
-    PublishedAliasSurface, PublishedAliasTerminal, PublishedAliasUnavailable, PublishedAliases,
-    PublishedClasses, QualifiedPathResolutionOutcome, QualifiedPathRole,
-    QualifiedPathUnresolvedCause, SemanticQueryCoordinator, SemanticQueryState, SignatureKey,
-    SourceSite, TemplateType, TupleRestType, TupleType, TypeGroupId, TypeId, TypeOperator,
-    TypeParamId, TypeParameterKey, TypeRecipeKey, TypeRecipeNode, TypeReferenceResolution, TypeTag,
-    ValueReferenceResolution, Visibility,
+    keyof_of_type, substitute, Accessibility, AliasId, ConditionalType, DeclarationKey,
+    DeclarationPayload, FunctionType, FxHashMap, GenericTypeParam, Interner, IntrinsicMarker,
+    KeywordKind, LibraryDeclarationProduct, LiteralRecipe, MappedModifier, MappedType, MemberKey,
+    MemberKind, NormalizedCheckerRecordForTest, NormalizedIncompleteForTest, NormalizedSpanForTest,
+    ObjectType, ParameterPattern, ParameterType, ProjectLocalTypeOverlayDraft, PropertyKey,
+    PropertyNameRecipe, PropertyType, PublishedAliasSurface, PublishedAliasTerminal,
+    PublishedAliasUnavailable, PublishedAliases, QualifiedPathResolutionOutcome, QualifiedPathRole,
+    QualifiedPathUnresolvedCause, SignatureKey, SourceSite, TemplateType, TupleRestType, TupleType,
+    TypeGroupId, TypeId, TypeOperator, TypeParamId, TypeParameterKey, TypeRecipeKey,
+    TypeRecipeNode, TypeReferenceResolution, TypeTag, ValueReferenceResolution, Visibility,
+};
+#[cfg(any(test, feature = "test-utils"))]
+use super::project_local_pass_port::{
+    render_type, DemandOutcome, PublishedClasses, SemanticQueryCoordinator, SemanticQueryState,
 };
 use super::recipe_primitives::{
     build_contextual_type_parameter_index, group_has_runtime_value, has_unsupported_computed_name,
@@ -29,9 +31,11 @@ use super::validation::{
     ProjectLocalValidationAccumulator, ProjectLocalValidationCandidate,
     ProjectLocalValidationEvent, ProjectLocalValidationProducer, ProjectLocalValidationSite,
 };
+use super::ProjectLocalLibraryRecordForTest;
+#[cfg(any(test, feature = "test-utils"))]
 use super::{
-    ProjectLocalLibraryRecordForTest, ProjectLocalModuleTypeProbeForTest,
-    ProjectLocalSemanticProbesForTest, ProjectLocalValueProbeForTest,
+    ProjectLocalModuleTypeProbeForTest, ProjectLocalSemanticProbesForTest,
+    ProjectLocalValueProbeForTest,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -1889,7 +1893,7 @@ impl<'product, 'interner> ProductLowerer<'product, 'interner> {
                 readonly,
             } => {
                 let mapped =
-                    self.lower_mapped(recipe, owner, parameter, name, value, optional, readonly)?;
+                    self.lower_mapped(recipe, owner, parameter, name, value, (optional, readonly))?;
                 Ok(self.interner.intern_mapped(mapped))
             }
             TypeRecipeNode::Conditional {
@@ -2725,9 +2729,9 @@ impl<'product, 'interner> ProductLowerer<'product, 'interner> {
         parameter: TypeParameterKey,
         name: Option<TypeRecipeKey>,
         value: Option<TypeRecipeKey>,
-        optional: MappedModifier,
-        readonly: MappedModifier,
+        modifiers: (MappedModifier, MappedModifier),
     ) -> Result<MappedType, ProductLoweringError> {
+        let (optional, readonly) = modifiers;
         let parameter_row = self.product.type_parameters()[parameter.index()].clone();
         let mut error = None;
         if let Some(name) = name {
@@ -3050,6 +3054,7 @@ impl<'product, 'interner> ProductLowerer<'product, 'interner> {
     }
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 pub(super) struct SemanticProbeInput<'a> {
     pub(super) materialized: &'a [usize],
     pub(super) group_types: &'a [Option<TypeId>],
@@ -3060,6 +3065,7 @@ pub(super) struct SemanticProbeInput<'a> {
     pub(super) include_namespace_values: bool,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 pub(super) fn build_semantic_probes(
     interner: &mut Interner,
     mut query_state: SemanticQueryState,
@@ -3210,11 +3216,13 @@ pub(super) fn build_semantic_probes(
     }
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 fn stable_dedup(rows: &mut Vec<String>) {
     let mut seen = BTreeSet::new();
     rows.retain(|row| seen.insert(row.clone()));
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 fn probe_object_type(interner: &Interner, mut ty: TypeId) -> Option<&ObjectType> {
     loop {
         if let Some(object) = interner.store().object_type(ty) {
@@ -3224,6 +3232,7 @@ fn probe_object_type(interner: &Interner, mut ty: TypeId) -> Option<&ObjectType>
     }
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 fn signature_probe(
     interner: &mut Interner,
     published_classes: &PublishedClasses,

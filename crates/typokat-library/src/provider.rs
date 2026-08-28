@@ -307,6 +307,16 @@ impl LibraryBaseProvider {
             .clone()
     }
 
+    /// Load the immutable declaration product for the isolated-session benchmark.
+    #[cfg(feature = "session-bench")]
+    #[doc(hidden)]
+    pub fn declaration_product_for_session_bench(
+        &self,
+    ) -> Result<Arc<typokat_library_product::LibraryDeclarationProduct>, String> {
+        self.declaration_product()
+            .map_err(|error| error.to_string())
+    }
+
     #[cfg(test)]
     pub(super) fn prepare_project_declaration_universe_for_test(
         &self,

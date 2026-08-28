@@ -863,7 +863,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         span: Span,
         arguments: Option<&TSTypeParameterInstantiation<'_>>,
     ) -> Option<TypeId> {
-        #[cfg(any(test, feature = "test-utils"))]
+        #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
         if !self.demand_project_local_type_group(group) {
             if let Some(arguments) = arguments {
                 for argument in &arguments.params {

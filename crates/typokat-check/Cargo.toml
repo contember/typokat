@@ -10,6 +10,7 @@ measurement-counters = [
     "typokat-types/measurement-counters",
 ]
 test-utils = []
+session-bench = ["typokat-binder/session-bench"]
 
 [dependencies]
 oxc_allocator.workspace = true

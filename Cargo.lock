@@ -1348,6 +1348,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "typokat-session-batch"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "typokat-check",
+ "typokat-core",
+ "typokat-frontend",
+ "typokat-library",
+ "typokat-library-product",
+]
+
+[[package]]
 name = "typokat-surface"
 version = "0.1.0"
 dependencies = [

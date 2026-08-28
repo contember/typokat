@@ -61,6 +61,7 @@ impl LibraryRecordAccumulator {
             .collect()
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     pub(super) fn normalized(&self) -> Vec<ProjectLocalLibraryRecordForTest> {
         let mut records = self.events.values().cloned().collect::<Vec<_>>();
         records.sort_by(|left, right| {

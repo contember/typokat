@@ -1,41 +1,53 @@
 //! Product-key scheduler and atomic terminal publication.
 
 use super::lowerer::{lower_product_groups, ProductLoweringSeed};
+#[cfg(any(test, feature = "test-utils"))]
+use super::observation::ProjectLocalSemanticPhaseForTest;
 use super::project_local_pass_port::{
     project_local_published_types, ContainerKind, DeclarationPayload, DependencyKind,
-    DependencyTarget, Interner, IntrinsicKind, LibraryDeclarationProduct, LiteralValue,
-    ProjectLocalDemandSnapshot, ProjectLocalTypeOverlayDraft, ProjectLocalUserDemandGateway,
-    PublishedAliasTerminal, PublishedAliasUnavailable, PublishedAliases, TypeGroupId, TypeId,
-    TypeTag, ValueStorageId,
+    DependencyTarget, LibraryDeclarationProduct, ProjectLocalDemandSnapshot,
+    ProjectLocalPublishedTypeInputs, ProjectLocalTypeOverlayDraft, ProjectLocalUserDemandGateway,
+    PublishedAliases, TypeGroupId, ValueStorageId,
+};
+#[cfg(any(test, feature = "test-utils"))]
+use super::project_local_pass_port::{
+    Interner, IntrinsicKind, LiteralValue, PublishedAliasTerminal, PublishedAliasUnavailable,
+    TypeId, TypeTag,
 };
 use super::record_staging::LibraryRecordAccumulator;
 use super::session::SessionCore;
 use super::terminal::ProductTerminal;
 use super::validation::{ProjectLocalValidationAccumulator, ProjectLocalValidationCandidate};
+#[cfg(any(test, feature = "test-utils"))]
 use super::{
     ProjectLocalCacheWriteForTest, ProjectLocalForceAllAliasTerminalForTest,
     ProjectLocalForceAllAliasUnavailableForTest, ProjectLocalForceAllIntrinsicKindForTest,
     ProjectLocalForceAllLiteralKindForTest, ProjectLocalForceAllObjectShapeForTest,
     ProjectLocalForceAllReadySurfaceForTest, ProjectLocalForceAllTerminalForTest,
     ProjectLocalForceAllTerminalRowForTest, ProjectLocalForceAllTypeKindForTest,
+    ProjectLocalPublicationSccCommitForTest, ProjectLocalTerminalStateForTest,
+};
+use super::{
     ProjectLocalMappedProductGroupForTest, ProjectLocalProductDependencyForTest,
     ProjectLocalProductGroupForTest, ProjectLocalProductSccForTest,
-    ProjectLocalPublicationSccCommitForTest, ProjectLocalSemanticPhaseForTest,
-    ProjectLocalTerminalStateForTest,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 pub(super) struct ProjectLocalSemanticCoordinator {
     session: Rc<SessionCore>,
+    #[cfg(any(test, feature = "test-utils"))]
     groups: Vec<ProjectLocalProductGroupForTest>,
     mapped_groups: Vec<ProjectLocalMappedProductGroupForTest>,
+    #[cfg(any(test, feature = "test-utils"))]
     dependencies: Vec<ProjectLocalProductDependencyForTest>,
     dependency_targets: BTreeMap<usize, Vec<usize>>,
     containment_targets: BTreeMap<usize, Vec<usize>>,
     sccs: Vec<ProjectLocalProductSccForTest>,
     group_scc: BTreeMap<usize, usize>,
+    #[cfg(any(test, feature = "test-utils"))]
     commits: Vec<ProjectLocalPublicationSccCommitForTest>,
+    #[cfg(any(test, feature = "test-utils"))]
     cache_writes: Vec<ProjectLocalCacheWriteForTest>,
     semantic_group_types: Vec<Option<super::project_local_pass_port::TypeId>>,
     semantic_group_value_types: Vec<Option<super::project_local_pass_port::TypeId>>,
@@ -143,6 +155,7 @@ where
             &[product_group],
             self.augmented_groups,
             self.native_array_groups,
+            #[cfg(any(test, feature = "test-utils"))]
             ProjectLocalSemanticPhaseForTest::Ordinary,
         );
         (self.commit)(self.coordinator)?;
@@ -168,12 +181,14 @@ where
         let environment = project_local_published_types(
             self.product,
             &self.coordinator.mapped_groups,
-            &self.coordinator.semantic_group_types,
-            &self.coordinator.type_parameter_ids,
-            &self.coordinator.type_parameter_defaults,
-            &self.coordinator.ready,
-            &self.coordinator.unavailable,
-            self.coordinator.aliases.clone(),
+            ProjectLocalPublishedTypeInputs {
+                group_types: &self.coordinator.semantic_group_types,
+                type_parameter_ids: &self.coordinator.type_parameter_ids,
+                type_parameter_defaults: &self.coordinator.type_parameter_defaults,
+                ready_product_groups: &self.coordinator.ready,
+                unavailable_product_groups: &self.coordinator.unavailable,
+                aliases: self.coordinator.aliases.clone(),
+            },
         );
         let terminals = environment
             .product_parts()
@@ -299,6 +314,7 @@ where
     }
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PublicationInjection {
     None,
@@ -331,6 +347,7 @@ impl PublicationFaultPolicy for OrdinaryPublication {
     }
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 struct InjectedPublication<Activate> {
     injection: PublicationInjection,
     reached: bool,
@@ -338,6 +355,7 @@ struct InjectedPublication<Activate> {
     activate: Activate,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 impl<Activate> InjectedPublication<Activate> {
     fn new(injection: PublicationInjection, activate: Activate) -> Self {
         Self {
@@ -349,6 +367,7 @@ impl<Activate> InjectedPublication<Activate> {
     }
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 impl<Activate: FnMut(PublicationInjection)> PublicationFaultPolicy
     for InjectedPublication<Activate>
 {
@@ -392,6 +411,7 @@ impl ProjectLocalSemanticCoordinator {
         Self::new_inner(product, mapped_groups, session, dependencies)
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     pub(super) fn new_with_dependencies(
         product: &LibraryDeclarationProduct,
         mapped_groups: Vec<ProjectLocalMappedProductGroupForTest>,
@@ -401,6 +421,7 @@ impl ProjectLocalSemanticCoordinator {
         Self::new_inner(product, mapped_groups, session, dependencies)
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     pub(super) fn dependency_rows(
         product: &LibraryDeclarationProduct,
     ) -> Vec<ProjectLocalProductDependencyForTest> {
@@ -491,14 +512,18 @@ impl ProjectLocalSemanticCoordinator {
             .collect();
         Self {
             session,
+            #[cfg(any(test, feature = "test-utils"))]
             groups,
             mapped_groups,
+            #[cfg(any(test, feature = "test-utils"))]
             dependencies,
             dependency_targets,
             containment_targets,
             sccs,
             group_scc,
+            #[cfg(any(test, feature = "test-utils"))]
             commits: Vec::new(),
+            #[cfg(any(test, feature = "test-utils"))]
             cache_writes: Vec::new(),
             semantic_group_types: vec![None; product.group_count()],
             semantic_group_value_types: vec![None; product.group_count()],
@@ -530,6 +555,7 @@ impl ProjectLocalSemanticCoordinator {
         }
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     pub(super) fn groups(&self) -> &[ProjectLocalProductGroupForTest] {
         &self.groups
     }
@@ -538,18 +564,22 @@ impl ProjectLocalSemanticCoordinator {
         &self.mapped_groups
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     pub(super) fn dependencies(&self) -> &[ProjectLocalProductDependencyForTest] {
         &self.dependencies
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     pub(super) fn sccs(&self) -> &[ProjectLocalProductSccForTest] {
         &self.sccs
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     pub(super) fn commits(&self) -> &[ProjectLocalPublicationSccCommitForTest] {
         &self.commits
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     pub(super) fn cache_writes(&self) -> &[ProjectLocalCacheWriteForTest] {
         &self.cache_writes
     }
@@ -569,11 +599,13 @@ impl ProjectLocalSemanticCoordinator {
                 roots,
                 augmented_groups,
                 native_array_groups,
+                #[cfg(any(test, feature = "test-utils"))]
                 ProjectLocalSemanticPhaseForTest::Ordinary,
             )
         })
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     pub(super) fn demand_product_groups_for_phase(
         &mut self,
         product: &LibraryDeclarationProduct,
@@ -602,7 +634,7 @@ impl ProjectLocalSemanticCoordinator {
         roots: &[usize],
         augmented_groups: &BTreeMap<usize, TypeGroupId>,
         native_array_groups: [Option<usize>; 2],
-        phase: ProjectLocalSemanticPhaseForTest,
+        #[cfg(any(test, feature = "test-utils"))] phase: ProjectLocalSemanticPhaseForTest,
     ) -> Vec<usize> {
         for root in roots {
             if self.seen_demand_roots.insert(*root) {
@@ -626,6 +658,7 @@ impl ProjectLocalSemanticCoordinator {
                     && self.materialized.insert(*product_group)
                 {
                     self.materialized_order.push(*product_group);
+                    #[cfg(any(test, feature = "test-utils"))]
                     ProductTerminal::materialize(phase, *product_group);
                 }
             }
@@ -691,6 +724,7 @@ impl ProjectLocalSemanticCoordinator {
         self.materialized_order.clone()
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     pub(super) fn demand_roots(&self) -> &[usize] {
         &self.demand_roots
     }
@@ -715,6 +749,7 @@ impl ProjectLocalSemanticCoordinator {
         self.commit_demanded_checked_inner(&mut policy)
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     pub(super) fn commit_demanded_checked_with_injection<Activate>(
         &mut self,
         injection: PublicationInjection,
@@ -802,10 +837,12 @@ impl ProjectLocalSemanticCoordinator {
         roots.into_iter().collect()
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     pub(super) fn ready_groups(&self) -> Vec<usize> {
         self.ready.iter().copied().collect()
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     pub(super) fn library_records(&self) -> Vec<super::ProjectLocalLibraryRecordForTest> {
         self.library_records.normalized()
     }
@@ -821,6 +858,7 @@ impl ProjectLocalSemanticCoordinator {
             .candidates_for(&ready_groups, &visited_groups)
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     pub(super) fn repeat(&self, product_group: usize) -> Option<String> {
         self.session
             .cache()
@@ -828,6 +866,7 @@ impl ProjectLocalSemanticCoordinator {
             .map(|terminal| terminal.identity())
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     pub(super) fn force_all_terminal_census(
         &self,
         interner: &Interner,
@@ -863,6 +902,7 @@ impl ProjectLocalSemanticCoordinator {
             .collect()
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     fn force_all_ready_surface(
         &self,
         interner: &Interner,
@@ -993,11 +1033,13 @@ impl ProjectLocalSemanticCoordinator {
                     value_ty: group_value_types[member.product_key],
                 },
             ) {
+                #[cfg(any(test, feature = "test-utils"))]
                 self.cache_writes.push(ProjectLocalCacheWriteForTest {
                     owner: member.clone(),
                     state: ProjectLocalTerminalStateForTest::Ready,
                 });
             }
+            #[cfg(any(test, feature = "test-utils"))]
             self.commits.push(ProjectLocalPublicationSccCommitForTest {
                 scc: scc.clone(),
                 reserved_members: scc.members,
@@ -1011,35 +1053,29 @@ impl ProjectLocalSemanticCoordinator {
         let resolving_cache = policy.write_resolving_to_durable_cache();
         let mut published = Vec::with_capacity(scc.members.len());
         for member in &scc.members {
-            let (terminal, state) = if component_unavailable {
+            let terminal = if component_unavailable {
                 let reason = super::ProjectLocalUnavailableReasonForTest::UnsupportedProductRecipe;
-                (
-                    ProductTerminal::Unavailable(reason),
-                    ProjectLocalTerminalStateForTest::Unavailable(reason),
-                )
+                ProductTerminal::Unavailable(reason)
             } else {
                 let mut identity = "publisher:".to_owned();
                 identity.push_str(&self.session.publisher_identity().to_string());
                 identity.push_str(":product:");
                 identity.push_str(&member.product_key.to_string());
-                (
-                    ProductTerminal::Ready {
-                        identity,
-                        ty: group_types[member.product_key],
-                        value_ty: group_value_types[member.product_key],
-                    },
-                    ProjectLocalTerminalStateForTest::Ready,
-                )
+                ProductTerminal::Ready {
+                    identity,
+                    ty: group_types[member.product_key],
+                    value_ty: group_value_types[member.product_key],
+                }
             };
-            let (terminal, state) = if resolving_cache && published.is_empty() {
-                (
-                    ProductTerminal::Resolving,
-                    ProjectLocalTerminalStateForTest::Resolving,
-                )
+            let terminal = if resolving_cache && published.is_empty() {
+                ProductTerminal::Resolving
             } else {
-                (terminal, state)
+                terminal
             };
+            #[cfg(any(test, feature = "test-utils"))]
+            let state = terminal_state_for_test(&terminal);
             if self.session.cache().commit(member.product_key, terminal) {
+                #[cfg(any(test, feature = "test-utils"))]
                 self.cache_writes.push(ProjectLocalCacheWriteForTest {
                     owner: member.clone(),
                     state,
@@ -1049,6 +1085,7 @@ impl ProjectLocalSemanticCoordinator {
                 published.push(member.clone());
             }
         }
+        #[cfg(any(test, feature = "test-utils"))]
         self.commits.push(ProjectLocalPublicationSccCommitForTest {
             scc: scc.clone(),
             reserved_members: scc.members,
@@ -1066,6 +1103,18 @@ impl ProjectLocalSemanticCoordinator {
     }
 }
 
+#[cfg(any(test, feature = "test-utils"))]
+fn terminal_state_for_test(terminal: &ProductTerminal) -> ProjectLocalTerminalStateForTest {
+    match terminal {
+        ProductTerminal::Resolving => ProjectLocalTerminalStateForTest::Resolving,
+        ProductTerminal::Ready { .. } => ProjectLocalTerminalStateForTest::Ready,
+        ProductTerminal::Unavailable(reason) => {
+            ProjectLocalTerminalStateForTest::Unavailable(*reason)
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
 fn force_all_type_kind(interner: &Interner, ty: TypeId) -> ProjectLocalForceAllTypeKindForTest {
     let store = interner.store();
     match store.tag(ty) {

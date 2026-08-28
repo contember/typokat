@@ -1,37 +1,49 @@
 //! Capability-limited entry for the project-local semantic candidate.
 
-use super::coordinator::{
-    ProjectLocalPassDemandGateway, ProjectLocalSemanticCoordinator, PublicationInjection,
-};
+#[cfg(any(test, feature = "test-utils"))]
+use super::coordinator::PublicationInjection;
+use super::coordinator::{ProjectLocalPassDemandGateway, ProjectLocalSemanticCoordinator};
+#[cfg(any(test, feature = "test-utils"))]
 use super::fault_gate::FaultStateForTest;
+#[cfg(any(test, feature = "test-utils"))]
 use super::global_owner::publish_final_global_contributors;
+#[cfg(any(test, feature = "test-utils"))]
 use super::lowerer::{build_semantic_probes, SemanticProbeInput};
+#[cfg(any(test, feature = "test-utils"))]
+use super::observation::ProjectLocalSemanticPhaseForTest;
 use super::project_local_pass_port::{
-    project_local_final_product_dependencies, project_local_final_type_group_fragment_counts,
-    project_local_final_value_declaration_counts, project_local_probe_authority,
-    project_local_published_types, project_local_semantic_query_state,
-    project_local_user_augmented_product_groups, project_local_user_pass_observables,
-    run_project_local_user_pass, run_project_local_user_pass_for_test, sha256_hex,
-    BoundProjectBinder, CheckResult, ContainerKind, LibraryBinderUnit, LibraryDeclarationProduct,
-    NamespaceId, ProjectLocalNamespaceSeed, ProjectLocalUserPassOutput,
+    project_local_final_product_dependencies, project_local_published_types,
+    project_local_user_augmented_product_groups, run_project_local_user_pass, BoundProjectBinder,
+    CheckResult, ContainerKind, LibraryBinderUnit, LibraryDeclarationProduct, NamespaceId,
+    ProjectLocalNamespaceSeed, ProjectLocalPublishedTypeInputs, ProjectLocalUserPassOutput,
     ProjectLocalUserPassRequest, ProjectProgram, TypeGroupId,
 };
+#[cfg(any(test, feature = "test-utils"))]
+use super::project_local_pass_port::{
+    project_local_final_type_group_fragment_counts, project_local_final_value_declaration_counts,
+    project_local_probe_authority, project_local_semantic_query_state,
+    project_local_user_pass_observables, run_project_local_user_pass_for_test, sha256_hex,
+};
 use super::session::SessionCore;
+use super::ProjectLocalMappedProductGroupForTest;
+#[cfg(any(test, feature = "test-utils"))]
 use super::{
-    ProjectLocalMappedProductGroupForTest, ProjectLocalRepeatedDemandForTest,
-    ProjectLocalSccForTest, ProjectLocalSccPublicationForTest, ProjectLocalSemanticPhaseForTest,
+    ProjectLocalRepeatedDemandForTest, ProjectLocalSccForTest, ProjectLocalSccPublicationForTest,
     ProjectLocalSemanticRequestForTest, ProjectLocalSemanticTraceForTest,
     ProjectLocalSourceInputForTest, ProjectLocalTerminalStateForTest,
 };
+#[cfg(any(test, feature = "test-utils"))]
 use std::collections::BTreeSet;
 use std::fmt;
 use std::rc::Rc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProjectLocalCandidateErrorForTest {
+    #[cfg(any(test, feature = "test-utils"))]
     NotImplemented,
     MissingProductBinderMap,
     MissingMappedProductGroup(usize),
+    #[cfg(any(test, feature = "test-utils"))]
     GlobalObject(&'static str),
     UserPass(&'static str),
 }
@@ -39,6 +51,7 @@ pub enum ProjectLocalCandidateErrorForTest {
 impl fmt::Display for ProjectLocalCandidateErrorForTest {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            #[cfg(any(test, feature = "test-utils"))]
             Self::NotImplemented => {
                 formatter.write_str("WU4 project-local semantic coordinator is not implemented")
             }
@@ -51,12 +64,14 @@ impl fmt::Display for ProjectLocalCandidateErrorForTest {
                 message.push_str(" has no project-local identity");
                 formatter.write_str(&message)
             }
+            #[cfg(any(test, feature = "test-utils"))]
             Self::GlobalObject(message) => formatter.write_str(message),
             Self::UserPass(message) => formatter.write_str(message),
         }
     }
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 pub fn project_local_semantic_candidate_for_test<'ast>(
     product: &LibraryDeclarationProduct,
     library_units: Vec<LibraryBinderUnit>,
@@ -84,6 +99,12 @@ pub(super) fn run_ordinary_project_local_semantics<'ast>(
 ) -> Result<Vec<CheckResult>, ProjectLocalCandidateErrorForTest> {
     let mut prepared =
         prepare_ordinary_project_local_execution(product, library_units, bound, programs)?;
+    run_prepared_ordinary_project_local_semantics(&mut prepared)
+}
+
+fn run_prepared_ordinary_project_local_semantics(
+    prepared: &mut PreparedProjectLocalExecution<'_, '_>,
+) -> Result<Vec<CheckResult>, ProjectLocalCandidateErrorForTest> {
     let ordinary_validation_keys = prepared.ordinary_validation_keys.clone();
     let ordinary_materialized_keys = prepared.ordinary_materialized_keys.clone();
     let library_validations = prepared.coordinator.validations_for(
@@ -92,16 +113,56 @@ pub(super) fn run_ordinary_project_local_semantics<'ast>(
     );
     let library_validation_groups = library_validation_groups(&prepared.coordinator);
     let output = run_ordinary_project_local_user_pass(
-        &mut prepared,
+        prepared,
         library_validations,
         library_validation_groups,
     )?;
-    finish_project_local_publication(&mut prepared, &output)?;
+    finish_project_local_publication(prepared, &output)?;
     Ok(output.results)
+}
+
+#[cfg(feature = "session-bench")]
+pub(super) struct SessionBenchSemanticReceipt {
+    pub(super) results: Vec<CheckResult>,
+    pub(super) materialized_product_owner_count: usize,
+    pub(super) project_identity: u64,
+    pub(super) publisher_identity: u64,
+    pub(super) cache_identity: u64,
+    pub(super) session_weak_alive_after: bool,
+    pub(super) cache_weak_alive_after: bool,
+}
+
+#[cfg(feature = "session-bench")]
+pub(super) fn run_ordinary_project_local_semantics_for_session_bench<'ast>(
+    product: &LibraryDeclarationProduct,
+    library_units: Vec<LibraryBinderUnit>,
+    bound: BoundProjectBinder,
+    programs: &[ProjectProgram<'ast>],
+) -> Result<SessionBenchSemanticReceipt, ProjectLocalCandidateErrorForTest> {
+    let mut prepared =
+        prepare_ordinary_project_local_execution(product, library_units, bound, programs)?;
+    let project_identity = prepared.session.project_identity();
+    let publisher_identity = prepared.session.publisher_identity();
+    let cache_identity = prepared.session.cache_identity();
+    let session_weak = Rc::downgrade(&prepared.session);
+    let cache_weak = prepared.session.cache_weak();
+    let results = run_prepared_ordinary_project_local_semantics(&mut prepared)?;
+    let materialized_product_owner_count = prepared.coordinator.materialized().len();
+    drop(prepared);
+    Ok(SessionBenchSemanticReceipt {
+        results,
+        materialized_product_owner_count,
+        project_identity,
+        publisher_identity,
+        cache_identity,
+        session_weak_alive_after: session_weak.upgrade().is_some(),
+        cache_weak_alive_after: cache_weak.upgrade().is_some(),
+    })
 }
 
 struct PreparedProjectLocalExecution<'run, 'ast> {
     product: &'run LibraryDeclarationProduct,
+    #[cfg(any(test, feature = "test-utils"))]
     library_units: Vec<LibraryBinderUnit>,
     bound: Option<BoundProjectBinder>,
     programs: &'run [ProjectProgram<'ast>],
@@ -110,11 +171,21 @@ struct PreparedProjectLocalExecution<'run, 'ast> {
     library_identity_groups: [Option<TypeGroupId>; 8],
     native_array_groups: [Option<usize>; 2],
     augmented_product_groups: std::collections::BTreeMap<usize, TypeGroupId>,
+    #[cfg(any(test, feature = "test-utils"))]
     ordinary_demand_root_keys: Vec<usize>,
     ordinary_validation_keys: Vec<usize>,
     ordinary_materialized_keys: Vec<usize>,
 }
 
+struct ProjectLocalExecutionInputs<'run, 'ast> {
+    product: &'run LibraryDeclarationProduct,
+    #[cfg(any(test, feature = "test-utils"))]
+    library_units: Vec<LibraryBinderUnit>,
+    bound: BoundProjectBinder,
+    programs: &'run [ProjectProgram<'ast>],
+}
+
+#[cfg(any(test, feature = "test-utils"))]
 struct PreparedProjectLocalExecutionForTest<'run, 'ast> {
     prepared: PreparedProjectLocalExecution<'run, 'ast>,
     fault_state: FaultStateForTest,
@@ -132,11 +203,16 @@ fn prepare_ordinary_project_local_execution<'run, 'ast>(
         ProjectLocalSemanticCoordinator::new_ordinary(product, mapped_groups, Rc::clone(&session));
     let final_product_dependencies =
         final_product_dependencies(product, &bound, programs, coordinator.mapped_groups())?;
+    #[cfg(not(any(test, feature = "test-utils")))]
+    let _ = library_units;
     prepare_project_local_execution(
-        product,
-        library_units,
-        bound,
-        programs,
+        ProjectLocalExecutionInputs {
+            product,
+            #[cfg(any(test, feature = "test-utils"))]
+            library_units,
+            bound,
+            programs,
+        },
         session,
         coordinator,
         final_product_dependencies,
@@ -145,6 +221,7 @@ fn prepare_ordinary_project_local_execution<'run, 'ast>(
     )
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 fn prepare_project_local_execution_for_test<'run, 'ast>(
     product: &'run LibraryDeclarationProduct,
     library_units: Vec<LibraryBinderUnit>,
@@ -187,10 +264,12 @@ fn prepare_project_local_execution_for_test<'run, 'ast>(
         final_product_dependencies(product, &bound, programs, coordinator.mapped_groups())?
     };
     let prepared = prepare_project_local_execution(
-        product,
-        library_units,
-        bound,
-        programs,
+        ProjectLocalExecutionInputs {
+            product,
+            library_units,
+            bound,
+            programs,
+        },
         session,
         coordinator,
         final_product_dependencies,
@@ -289,10 +368,7 @@ fn no_additional_product_demands(
 }
 
 fn prepare_project_local_execution<'run, 'ast, Demand, Commit>(
-    product: &'run LibraryDeclarationProduct,
-    library_units: Vec<LibraryBinderUnit>,
-    bound: BoundProjectBinder,
-    programs: &'run [ProjectProgram<'ast>],
+    inputs: ProjectLocalExecutionInputs<'run, 'ast>,
     session: Rc<SessionCore>,
     mut coordinator: ProjectLocalSemanticCoordinator,
     final_product_dependencies: Vec<(usize, usize)>,
@@ -308,6 +384,13 @@ where
     ) -> Result<(), &'static str>,
     Commit: FnMut(&mut ProjectLocalSemanticCoordinator) -> Result<(), &'static str>,
 {
+    let ProjectLocalExecutionInputs {
+        product,
+        #[cfg(any(test, feature = "test-utils"))]
+        library_units,
+        bound,
+        programs,
+    } = inputs;
     let library_identity_groups = [
         "Array",
         "ReadonlyArray",
@@ -356,6 +439,7 @@ where
         native_array_groups,
     )
     .map_err(ProjectLocalCandidateErrorForTest::UserPass)?;
+    #[cfg(any(test, feature = "test-utils"))]
     let ordinary_demand_root_keys = coordinator.demand_roots().to_vec();
     let ordinary_validation_closure = coordinator.validation_owner_closure(
         augmented_product_groups.keys().copied(),
@@ -375,6 +459,7 @@ where
         .collect::<Vec<_>>();
     Ok(PreparedProjectLocalExecution {
         product,
+        #[cfg(any(test, feature = "test-utils"))]
         library_units,
         bound: Some(bound),
         programs,
@@ -383,12 +468,14 @@ where
         library_identity_groups,
         native_array_groups,
         augmented_product_groups,
+        #[cfg(any(test, feature = "test-utils"))]
         ordinary_demand_root_keys,
         ordinary_validation_keys,
         ordinary_materialized_keys,
     })
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 fn commit_demanded_for_test(
     coordinator: &mut ProjectLocalSemanticCoordinator,
     fault_state: &mut FaultStateForTest,
@@ -484,12 +571,14 @@ where
     let published_types = project_local_published_types(
         product,
         coordinator.mapped_groups(),
-        coordinator.semantic_group_types(),
-        coordinator.type_parameter_ids(),
-        coordinator.type_parameter_defaults(),
-        coordinator.ready(),
-        coordinator.unavailable(),
-        coordinator.aliases().clone(),
+        ProjectLocalPublishedTypeInputs {
+            group_types: coordinator.semantic_group_types(),
+            type_parameter_ids: coordinator.type_parameter_ids(),
+            type_parameter_defaults: coordinator.type_parameter_defaults(),
+            ready_product_groups: coordinator.ready(),
+            unavailable_product_groups: coordinator.unavailable(),
+            aliases: coordinator.aliases().clone(),
+        },
     );
     let lexical_array_alias = coordinator
         .mapped_groups()
@@ -591,6 +680,7 @@ fn finish_project_local_publication_parts(
     )
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 fn finish_project_local_publication_parts_for_test(
     coordinator: &mut ProjectLocalSemanticCoordinator,
     output: &ProjectLocalUserPassOutput,
@@ -627,6 +717,7 @@ where
     commit(coordinator).map_err(ProjectLocalCandidateErrorForTest::UserPass)
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 fn run_project_local_semantic_candidate(
     prepared_for_test: PreparedProjectLocalExecutionForTest<'_, '_>,
     request: ProjectLocalSemanticRequestForTest,
@@ -797,12 +888,14 @@ fn run_project_local_semantic_candidate(
         let published = project_local_published_types(
             product,
             coordinator.mapped_groups(),
-            coordinator.semantic_group_types(),
-            coordinator.type_parameter_ids(),
-            coordinator.type_parameter_defaults(),
-            coordinator.ready(),
-            coordinator.unavailable(),
-            coordinator.aliases().clone(),
+            ProjectLocalPublishedTypeInputs {
+                group_types: coordinator.semantic_group_types(),
+                type_parameter_ids: coordinator.type_parameter_ids(),
+                type_parameter_defaults: coordinator.type_parameter_defaults(),
+                ready_product_groups: coordinator.ready(),
+                unavailable_product_groups: coordinator.unavailable(),
+                aliases: coordinator.aliases().clone(),
+            },
         );
         let query_state =
             project_local_semantic_query_state(library_identity_groups, &published, interner);
@@ -887,12 +980,14 @@ fn run_project_local_semantic_candidate(
                 let published = project_local_published_types(
                     product,
                     coordinator.mapped_groups(),
-                    coordinator.semantic_group_types(),
-                    coordinator.type_parameter_ids(),
-                    coordinator.type_parameter_defaults(),
-                    coordinator.ready(),
-                    coordinator.unavailable(),
-                    coordinator.aliases().clone(),
+                    ProjectLocalPublishedTypeInputs {
+                        group_types: coordinator.semantic_group_types(),
+                        type_parameter_ids: coordinator.type_parameter_ids(),
+                        type_parameter_defaults: coordinator.type_parameter_defaults(),
+                        ready_product_groups: coordinator.ready(),
+                        unavailable_product_groups: coordinator.unavailable(),
+                        aliases: coordinator.aliases().clone(),
+                    },
                 );
                 let query_state = project_local_semantic_query_state(
                     library_identity_groups,

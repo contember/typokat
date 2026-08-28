@@ -1,8 +1,10 @@
 //! Test contract for the project-local semantic candidate.
 
+use super::project_local_pass_port::NormalizedCheckerRecordForTest;
+#[cfg(any(test, feature = "test-utils"))]
 use super::project_local_pass_port::{
-    NormalizedCheckerRecordForTest, NormalizedDiagnosticForTest, NormalizedIncompleteForTest,
-    NormalizedTypeProbeForTest, SignatureProbe,
+    NormalizedDiagnosticForTest, NormalizedIncompleteForTest, NormalizedTypeProbeForTest,
+    SignatureProbe,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -34,6 +36,7 @@ pub struct ProjectLocalMappedProductGroupForTest {
     pub local_namespace: Option<usize>,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProjectLocalSccForTest {
     pub members: Vec<String>,
@@ -44,6 +47,7 @@ pub struct ProjectLocalProductSccForTest {
     pub members: Vec<ProjectLocalProductGroupForTest>,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ProjectLocalDemandRootForTest {
     ProductGroup(ProjectLocalProductGroupForTest),
@@ -51,12 +55,14 @@ pub enum ProjectLocalDemandRootForTest {
     UserNamespace(String),
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProjectLocalOrderForTest {
     Forward,
     Reverse,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProjectLocalSemanticFaultForTest {
     OmitDependencyEdge,
@@ -67,6 +73,7 @@ pub enum ProjectLocalSemanticFaultForTest {
     PublishProvisionalUnavailableWrite,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone)]
 pub struct ProjectLocalSemanticRequestForTest {
     pub case_id: &'static str,
@@ -77,6 +84,7 @@ pub struct ProjectLocalSemanticRequestForTest {
     pub fault: Option<ProjectLocalSemanticFaultForTest>,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProjectLocalSourceInputForTest {
     pub path: String,
@@ -84,6 +92,7 @@ pub struct ProjectLocalSourceInputForTest {
     pub sha256: String,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProjectLocalTerminalStateForTest {
     Resolving,
@@ -94,11 +103,15 @@ pub enum ProjectLocalTerminalStateForTest {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProjectLocalUnavailableReasonForTest {
     UnsupportedProductRecipe,
+    #[cfg(any(test, feature = "test-utils"))]
     UnsupportedUserDeclaration,
+    #[cfg(any(test, feature = "test-utils"))]
     InvalidUserDeclaration,
+    #[cfg(any(test, feature = "test-utils"))]
     CyclicUserDeclaration,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProjectLocalNamespaceFragmentForTest {
     pub source_path: String,
@@ -106,6 +119,7 @@ pub struct ProjectLocalNamespaceFragmentForTest {
     pub source_start: u32,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectLocalUnavailableTerminalForTest {
     pub name: String,
@@ -113,6 +127,7 @@ pub struct ProjectLocalUnavailableTerminalForTest {
     pub reason: ProjectLocalUnavailableReasonForTest,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectLocalUnavailableAuditForTest {
     pub terminal: ProjectLocalUnavailableTerminalForTest,
@@ -120,6 +135,7 @@ pub struct ProjectLocalUnavailableAuditForTest {
     pub published_provisional_writes: Vec<String>,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectLocalSccPublicationForTest {
     pub scc: ProjectLocalSccForTest,
@@ -131,6 +147,7 @@ pub struct ProjectLocalSccPublicationForTest {
     pub discarded_provisional_writes: Vec<String>,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectLocalPublicationSccCommitForTest {
     pub scc: ProjectLocalProductSccForTest,
@@ -141,12 +158,14 @@ pub struct ProjectLocalPublicationSccCommitForTest {
     pub final_state: ProjectLocalTerminalStateForTest,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectLocalCacheWriteForTest {
     pub owner: ProjectLocalProductGroupForTest,
     pub state: ProjectLocalTerminalStateForTest,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectLocalRepeatedDemandForTest {
     pub owner: ProjectLocalProductGroupForTest,
@@ -154,6 +173,7 @@ pub struct ProjectLocalRepeatedDemandForTest {
     pub repeated_identity: String,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectLocalForceAllTraceForTest {
     pub requested_product_groups: Vec<ProjectLocalProductGroupForTest>,
@@ -165,12 +185,14 @@ pub struct ProjectLocalForceAllTraceForTest {
     pub library_records: Vec<ProjectLocalLibraryRecordForTest>,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectLocalForceAllTerminalRowForTest {
     pub group: ProjectLocalProductGroupForTest,
     pub terminal: ProjectLocalForceAllTerminalForTest,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProjectLocalForceAllTerminalForTest {
     Ready {
@@ -180,6 +202,7 @@ pub enum ProjectLocalForceAllTerminalForTest {
     Unavailable(ProjectLocalUnavailableReasonForTest),
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProjectLocalForceAllReadySurfaceForTest {
     Object(ProjectLocalForceAllObjectShapeForTest),
@@ -187,6 +210,7 @@ pub enum ProjectLocalForceAllReadySurfaceForTest {
     Other(ProjectLocalForceAllTypeKindForTest),
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectLocalForceAllObjectShapeForTest {
     pub property_count: usize,
@@ -196,6 +220,7 @@ pub struct ProjectLocalForceAllObjectShapeForTest {
     pub has_number_index: bool,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProjectLocalForceAllAliasTerminalForTest {
     Ready {
@@ -205,6 +230,7 @@ pub enum ProjectLocalForceAllAliasTerminalForTest {
     Unavailable(ProjectLocalForceAllAliasUnavailableForTest),
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProjectLocalForceAllAliasUnavailableForTest {
     DirectCycle,
@@ -212,6 +238,7 @@ pub enum ProjectLocalForceAllAliasUnavailableForTest {
     ComponentFailure,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProjectLocalForceAllTypeKindForTest {
     Intrinsic(ProjectLocalForceAllIntrinsicKindForTest),
@@ -239,6 +266,7 @@ pub enum ProjectLocalForceAllTypeKindForTest {
     AliasTemplate,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProjectLocalForceAllLiteralKindForTest {
     Number,
@@ -247,6 +275,7 @@ pub enum ProjectLocalForceAllLiteralKindForTest {
     WellKnownSymbol,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProjectLocalForceAllIntrinsicKindForTest {
     Error,
@@ -270,6 +299,7 @@ pub enum ProjectLocalForceAllIntrinsicKindForTest {
     Symbol,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectLocalUserEventRecordForTest {
     pub source_path: String,
@@ -279,6 +309,7 @@ pub struct ProjectLocalUserEventRecordForTest {
     pub record: NormalizedCheckerRecordForTest,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectLocalCheckResultForTest {
     pub source_path: String,
@@ -286,12 +317,14 @@ pub struct ProjectLocalCheckResultForTest {
     pub incomplete: Vec<NormalizedIncompleteForTest>,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectLocalModuleTypeProbeForTest {
     pub source_path: String,
     pub probe: NormalizedTypeProbeForTest,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectLocalCallableMemberProbeForTest {
     pub name: String,
@@ -302,6 +335,7 @@ pub struct ProjectLocalCallableMemberProbeForTest {
     pub signatures: Vec<SignatureProbe>,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectLocalValueProbeForTest {
     pub name: String,
@@ -312,6 +346,7 @@ pub struct ProjectLocalValueProbeForTest {
     pub callable_members: Vec<ProjectLocalCallableMemberProbeForTest>,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectLocalSemanticProbesForTest {
     pub global_types: Vec<NormalizedTypeProbeForTest>,
@@ -319,18 +354,21 @@ pub struct ProjectLocalSemanticProbesForTest {
     pub global_values: Vec<ProjectLocalValueProbeForTest>,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ProjectLocalContributorOriginForTest {
     Library,
     User,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ProjectLocalContributorKindForTest {
     Ordinary,
     Namespace,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProjectLocalGlobalContributorSiteForTest {
     pub source_path: String,
@@ -340,6 +378,7 @@ pub struct ProjectLocalGlobalContributorSiteForTest {
     pub kind: ProjectLocalContributorKindForTest,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProjectLocalGlobalContributorForTest {
     pub name: String,
@@ -356,6 +395,7 @@ pub struct ProjectLocalLibraryRecordForTest {
     pub record: NormalizedCheckerRecordForTest,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectLocalSemanticTraceForTest {
     pub case_id: String,

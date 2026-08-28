@@ -33,7 +33,7 @@ mod functions;
 mod signatures;
 mod type_operators;
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 pub(in crate::check::checker) fn project_local_well_known_symbol_from_name(
     name: &str,
 ) -> Option<WellKnownSymbol> {
@@ -107,7 +107,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             // nests), then interned as an array type. A non-lowerable element (out of
             // subset) aborts the whole annotation (`None`), matching the other lowerings.
             TSType::TSArrayType(array) => {
-                #[cfg(any(test, feature = "test-utils"))]
+                #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
                 let _ = self.demand_project_local_library_identity(0);
                 if self.capture_compact_replay_dependencies {
                     let _ = self.compact_type_decl_id_replay(scope, "Array");
@@ -121,7 +121,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             // tuple elements are out of the M18 subset and abort the whole annotation
             // (`None`) — see [`lower_tuple_annotation`].
             TSType::TSTupleType(tuple) => {
-                #[cfg(any(test, feature = "test-utils"))]
+                #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
                 let _ = self.demand_project_local_library_identity(0);
                 if self.capture_compact_replay_dependencies {
                     let _ = self.compact_type_decl_id_replay(scope, "Array");

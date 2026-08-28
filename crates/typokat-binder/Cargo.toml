@@ -6,6 +6,7 @@ edition.workspace = true
 [features]
 measurement-counters = ["typokat-types/measurement-counters"]
 test-utils = []
+session-bench = []
 
 [dependencies]
 oxc_ast.workspace = true

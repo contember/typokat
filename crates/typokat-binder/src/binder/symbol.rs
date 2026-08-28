@@ -159,7 +159,7 @@ impl SymbolTable {
         self.symbols.shares_base_with(&other.symbols)
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
     pub fn iter(&self) -> impl Iterator<Item = (SymbolId, &Symbol)> {
         self.symbols.iter().enumerate().map(|(index, symbol)| {
             (

@@ -38,7 +38,7 @@ use crate::span::Span;
 use crate::types::layered::{LayeredMap, LayeredSet};
 use crate::types::repr::{ClassId, ObjectType, PropertyType};
 use crate::types::store::TypeId;
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 use crate::types::substitute::substitute;
 use crate::types::Interner;
 #[cfg(any(test, feature = "test-utils"))]
@@ -87,9 +87,9 @@ mod library_identities;
 pub(crate) mod library_reporting;
 mod namespace_values;
 mod narrowing;
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 pub mod project_local;
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 pub(in crate::check) mod project_local_semantics;
 pub mod replay_index;
 pub mod reporting_record;
@@ -98,7 +98,7 @@ mod statements;
 mod surface_lowering_copy_spec;
 mod type_groups;
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 use context::ConstraintCheckObligation;
 use context::{
     AssertionCompatibilityObligation, AssignObligation, CheckerEffects, CheckerRecordBatch,
@@ -1423,7 +1423,7 @@ pub struct BoundProjectBinder {
     pub normalized: ProjectBindingProductForTest,
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 impl BoundProjectBinder {
     pub fn library_product_map_for_test(
         &self,
@@ -4416,8 +4416,8 @@ pub fn bind_library_product_project_programs(
 }
 
 /// Bind a prepared project while preserving the legacy unadmitted module surface.
-#[cfg(any(test, feature = "test-utils"))]
-pub(in crate::check::checker) fn bind_library_product_project_programs_unadmitted_for_test(
+#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
+pub(in crate::check::checker) fn bind_library_product_project_programs_unadmitted(
     product: &typokat_library_product::LibraryDeclarationProduct,
     units: &[ProjectProgram<'_>],
 ) -> Result<
@@ -4436,7 +4436,7 @@ pub(in crate::check::checker) fn bind_library_product_project_programs_unadmitte
             source_reexports: None,
             default_module: None,
         },
-        AuthoritativeProjectBinderFinish::ProductUnadmittedForTest,
+        AuthoritativeProjectBinderFinish::ProductUnadmitted,
     )
 }
 
@@ -4626,8 +4626,8 @@ enum AuthoritativeProjectBinderFinish {
     #[cfg(any(test, feature = "test-utils"))]
     DeclarationOracle,
     Product,
-    #[cfg(any(test, feature = "test-utils"))]
-    ProductUnadmittedForTest,
+    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
+    ProductUnadmitted,
     Continuation,
 }
 
@@ -4652,8 +4652,8 @@ impl AuthoritativeProjectBinderFinish {
 
     const fn finishes_library_product_project(self) -> bool {
         let finishes = matches!(self, Self::Product);
-        #[cfg(any(test, feature = "test-utils"))]
-        let finishes = finishes || matches!(self, Self::ProductUnadmittedForTest);
+        #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
+        let finishes = finishes || matches!(self, Self::ProductUnadmitted);
         finishes
     }
 }
@@ -4891,8 +4891,8 @@ where
                 None,
             ),
             AuthoritativeProjectBinderFinish::Product => unreachable!(),
-            #[cfg(any(test, feature = "test-utils"))]
-            AuthoritativeProjectBinderFinish::ProductUnadmittedForTest => unreachable!(),
+            #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
+            AuthoritativeProjectBinderFinish::ProductUnadmitted => unreachable!(),
         }
     };
     let mut project_sources = units
@@ -5387,11 +5387,14 @@ where
         .collect())
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 pub(in crate::check::checker) struct ProjectLocalUserPassOutput {
     pub results: Vec<CheckResult>,
+    #[cfg(any(test, feature = "test-utils"))]
     pub records: Vec<(events::EventKey, CheckerRecord)>,
+    #[cfg(any(test, feature = "test-utils"))]
     pub library_records: Vec<(usize, events_library::LibraryEventKey, CheckerRecord)>,
+    #[cfg(any(test, feature = "test-utils"))]
     pub unavailable_namespaces: Vec<ProjectLocalUserNamespaceUnavailable>,
     pub published_type_groups: Vec<type_groups::PublishedTypeGroupTerminal>,
 }
@@ -5412,7 +5415,7 @@ pub(in crate::check::checker) enum ProjectLocalUserNamespaceUnavailableReason {
     Cyclic,
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 pub(in crate::check::checker) struct ProjectLocalUserPassPlan<'a> {
     pub bound: BoundProjectBinder,
     pub published_types: type_groups::PublishedTypeEnvironment,
@@ -5426,10 +5429,11 @@ pub(in crate::check::checker) struct ProjectLocalUserPassPlan<'a> {
     pub demand_gateway: &'a mut dyn context::ProjectLocalUserDemandGateway,
     pub library_validations: Vec<project_local::validation::ProjectLocalValidationCandidate>,
     pub library_validation_groups: BTreeMap<usize, TypeGroupId>,
+    #[cfg(any(test, feature = "test-utils"))]
     pub inject_provisional_unavailable_write: bool,
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 pub(in crate::check::checker) fn check_bound_project_local_programs<'a, 'ast>(
     interner: &'a mut Interner,
     units: &[ProjectProgram<'ast>],
@@ -5448,6 +5452,7 @@ pub(in crate::check::checker) fn check_bound_project_local_programs<'a, 'ast>(
         demand_gateway,
         library_validations,
         library_validation_groups,
+        #[cfg(any(test, feature = "test-utils"))]
         inject_provisional_unavailable_write,
     } = plan;
     if units.is_empty() {
@@ -5460,8 +5465,11 @@ pub(in crate::check::checker) fn check_bound_project_local_programs<'a, 'ast>(
             .groups;
         return Ok(ProjectLocalUserPassOutput {
             results: Vec::new(),
+            #[cfg(any(test, feature = "test-utils"))]
             records: Vec::new(),
+            #[cfg(any(test, feature = "test-utils"))]
             library_records: Vec::new(),
+            #[cfg(any(test, feature = "test-utils"))]
             unavailable_namespaces: Vec::new(),
             published_type_groups,
         });
@@ -5872,6 +5880,9 @@ pub(in crate::check::checker) fn check_bound_project_local_programs<'a, 'ast>(
             }
         })
         .collect();
+    #[cfg(not(any(test, feature = "test-utils")))]
+    drop((records, library_records));
+    #[cfg(any(test, feature = "test-utils"))]
     if inject_provisional_unavailable_write {
         if let Some(namespace) = demanded_namespaces.iter().find_map(|(namespace, _, _)| {
             matches!(
@@ -5884,6 +5895,7 @@ pub(in crate::check::checker) fn check_bound_project_local_programs<'a, 'ast>(
                 .publish_project_local_provisional_write_for_fault(namespace);
         }
     }
+    #[cfg(any(test, feature = "test-utils"))]
     let unavailable_namespaces = demanded_namespaces
         .into_iter()
         .filter_map(|(namespace, name, fragments)| {
@@ -5918,8 +5930,11 @@ pub(in crate::check::checker) fn check_bound_project_local_programs<'a, 'ast>(
         .collect();
     Ok(ProjectLocalUserPassOutput {
         results,
+        #[cfg(any(test, feature = "test-utils"))]
         records,
+        #[cfg(any(test, feature = "test-utils"))]
         library_records,
+        #[cfg(any(test, feature = "test-utils"))]
         unavailable_namespaces,
         published_type_groups,
     })
@@ -8702,7 +8717,7 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
             .push_interface_relation(check, owner);
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
     pub(in crate::check::checker) fn schedule_constraint_check(
         &mut self,
         check: ConstraintCheckObligation,
@@ -8714,7 +8729,7 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
             .push_constraint_check(check, owner);
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
     fn schedule_project_local_library_validation(
         &mut self,
         validation: &project_local::validation::ProjectLocalValidationCandidate,
@@ -9053,15 +9068,15 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
     let pass = Pass {
         interner,
         binder,
-        #[cfg(any(test, feature = "test-utils"))]
+        #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
         project_local_demand_gateway: None,
-        #[cfg(any(test, feature = "test-utils"))]
+        #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
         project_local_demand_error: None,
-        #[cfg(any(test, feature = "test-utils"))]
+        #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
         project_local_library_identity_groups: None,
-        #[cfg(any(test, feature = "test-utils"))]
+        #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
         project_local_user_modules: None,
-        #[cfg(any(test, feature = "test-utils"))]
+        #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
         project_local_user_interface_own: FxHashMap::default(),
         eager_application_cache: FxHashMap::default(),
         #[cfg(test)]
