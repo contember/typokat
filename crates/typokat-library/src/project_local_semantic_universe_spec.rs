@@ -2477,9 +2477,9 @@ fn project_local_production_force_all_census_emits_named_attributed_diff() {
     const STARTING_BASELINE: &str =
         include_str!("../../../tests/fixtures/library-owned-records.txt");
     const CLOSED_EVIDENCE: [&str; 3] = [
-        "omitted-member-incomplete",
-        "unavailable-group",
-        "single-report-collapse",
+        "certified-intrinsic-marker",
+        "published-type-parameter-default",
+        "global-augmentation-region",
     ];
 
     let provider = LibraryBaseProvider::new();
@@ -2591,10 +2591,48 @@ fn project_local_production_force_all_census_emits_named_attributed_diff() {
         }
     }
 
-    let attributions = BTreeMap::<String, &'static str>::new();
+    let attributions = BTreeMap::from([
+        (
+            "incomplete\tannotation-lower/intrinsic-keyword/self\tlib.es2015.iterable.d.ts:68:30\tintrinsic keyword type not modeled".to_owned(),
+            "certified-intrinsic-marker",
+        ),
+        (
+            "incomplete\tannotation-lower/intrinsic-keyword/self\tlib.es5.d.ts:1658:36\tintrinsic keyword type not modeled".to_owned(),
+            "certified-intrinsic-marker",
+        ),
+        (
+            "incomplete\tannotation-lower/intrinsic-keyword/self\tlib.es5.d.ts:1663:36\tintrinsic keyword type not modeled".to_owned(),
+            "certified-intrinsic-marker",
+        ),
+        (
+            "incomplete\tannotation-lower/intrinsic-keyword/self\tlib.es5.d.ts:1668:37\tintrinsic keyword type not modeled".to_owned(),
+            "certified-intrinsic-marker",
+        ),
+        (
+            "incomplete\tannotation-lower/intrinsic-keyword/self\tlib.es5.d.ts:1673:39\tintrinsic keyword type not modeled".to_owned(),
+            "certified-intrinsic-marker",
+        ),
+        (
+            "incomplete\tannotation-lower/intrinsic-keyword/self\tlib.es5.d.ts:1678:19\tintrinsic keyword type not modeled".to_owned(),
+            "certified-intrinsic-marker",
+        ),
+        (
+            "incomplete\tannotation-lower/type-parameter-default/self\tlib.scripthost.d.ts:225:29\ttype-parameter default not lowered".to_owned(),
+            "published-type-parameter-default",
+        ),
+        (
+            "incomplete\tdecl/global-declaration/self\tlib.es2025.iterator.d.ts:36:1\tglobal augmentation value publication not modeled".to_owned(),
+            "global-augmentation-region",
+        ),
+    ]);
     assert!(attributions
         .values()
         .all(|evidence| CLOSED_EVIDENCE.contains(evidence)));
+    assert_eq!(
+        attributions.keys().cloned().collect::<Vec<_>>(),
+        removed,
+        "reviewed removal evidence must cover the exact removed multiset without unused rows",
+    );
     let unattributed = removed
         .iter()
         .filter(|row| !attributions.contains_key(*row))
@@ -2629,6 +2667,61 @@ fn project_local_production_force_all_census_emits_named_attributed_diff() {
         )
     }));
     let receipt_digest = rows_digest(&receipt_rows);
+
+    let mut added_groups = BTreeMap::<String, usize>::new();
+    for row in &added {
+        let (kind, rest) = row.split_once('\t').expect("named row kind");
+        let (name, _) = rest.split_once('\t').expect("named row identity");
+        *added_groups.entry(format!("{kind}\t{name}")).or_default() += 1;
+    }
+    assert_eq!(baseline.len(), 558);
+    assert_eq!(current.len(), 709);
+    assert_eq!(diagnostics, 322);
+    assert_eq!(incompletes, 387);
+    assert_eq!(removed.len(), 8);
+    assert_eq!(added.len(), 159);
+    assert_eq!(
+        added_groups,
+        BTreeMap::from([
+            ("diagnostic\tTK2344".to_owned(), 21),
+            ("diagnostic\tTK2430".to_owned(), 34),
+            (
+                "incomplete\tannotation-lower/constructor-type/abstract".to_owned(),
+                6,
+            ),
+            (
+                "incomplete\tannotation-lower/index-signature/key-type".to_owned(),
+                1,
+            ),
+            (
+                "incomplete\tannotation-lower/interface-accessor/self".to_owned(),
+                65,
+            ),
+            (
+                "incomplete\tannotation-lower/optional-method/self".to_owned(),
+                22,
+            ),
+            (
+                "incomplete\tannotation-lower/type-operator/keyof-operand".to_owned(),
+                2,
+            ),
+            (
+                "incomplete\tannotation-lower/type-query/typeof".to_owned(),
+                6,
+            ),
+            (
+                "incomplete\tannotation-lower/type-reference/unresolved".to_owned(),
+                2,
+            ),
+        ]),
+    );
+    assert_eq!(force_all.terminal_census.len(), 3_406);
+    assert_eq!(ready, 3_377);
+    assert_eq!(unavailable.len(), 29);
+    assert_eq!(
+        receipt_digest,
+        "9a7360705ad8d51c47a3ab7475e2d95059ddd8033dc87ea410fde1f1c0668981",
+    );
 
     let mut report = format!(
         "production force_all census: baseline={} current={} diagnostics={} incompletes={} removed={} added={} unattributed={}\nterminal census: total={} ready={} unavailable={}\nreceipt digest: {}\n",
