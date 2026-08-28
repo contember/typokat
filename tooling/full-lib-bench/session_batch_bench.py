@@ -11,7 +11,6 @@ import math
 from pathlib import Path
 import re
 import statistics
-import subprocess
 import tomllib
 from typing import Any, Callable
 
@@ -24,7 +23,7 @@ ROOT = HERE.parents[1]
 CONTRACT_PATH = HERE / "session_batch_contract.toml"
 CORPUS = ROOT / "tooling/official-suite/corpus"
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
-BASELINE_DIAGNOSTIC = re.compile(r"\((\d+),(\d+)\):\s*error\s+TS(\d+):")
+TSGO_DIAGNOSTIC = re.compile(r"\((\d+),(\d+)\):\s*error\s+TS(\d+):")
 RSS = re.compile(r"Maximum resident set size \(kbytes\):\s*(\d+)")
 OPTION = re.compile(r"^//\s*@(\w+)\s*:\s*(.*?)\s*$")
 
@@ -56,6 +55,12 @@ def _sha(data: bytes) -> str:
 
 def _canonical(value: Any) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+
+
+def _canonical_public(value: Any) -> bytes:
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode()
 
 
 def _read_regular(path: Path, label: str) -> bytes:
@@ -94,6 +99,64 @@ def verify_contract(path: Path = CONTRACT_PATH) -> dict[str, Any]:
         "runner_linkage", "allocation_probe",
     }
     _exact_keys(contract, expected_top, "batch contract")
+    nested_shapes = {
+        "profile": {
+            "file_count", "length_framed_sha256", "manifest_sha256", "source_bytes",
+            "typescript_version", "upstream_revision",
+        },
+        "official_frames": {
+            "eligible_frame_count", "frame_source_identity_sha256", "manifest_relative_path",
+            "manifest_sha256", "ordered_identity_algorithm",
+            "panel_1_ordered_identity_sha256", "panel_32_ordered_identity_sha256",
+            "panel_687_ordered_identity_sha256",
+        },
+        "oracles": {
+            "batch_oracle_rule", "cold_oracle_relative_path", "cold_oracle_sha256",
+            "cross_tool_agreement_scope", "cross_tool_rows", "exact_flags_truth_mode",
+            "exact_flags_truth_tools", "require_cold_cross_tool_agreement",
+            "require_full_batch_cross_tool_agreement", "tsc_tsgo_first_mismatch_case_id",
+            "tsc_tsgo_first_mismatch_source_sha256", "tsc_tsgo_matching_prefix_frames",
+            "tsgo_batch_oracle", "tsgo_batch_oracle_ordered_semantic_sha256",
+            "tsgo_batch_oracle_relative_path", "tsgo_batch_oracle_sha256",
+            "typescript_baseline_authority", "typescript_git_cache_relative_path",
+            "typokat_batch_oracle_relative_path", "typokat_batch_oracle_sha256",
+        },
+        "current_typokat_baseline": {
+            "artifact_relative_path", "artifact_sha256", "commit", "frames",
+            "normalized_result_sha256", "peak_rss_bytes", "tree", "wall_boundary", "wall_us",
+        },
+        "tsgo": {
+            "build_argv", "cold_binary_relative_path", "cold_binary_sha256", "package_version",
+            "repository", "runner_install_path", "runner_source_relative_path",
+            "upstream_revision",
+        },
+        "typokat": {"build_argv", "route", "runner_binary", "runner_source_relative_path"},
+        "lifecycle": {
+            "forbidden", "frame_dispositions", "parse_rejected_identity", "per_frame",
+            "require_zero_retained_frames", "timed_phases", "tsgo_shared",
+            "tsgo_single_threaded", "tsgo_teardown_proof", "typokat_owner_metric",
+            "typokat_shared", "typokat_teardown_proof",
+        },
+        "sampling": {
+            "blocks", "panel_timeout_seconds", "samples_per_tool", "schedule",
+            "warmups_per_tool",
+        },
+        "concurrency": {
+            "max_typokat_rss_kib", "require_deterministic_outputs",
+            "require_distinct_local_identities", "require_zero_retained_sessions",
+            "session_counts",
+        },
+        "negative_controls": {"require_same_binary", "tsgo", "typokat"},
+        "runner_linkage": {
+            "require_same_candidate_commit_for_cold_and_batch_evidence",
+            "require_same_runner_binary_for_single_and_batch",
+            "require_single_mode_cross_tool_oracles",
+            "require_tsgo_single_mode_match_cold_binary",
+        },
+        "allocation_probe": {"instrumentation", "metric", "timed", "tool"},
+    }
+    for key, keys in nested_shapes.items():
+        _exact_keys(contract[key], keys, f"batch contract {key}")
     if contract["schema"] != 1:
         _fail("unsupported batch contract schema")
     fixed = {
@@ -124,6 +187,28 @@ def verify_contract(path: Path = CONTRACT_PATH) -> dict[str, Any]:
     ]
     if contract["forbidden_flags"] != forbidden:
         _fail("canonical forbidden flags differ")
+    oracle_values = {
+        "tsgo_batch_oracle": "authenticated-exact-flags-cold-tsgo-artifact",
+        "typescript_baseline_authority": "source-and-version-evidence-only",
+        "batch_oracle_rule": "ordered-normalized-exact-flags-cold-tsgo-outcomes",
+        "exact_flags_truth_tools": ["tsgo-7.0.2"],
+        "exact_flags_truth_mode": "fresh-process-per-frame",
+        "cross_tool_agreement_scope": "cold-four-row-panel-only",
+        "require_full_batch_cross_tool_agreement": False,
+        "require_cold_cross_tool_agreement": True,
+    }
+    for key, expected in oracle_values.items():
+        if contract["oracles"][key] != expected:
+            _fail(f"contract oracles {key} differs from the frozen value")
+    lifecycle_values = {
+        "frame_dispositions": ["semantic", "parse-rejected"],
+        "parse_rejected_identity": "explicit-absence-no-fabrication",
+        "require_zero_retained_frames": True,
+        "tsgo_single_threaded": True,
+    }
+    for key, expected in lifecycle_values.items():
+        if contract["lifecycle"][key] != expected:
+            _fail(f"contract lifecycle {key} differs from the frozen value")
     if contract["allocation_probe"] != {
         "timed": False,
         "tool": "typokat",
@@ -145,6 +230,10 @@ def verify_contract(path: Path = CONTRACT_PATH) -> dict[str, Any]:
     _identity(
         ROOT / oracles["typokat_batch_oracle_relative_path"],
         oracles["typokat_batch_oracle_sha256"], "scoreboard",
+    )
+    _identity(
+        ROOT / oracles["tsgo_batch_oracle_relative_path"],
+        oracles["tsgo_batch_oracle_sha256"], "exact-flags TSGo oracle",
     )
     baseline = contract["current_typokat_baseline"]
     _identity(ROOT / baseline["artifact_relative_path"], baseline["artifact_sha256"], "current typokat baseline")
@@ -316,15 +405,215 @@ def _parse_scoreboard(data: bytes) -> dict[str, dict[str, Any]]:
     return rows
 
 
-def _baseline_diagnostics(data: bytes) -> list[str]:
+def _raw_tsgo_diagnostics(data: str) -> list[str]:
     try:
-        head = data.decode().split("\n====", 1)[0]
-    except UnicodeDecodeError as error:
-        raise BatchContractError(f"invalid baseline: {error}") from error
+        data.encode()
+    except UnicodeEncodeError as error:
+        raise BatchContractError(f"invalid exact-flags TSGo stdout: {error}") from error
     return sorted(
-        (f"{match.group(1)}:{match.group(3)}" for match in BASELINE_DIAGNOSTIC.finditer(head)),
+        (f"{match.group(1)}:{match.group(3)}" for match in TSGO_DIAGNOSTIC.finditer(data)),
         key=lambda item: tuple(map(int, item.split(":"))),
     )
+
+
+def load_authenticated_exact_flags_tsgo_oracle(
+    contract: dict[str, Any], *, oracle_path: Path | None = None,
+) -> list[dict[str, Any]]:
+    oracle_contract = contract["oracles"]
+    expected_path = ROOT / oracle_contract["tsgo_batch_oracle_relative_path"]
+    raw = _identity(
+        oracle_path or expected_path,
+        oracle_contract["tsgo_batch_oracle_sha256"],
+        "exact-flags TSGo oracle",
+    )
+    try:
+        artifact = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise BatchContractError(f"invalid exact-flags TSGo oracle: {error}") from error
+    if raw != _canonical_public(artifact) + b"\n":
+        _fail("exact-flags TSGo oracle serialization is not canonical")
+
+    _exact_keys(artifact, {
+        "execution_contract", "flags", "frame_count", "frame_order_sha256", "frames",
+        "ordered_normalized_semantic_sha256", "profile", "schema", "tool",
+    }, "exact-flags TSGo oracle")
+    _exact_keys(
+        artifact["profile"], {"file_count", "length_framed_sha256"},
+        "exact-flags TSGo oracle profile",
+    )
+    _exact_keys(artifact["execution_contract"], {
+        "address_space_limit_bytes", "maximum_concurrent_children", "mode",
+        "performance_data_recorded",
+    }, "exact-flags TSGo oracle execution contract")
+    _exact_keys(artifact["tool"], {
+        "binary_path", "binary_sha256", "binary_size", "environment", "name", "revision",
+        "version",
+    }, "exact-flags TSGo oracle tool")
+    _exact_keys(
+        artifact["tool"]["environment"], {"GOMAXPROCS"},
+        "exact-flags TSGo oracle environment",
+    )
+    if (
+        type(artifact["schema"]) is not int
+        or type(artifact["frame_count"]) is not int
+        or not isinstance(artifact["flags"], list)
+        or not isinstance(artifact["frames"], list)
+        or not isinstance(artifact["frame_order_sha256"], str)
+        or not isinstance(artifact["ordered_normalized_semantic_sha256"], str)
+    ):
+        _fail("exact-flags TSGo oracle top-level types differ")
+    if (
+        type(artifact["profile"]["file_count"]) is not int
+        or not isinstance(artifact["profile"]["length_framed_sha256"], str)
+    ):
+        _fail("exact-flags TSGo oracle profile types differ")
+    execution = artifact["execution_contract"]
+    if (
+        type(execution["address_space_limit_bytes"]) is not int
+        or type(execution["maximum_concurrent_children"]) is not int
+        or not isinstance(execution["mode"], str)
+        or type(execution["performance_data_recorded"]) is not bool
+    ):
+        _fail("exact-flags TSGo oracle execution contract types differ")
+    tool = artifact["tool"]
+    if (
+        not all(
+            isinstance(tool[key], str)
+            for key in ("binary_path", "binary_sha256", "name", "revision", "version")
+        )
+        or type(tool["binary_size"]) is not int
+        or not isinstance(tool["environment"]["GOMAXPROCS"], str)
+    ):
+        _fail("exact-flags TSGo oracle tool types differ")
+
+    canonical_flags = [
+        "--strict", "--target", "es2025", "--module", "preserve", "--noEmit",
+        "--pretty", "false", "--ignoreConfig",
+    ]
+    if artifact["schema"] != 1:
+        _fail("exact-flags TSGo oracle schema differs")
+    if artifact["flags"] != canonical_flags or contract["typescript_flags"] != canonical_flags:
+        _fail("exact-flags TSGo oracle flags differ")
+    if artifact["profile"] != {
+        "file_count": contract["profile"]["file_count"],
+        "length_framed_sha256": contract["profile"]["length_framed_sha256"],
+    }:
+        _fail("exact-flags TSGo oracle profile identity differs")
+    expected_execution = {
+        "address_space_limit_bytes": 1 << 30,
+        "maximum_concurrent_children": 8,
+        "mode": "fresh-cold-process-per-frame",
+        "performance_data_recorded": False,
+    }
+    if artifact["execution_contract"] != expected_execution:
+        _fail("exact-flags TSGo oracle process-mode contract differs")
+    if contract["child_address_space_limit_bytes"] != expected_execution["address_space_limit_bytes"]:
+        _fail("exact-flags TSGo oracle address-space contract differs")
+
+    tsgo = contract["tsgo"]
+    binary_path = tsgo["cold_binary_relative_path"]
+    if Path(binary_path).is_absolute():
+        _fail("exact-flags TSGo binary path is not ROOT-relative")
+    expected_tool = {
+        "binary_path": binary_path,
+        "binary_sha256": tsgo["cold_binary_sha256"],
+        "environment": {"GOMAXPROCS": "1"},
+        "name": "tsgo",
+        "revision": tsgo["upstream_revision"],
+        "version": tsgo["package_version"],
+    }
+    observed_tool = {key: value for key, value in artifact["tool"].items() if key != "binary_size"}
+    if observed_tool != expected_tool or artifact["tool"]["binary_size"] <= 0:
+        _fail("exact-flags TSGo oracle tool identity differs")
+
+    expected_frames = _authenticated_frame_rows(contract)
+    if artifact["frame_count"] != len(expected_frames) or len(artifact["frames"]) != len(expected_frames):
+        _fail("exact-flags TSGo oracle frame count differs")
+    if len(expected_frames) != 687:
+        _fail("exact-flags TSGo oracle authority is not the frozen 687-frame panel")
+    identity_rows: list[dict[str, Any]] = []
+    semantic_rows: list[dict[str, Any]] = []
+    for ordinal, (frame, expected) in enumerate(
+        zip(artifact["frames"], expected_frames, strict=True)
+    ):
+        _exact_keys(frame, {
+            "argv", "case_id", "normalized_semantic", "ordinal", "returncode",
+            "source_bytes", "source_path", "source_sha256", "stderr", "stdout",
+        }, f"exact-flags TSGo oracle frame {ordinal}")
+        semantic = frame["normalized_semantic"]
+        _exact_keys(
+            semantic, {"diagnostics", "exit_code", "incompletes", "parse_errors"},
+            f"exact-flags TSGo oracle frame {ordinal} semantic",
+        )
+        if (
+            type(frame["ordinal"]) is not int
+            or type(frame["returncode"]) is not int
+            or type(frame["source_bytes"]) is not int
+            or not all(
+                isinstance(frame[key], str)
+                for key in ("case_id", "source_path", "source_sha256", "stderr", "stdout")
+            )
+            or not isinstance(frame["argv"], list)
+            or not all(isinstance(item, str) for item in frame["argv"])
+            or type(semantic["exit_code"]) is not int
+            or not all(
+                isinstance(semantic[key], list)
+                for key in ("diagnostics", "incompletes", "parse_errors")
+            )
+        ):
+            _fail(f"exact-flags TSGo oracle frame {ordinal} types differ")
+        source_path = f"target/wu6/oracle-sources/{ordinal:04d}.ts"
+        expected_argv = [binary_path, *canonical_flags, source_path]
+        if frame["ordinal"] != ordinal or frame["case_id"] != expected["case_id"]:
+            _fail(f"exact-flags TSGo oracle frame order differs at {ordinal}")
+        if (
+            frame["source_bytes"] != expected["source_bytes"]
+            or frame["source_sha256"] != expected["source_sha256"]
+        ):
+            _fail(f"exact-flags TSGo oracle source identity differs at {ordinal}")
+        if frame["source_path"] != source_path or Path(frame["source_path"]).is_absolute():
+            _fail(f"exact-flags TSGo oracle source path differs at {ordinal}")
+        if frame["argv"] != expected_argv:
+            _fail(f"exact-flags TSGo oracle command differs at {ordinal}")
+        if str(ROOT) in frame["stdout"] or str(ROOT) in frame["stderr"]:
+            _fail(f"exact-flags TSGo oracle raw stream is not ROOT-relative at {ordinal}")
+        if frame["stderr"]:
+            _fail(f"exact-flags TSGo oracle stderr is not empty at {ordinal}")
+        if (
+            not isinstance(semantic["diagnostics"], list)
+            or not all(isinstance(item, str) for item in semantic["diagnostics"])
+            or semantic["parse_errors"] != []
+            or semantic["incompletes"] != []
+        ):
+            _fail(f"exact-flags TSGo oracle normalized semantic shape differs at {ordinal}")
+        reparsed = _raw_tsgo_diagnostics(frame["stdout"])
+        if semantic["diagnostics"] != reparsed:
+            _fail(f"exact-flags TSGo oracle stdout semantic differs at {ordinal}")
+        expected_exit = 1 if reparsed else 0
+        if semantic["exit_code"] != expected_exit or frame["returncode"] != expected_exit:
+            _fail(f"exact-flags TSGo oracle returncode semantic differs at {ordinal}")
+        if bool(frame["stdout"]) != bool(reparsed):
+            _fail(f"exact-flags TSGo oracle stdout presence differs at {ordinal}")
+        identity_rows.append({
+            "name": frame["case_id"],
+            "source_bytes": frame["source_bytes"],
+            "source_sha256": frame["source_sha256"],
+        })
+        semantic_rows.append({"case_id": frame["case_id"], "semantic": semantic})
+
+    frame_order = _sha(_canonical_public(identity_rows))
+    if (
+        artifact["frame_order_sha256"] != frame_order
+        or frame_order != contract["official_frames"]["panel_687_ordered_identity_sha256"]
+    ):
+        _fail("exact-flags TSGo oracle frame order identity differs")
+    semantic_digest = _sha(_canonical_public(semantic_rows))
+    if (
+        artifact["ordered_normalized_semantic_sha256"] != semantic_digest
+        or semantic_digest != oracle_contract["tsgo_batch_oracle_ordered_semantic_sha256"]
+    ):
+        _fail("exact-flags TSGo oracle ordered semantic identity differs")
+    return artifact["frames"]
 
 
 def load_authenticated_batch_oracles(
@@ -332,6 +621,8 @@ def load_authenticated_batch_oracles(
     baseline_overrides: dict[str, bytes] | None = None,
     git_cache_path: Path | None = None,
 ) -> dict[str, Any]:
+    if baseline_overrides is not None or git_cache_path is not None:
+        _fail("TypeScript Git baselines are not semantic oracle inputs")
     frames = _authenticated_frame_rows(contract)
     oracle_contract = contract["oracles"]
     expected_scoreboard = ROOT / oracle_contract["typokat_batch_oracle_relative_path"]
@@ -339,70 +630,10 @@ def load_authenticated_batch_oracles(
     if _sha(scoreboard) != oracle_contract["typokat_batch_oracle_sha256"]:
         _fail("scoreboard identity differs from contract")
     typokat_rows = _parse_scoreboard(scoreboard)
-    manifest = json.loads(_identity(
-        ROOT / contract["official_frames"]["manifest_relative_path"],
-        contract["official_frames"]["manifest_sha256"], "official manifest",
-    ))
-    manifest_rows = {entry["path"]: entry for entry in manifest["tests"]}
-    revision = contract["profile"]["upstream_revision"]
-    git_cache = git_cache_path or ROOT / oracle_contract["typescript_git_cache_relative_path"]
-    if not git_cache.is_dir():
-        _fail("Git baseline cache is unavailable")
-    try:
-        resolved = subprocess.run(
-            [
-                "git", "--no-replace-objects", f"--git-dir={git_cache}",
-                "rev-parse", "--verify", f"{revision}^{{commit}}",
-            ],
-            check=True, capture_output=True, text=True,
-        )
-    except (OSError, subprocess.CalledProcessError) as error:
-        raise BatchContractError("Git baseline revision is unavailable") from error
-    if resolved.stdout.strip() != revision:
-        _fail("Git baseline revision identity differs")
-    baseline_paths = sorted({
-        source["source"]
-        for frame in frames
-        for source in manifest_rows[frame["name"]]["baseline_sources"]
-        if source["baseline"]
-    })
-    try:
-        process = subprocess.Popen(
-            [
-                "git", "--no-replace-objects", f"--git-dir={git_cache}",
-                "cat-file", "--batch",
-            ],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        )
-        request = b"".join(f"{revision}:{path}\n".encode() for path in baseline_paths)
-        output, stderr = process.communicate(request)
-    except OSError as error:
-        raise BatchContractError("Git baseline blobs cannot be read") from error
-    if process.returncode != 0 or stderr:
-        _fail("Git baseline blobs cannot be read")
-    git_baselines: dict[str, bytes] = {}
-    cursor = 0
-    for path in baseline_paths:
-        line_end = output.find(b"\n", cursor)
-        if line_end < 0:
-            _fail("Git baseline batch response is truncated")
-        header = output[cursor:line_end].decode(errors="replace").split()
-        if len(header) != 3 or header[1] != "blob" or not header[2].isdigit():
-            _fail(f"Git baseline blob is unavailable: {path}")
-        size = int(header[2])
-        start = line_end + 1
-        end = start + size
-        if end >= len(output) or output[end:end + 1] != b"\n":
-            _fail("Git baseline batch response is truncated")
-        git_baselines[path] = output[start:end]
-        cursor = end + 1
-    if cursor != len(output):
-        _fail("Git baseline batch response contains trailing data")
-    overrides = baseline_overrides or {}
-    used_overrides: set[str] = set()
+    exact_tsgo = load_authenticated_exact_flags_tsgo_oracle(contract)
     typokat: list[dict[str, Any]] = []
-    tsgo: list[dict[str, Any]] = []
-    for frame in frames:
+    tsgo_rows: list[dict[str, Any]] = []
+    for frame, exact in zip(frames, exact_tsgo, strict=True):
         case_id = frame["name"]
         scoreboard_row = typokat_rows.get(case_id)
         if scoreboard_row is None:
@@ -417,31 +648,7 @@ def load_authenticated_batch_oracles(
         elif scoreboard_row["status"] not in ("IN", "OOS:unsupported"):
             _fail(f"eligible frame has an unauthenticated scoreboard class: {case_id}")
         typokat.append(outcome)
-        entry = manifest_rows[case_id]
-        diagnostics: list[str] | None = None
-        for baseline_source in entry["baseline_sources"]:
-            source_name = baseline_source["source"]
-            actual = git_baselines[source_name] if baseline_source["baseline"] else b""
-            if source_name in overrides:
-                used_overrides.add(source_name)
-                if overrides[source_name] != actual:
-                    _fail(f"baseline identity differs: {source_name}")
-                actual = overrides[source_name]
-            current = _baseline_diagnostics(actual)
-            if diagnostics is None:
-                diagnostics = current
-            elif diagnostics != current:
-                _fail(f"stable baseline variants differ for {case_id}")
-        diagnostics = diagnostics or []
-        tsgo.append({
-            "case_id": case_id,
-            "exit_code": 1 if diagnostics else 0,
-            "parse_errors": [],
-            "diagnostics": diagnostics,
-            "incompletes": [],
-        })
-    if set(overrides) != used_overrides:
-        _fail("baseline identity override does not name an eligible baseline")
+        tsgo_rows.append({"case_id": case_id, **exact["normalized_semantic"]})
     frame_authority = [
         {
             "case_id": frame["case_id"],
@@ -455,7 +662,7 @@ def load_authenticated_batch_oracles(
         "frame_count": len(frames),
         "frames": frame_authority,
         "typokat": typokat,
-        "tsgo": tsgo,
+        "tsgo": tsgo_rows,
     }
 
 
@@ -494,13 +701,42 @@ def validate_lifecycle_receipts(frames: list[dict[str, Any]], projects: int) -> 
         _fail("lifecycle frame count differs")
     if [frame.get("ordinal") for frame in frames] != list(range(projects)):
         _fail("lifecycle frame ordinals differ")
+    semantic_frames = []
+    for frame in frames:
+        disposition = frame.get("lifecycle_disposition")
+        semantic = frame.get("semantic")
+        if disposition == "semantic":
+            if (
+                not isinstance(semantic, dict)
+                or semantic.get("exit_code") == 2
+                or semantic.get("parse_errors") != []
+            ):
+                _fail("semantic disposition carries a parse-rejected outcome")
+            semantic_frames.append(frame)
+        elif disposition == "parse-rejected":
+            if semantic != {
+                "exit_code": 2,
+                "parse_errors": ["parse-error"],
+                "diagnostics": [],
+                "incompletes": [],
+            }:
+                _fail("parse-rejected frame semantic outcome differs")
+            if any(
+                frame.get(key) is not None
+                for key in ("program_identity", "checker_identity", "semantic_identity")
+            ):
+                _fail("parse-rejected frame fabricated an identity")
+        else:
+            _fail("lifecycle disposition differs")
     for key, label in (
         ("program_identity", "program identity"),
         ("checker_identity", "checker identity"),
         ("semantic_identity", "semantic identity"),
     ):
-        values = [frame.get(key) for frame in frames]
-        if any(not isinstance(value, str) or not value for value in values) or len(set(values)) != projects:
+        values = [frame.get(key) for frame in semantic_frames]
+        if any(not isinstance(value, str) or not value for value in values):
+            _fail(f"semantic {label} is missing")
+        if len(set(values)) != len(values):
             _fail(f"{label} is not unique per frame")
     products = {frame.get("shared_product_identity") for frame in frames}
     if len(products) != 1 or None in products:
@@ -619,12 +855,25 @@ def verify_route_intervals(sample: dict[str, Any], projects: int) -> None:
         if cursor != end:
             _fail("route boundary is not reconciled with phases")
         if sample.get("tool") == "typokat":
-            if not isinstance(frame.get("materialized_product_owner_count"), int):
-                _fail("materialized product owner metric is absent")
-            if frame.get("session_weak_alive_after") is not False:
-                _fail("typokat session weak handle remains alive")
-            if frame.get("cache_weak_alive_after") is not False:
-                _fail("typokat cache weak handle remains alive")
+            disposition = frame.get("lifecycle_disposition")
+            if disposition == "semantic":
+                if type(frame.get("materialized_product_owner_count")) is not int:
+                    _fail("materialized product owner metric is absent")
+                if frame.get("session_weak_alive_after") is not False:
+                    _fail("typokat session weak handle remains alive")
+                if frame.get("cache_weak_alive_after") is not False:
+                    _fail("typokat cache weak handle remains alive")
+            elif disposition == "parse-rejected":
+                if any(
+                    frame.get(key) is not None
+                    for key in (
+                        "materialized_product_owner_count", "session_weak_alive_after",
+                        "cache_weak_alive_after",
+                    )
+                ):
+                    _fail("parse-rejected frame fabricated session receipts")
+            else:
+                _fail("typokat lifecycle disposition differs")
         elif frame.get("retained_frame_handles") != 0:
             _fail("tsgo retained frame handles are nonzero")
     if sample.get("tool") == "typokat":
