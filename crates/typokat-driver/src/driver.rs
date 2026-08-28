@@ -190,6 +190,17 @@ enum ProjectLocalShadowRouteForTest {
 }
 
 #[cfg(test)]
+#[derive(Clone, Copy)]
+enum ProjectLocalShadowOperationForTest {
+    Source,
+    Files,
+    RepeatedProject,
+    OfficialBatch,
+    Standalone,
+    Cli,
+}
+
+#[cfg(test)]
 fn check_project_local_shadow_for_test<Acquire>(
     inputs: Vec<FileInput>,
     route: ProjectLocalShadowRouteForTest,
@@ -283,6 +294,99 @@ where
     };
     attach_project_notices(&mut reports, &inventory.notices);
     Ok(ProjectCheckRun { reports, inventory })
+}
+
+#[cfg(test)]
+fn check_project_local_operation_shadow_for_test<Acquire>(
+    inputs: Vec<FileInput>,
+    operation: ProjectLocalShadowOperationForTest,
+    acquire: Acquire,
+) -> Result<ProjectCheckRun, DriverError>
+where
+    Acquire: FnOnce() -> Result<
+            Arc<typokat_library_product::LibraryDeclarationProduct>,
+            Arc<LibraryInitError>,
+        > + Send,
+{
+    match operation {
+        ProjectLocalShadowOperationForTest::Source => {
+            let product = acquire()?;
+            if inputs.len() != 1 {
+                return Err(check_failure(
+                    "source project-local shadow requires exactly one input".to_owned(),
+                ));
+            }
+            let product_identity = Arc::as_ptr(&product).addr();
+            on_check_worker_with_identity(Some(product_identity), move || {
+                check_project_local_shadow_for_test(
+                    inputs,
+                    ProjectLocalShadowRouteForTest::RepeatedProject,
+                    || Ok(product),
+                )
+            })?
+        }
+        ProjectLocalShadowOperationForTest::RepeatedProject
+        | ProjectLocalShadowOperationForTest::OfficialBatch => {
+            let product = acquire()?;
+            let product_identity = Arc::as_ptr(&product).addr();
+            on_check_worker_with_identity(Some(product_identity), move || {
+                check_project_local_shadow_for_test(
+                    inputs,
+                    ProjectLocalShadowRouteForTest::RepeatedProject,
+                    || Ok(product),
+                )
+            })?
+        }
+        ProjectLocalShadowOperationForTest::Files => {
+            let product = acquire()?;
+            test_support::record_provider_acquired_before_rayon_for_test();
+            let trace_context = test_support::current_trace_context_for_test();
+            let product_identity = Arc::as_ptr(&product).addr();
+            let reports = inputs
+                .into_par_iter()
+                .map(|input| {
+                    let _trace_enrollment = trace_context
+                        .as_ref()
+                        .map(test_support::ProductionDriverFaultTraceContextForTest::enroll);
+                    test_support::record_rayon_worker_start_for_test();
+                    let worker_product = Arc::clone(&product);
+                    on_check_worker_with_identity(Some(product_identity), move || {
+                        check_project_local_shadow_for_test(
+                            vec![input],
+                            ProjectLocalShadowRouteForTest::RepeatedProject,
+                            || Ok(worker_product),
+                        )
+                    })?
+                    .and_then(|run| {
+                        let mut reports = run.reports;
+                        if reports.len() != 1 {
+                            return Err(check_failure(
+                                "one-file project-local shadow returned invalid report coverage"
+                                    .to_owned(),
+                            ));
+                        }
+                        reports.pop().ok_or_else(|| {
+                            check_failure(
+                                "one-file project-local shadow returned no report".to_owned(),
+                            )
+                        })
+                    })
+                })
+                .collect::<Result<Vec<_>, DriverError>>()?;
+            Ok(ProjectCheckRun {
+                reports,
+                inventory: ProjectModuleInventory::default(),
+            })
+        }
+        ProjectLocalShadowOperationForTest::Standalone
+        | ProjectLocalShadowOperationForTest::Cli => on_standalone_check_worker(move || {
+            check_project_local_shadow_for_test(
+                inputs,
+                ProjectLocalShadowRouteForTest::Standalone,
+                acquire,
+            )
+        })?,
+    }
 }
 
 /// Check many files in parallel, with an independent allocator/interner per file.
