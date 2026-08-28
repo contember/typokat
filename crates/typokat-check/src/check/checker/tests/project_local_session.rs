@@ -4,7 +4,7 @@ use crate::binder::namespace::{
     source_file_kind, CompilationUnit, ModuleBindingContext, SourceUnitKey,
 };
 use crate::binder::product::{project_library_declaration_product, LibraryProductSource};
-use crate::check::checker::project_local::CheckerSession;
+use crate::check::checker::project_local::{observation_storage_counts_for_test, CheckerSession};
 use crate::frontend::{run_prepared_project_frontend, FileInput};
 use crate::source::{CompilationOrigin, LibraryFileOrdinal};
 use oxc_allocator::Allocator;
@@ -87,4 +87,35 @@ fn checker_session_owns_product_binding_and_returns_real_check_results() {
         diagnostic.message,
         "Type 'string' is not assignable to type 'number'"
     );
+}
+
+#[test]
+fn ordinary_checker_sessions_do_not_retain_test_observations() {
+    let product = Arc::new(extract_library_product("interface Box<T> { value: T }\n"));
+    let counts_before = observation_storage_counts_for_test();
+
+    for _ in 0..16 {
+        let product = Arc::clone(&product);
+        let run = run_prepared_project_frontend(
+            vec![FileInput {
+                name: USER_PATH.to_owned(),
+                source: "const value: number = 1;\n".to_owned(),
+            }],
+            move |programs, source_reexports, default_modules| {
+                CheckerSession::new(product).check_project_programs(
+                    programs,
+                    source_reexports,
+                    default_modules,
+                )
+            },
+        );
+        assert!(
+            run.product
+                .expect("clean project reaches the session")
+                .is_ok(),
+            "ordinary project-local session checks"
+        );
+    }
+
+    assert_eq!(observation_storage_counts_for_test(), counts_before);
 }
