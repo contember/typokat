@@ -1270,6 +1270,9 @@ mod project_report_coverage_spec;
 mod wu6_benchmark_route_spec;
 
 #[cfg(test)]
+mod wu5_project_local_shadow_spec;
+
+#[cfg(test)]
 mod wu7_provider_lifecycle_spec;
 
 #[cfg(test)]
