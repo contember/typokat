@@ -1,8 +1,10 @@
 use super::super::{
     bind_library_product_project_programs,
     bind_library_product_project_programs_fully_perturbed_for_test,
+    bind_library_product_project_programs_with_builder_and_admission,
+    project_local::CheckerSession, AuthoritativeProjectBinderFinish, CheckResult,
     LibraryProductProjectBindingError, ProjectBindingMeasurementScope,
-    ProjectDeclarationStructuralError,
+    ProjectDeclarationStructuralError, ProjectModuleAdmission,
 };
 use crate::binder::bind::ProjectBinderBuilder;
 use crate::binder::declaration::SourceDeclarationManifest;
@@ -15,6 +17,7 @@ use crate::source::{CompilationOrigin, LibraryFileOrdinal};
 use oxc_allocator::Allocator;
 use oxc_parser::Parser;
 use oxc_span::SourceType;
+use std::sync::Arc;
 
 #[derive(Default)]
 struct SemanticTracePublisher {
@@ -123,6 +126,61 @@ fn bind_with_perturbation(
             )
             .map(|(_, bound)| bound)
         }
+    });
+    assert!(run.preparation_error.is_none());
+    run.product.expect("clean prepared project")
+}
+
+fn check(sources: &[(&str, &str)]) -> Vec<CheckResult> {
+    let product = Arc::new(library_product());
+    let inputs = sources
+        .iter()
+        .map(|(name, source)| FileInput {
+            name: (*name).to_owned(),
+            source: (*source).to_owned(),
+        })
+        .collect();
+    let run = run_prepared_project_frontend(inputs, |units, reexports, defaults| {
+        CheckerSession::new(Arc::clone(&product)).check_project_programs(units, reexports, defaults)
+    });
+    assert!(run.preparation_error.is_none());
+    run.product
+        .expect("clean prepared project")
+        .expect("reportable project structure reaches the user Pass")
+}
+
+fn diagnostic_codes(results: &[CheckResult]) -> Vec<&str> {
+    results
+        .iter()
+        .flat_map(|result| &result.diagnostics)
+        .map(|diagnostic| diagnostic.code.as_str())
+        .collect()
+}
+
+fn bind_without_source_reexport_admission(
+    sources: &[(&str, &str)],
+) -> Result<super::super::BoundProjectBinder, LibraryProductProjectBindingError> {
+    let product = library_product();
+    let inputs = sources
+        .iter()
+        .map(|(name, source)| FileInput {
+            name: (*name).to_owned(),
+            source: (*source).to_owned(),
+        })
+        .collect();
+    let run = run_prepared_project_frontend(inputs, |units, _, _| {
+        let instantiated = ProjectBinderBuilder::from_library_declaration_product(&product)
+            .map_err(LibraryProductProjectBindingError::InvalidProduct)?;
+        bind_library_product_project_programs_with_builder_and_admission(
+            units,
+            instantiated,
+            ProjectModuleAdmission {
+                source_reexports: None,
+                default_module: None,
+            },
+            AuthoritativeProjectBinderFinish::Product,
+        )
+        .map(|(_, bound)| bound)
     });
     assert!(run.preparation_error.is_none());
     run.product.expect("clean prepared project")
@@ -240,50 +298,55 @@ fn assert_exact_product_map(
 }
 
 #[test]
-fn product_project_returns_typed_structural_failures_without_partial_surfaces() {
-    assert!(matches!(
-        bind(&[(
+fn product_project_reports_external_structure_through_the_user_pass() {
+    assert_eq!(
+        diagnostic_codes(&check(&[(
             "/project/missing.ts",
             "import { X } from './absent'; export type Y = X;",
-        )]),
-        Err(LibraryProductProjectBindingError::Structural(
-            ProjectDeclarationStructuralError::CannotFindModule { .. }
-        ))
-    ));
-    assert!(matches!(
-        bind(&[
+        )])),
+        ["TK2307"],
+    );
+    assert_eq!(
+        diagnostic_codes(&check(&[
             ("/project/source.ts", "export interface X {}"),
             (
                 "/project/consumer.ts",
                 "import { Y } from './source'; export type Z = Y;",
             ),
-        ]),
-        Err(LibraryProductProjectBindingError::Structural(
-            ProjectDeclarationStructuralError::NoExportedMember { .. }
-        ))
-    ));
-    assert!(matches!(
-        bind(&[
+        ])),
+        ["TK2305"],
+    );
+    assert_eq!(
+        diagnostic_codes(&check(&[
             ("/project/source.ts", "export interface X {}"),
             (
                 "/project/default.ts",
                 "import Missing from './source'; export { Missing };",
             ),
-        ]),
-        Err(LibraryProductProjectBindingError::Structural(
-            ProjectDeclarationStructuralError::NoDefaultExport { .. }
-        ))
-    ));
-    assert!(matches!(
-        bind(&[
+        ])),
+        ["TK1192"],
+    );
+    assert_eq!(
+        diagnostic_codes(&check(&[
             ("/project/source.ts", "export interface X {}"),
             (
                 "/project/duplicate.ts",
                 "export { X } from './source'; export interface X {}",
             ),
+        ])),
+        ["TK2300", "TK2300"],
+    );
+}
+
+#[test]
+fn product_project_still_requires_source_reexport_admission() {
+    assert!(matches!(
+        bind_without_source_reexport_admission(&[
+            ("/project/source.ts", "export interface X {}"),
+            ("/project/bridge.ts", "export { X } from './source.js';"),
         ]),
         Err(LibraryProductProjectBindingError::Structural(
-            ProjectDeclarationStructuralError::DuplicateIdentifier { .. }
+            ProjectDeclarationStructuralError::MissingSourceReexportAdmission { .. }
         ))
     ));
 }
