@@ -8,6 +8,7 @@ import hashlib
 import inspect
 import json
 from pathlib import Path
+import shutil
 import sys
 import tempfile
 import unittest
@@ -201,6 +202,47 @@ class SessionBatchLiveCollectorTests(unittest.TestCase):
             record["frames"][0]["raw_response_sha256"],
             hashlib.sha256(b'{"case_id":"case","ordinal":0}').hexdigest(),
         )
+
+    def test_typokat_build_cannot_load_home_ancestor_cargo_configuration(self) -> None:
+        host = collect.SystemLiveHost(self.contract)
+        candidate = {"commit": "a" * 40, "tree": "b" * 40, "dirty": False}
+        captured: dict[str, object] = {}
+
+        def build(
+            argv: list[str], cwd: Path, environment: dict[str, str]
+        ) -> None:
+            captured.update(argv=argv, cwd=cwd, environment=environment)
+            binary = (
+                Path(environment["CARGO_TARGET_DIR"])
+                / "release"
+                / self.contract["typokat"]["runner_binary"]
+            )
+            binary.parent.mkdir(parents=True)
+            binary.write_bytes(b"runner")
+
+        try:
+            self.assertNotIn(
+                host.system_home,
+                (host.live_root, *host.live_root.parents),
+            )
+            host.freeze_candidate = mock.Mock(return_value=candidate)
+            host._run_build = build
+            host._build_typokat(candidate)
+        finally:
+            shutil.rmtree(host.live_root)
+
+        self.assertEqual(captured["cwd"], host.live_root)
+        self.assertEqual(
+            captured["argv"],
+            [
+                *self.contract["typokat"]["build_argv"],
+                "--manifest-path",
+                str(collect.ROOT / "Cargo.toml"),
+            ],
+        )
+        environment = captured["environment"]
+        self.assertEqual(environment["RUSTC_WRAPPER"], "")
+        self.assertEqual(environment["RUSTC_WORKSPACE_WRAPPER"], "")
 
     def test_live_preflight_owns_build_protocol_process_and_fault_sequence(self) -> None:
         host = FakeLiveHost(self.contract)
