@@ -190,7 +190,7 @@ fn project_local_shadow_preserves_operation_specific_initialization_precedence()
 }
 
 #[test]
-fn project_local_shadow_activates_supported_default_reexports_before_the_notice_gate() {
+fn project_local_shadow_finalizes_default_reexport_notice_before_the_gate() {
     let project_directory = typokat_core::test_support::repository_root()
         .join("tests/cases/b15_default_module_slots/22c_source_default_as_default");
     let inputs = ["barrel.ts", "consumer.ts", "source.ts"]
@@ -226,16 +226,21 @@ fn project_local_shadow_activates_supported_default_reexports_before_the_notice_
     )
     .expect("supported default re-export reaches the project-local session");
 
-    assert_eq!(acquisitions.get(), 1);
-    assert!(run.inventory.notices.is_empty(), "{:#?}", run.inventory);
+    assert_eq!(acquisitions.get(), 0);
     assert_eq!(
-        run.reports
-            .iter()
-            .flat_map(|report| &report.output.diagnostics)
-            .map(|diagnostic| diagnostic.code.as_str())
-            .collect::<Vec<_>>(),
-        ["TK2322"],
+        run.inventory.notices,
+        ["unsupported-source-reexport-default-slot barrel.ts:1:1 ./source.js default->default"],
     );
+    assert!(run
+        .reports
+        .iter()
+        .flat_map(|report| &report.output.diagnostics)
+        .next()
+        .is_none());
+    assert_eq!(run.reports[0].output.project_notices, run.inventory.notices);
+    assert!(run.reports[1..]
+        .iter()
+        .all(|report| report.output.project_notices.is_empty()));
 }
 
 #[test]
