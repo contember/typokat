@@ -24,6 +24,17 @@ fn project_local_force_all_has_one_semantic_producer() {
 }
 
 #[test]
+fn ordinary_project_local_coordinator_has_no_test_fault_authority() {
+    let coordinator = read(
+        &repo_root().join("crates/typokat-check/src/check/checker/project_local/coordinator.rs"),
+    );
+
+    assert!(!coordinator.contains("ProjectLocalSemanticFaultForTest"));
+    assert!(!coordinator.contains("fault_reached"));
+    assert!(!coordinator.contains("partial_publication_scc"));
+}
+
+#[test]
 fn force_all_record_authority_is_the_adr_0028_production_pin() {
     let root = repo_root();
     let oracle_source = read(
