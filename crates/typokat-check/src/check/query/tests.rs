@@ -5695,6 +5695,61 @@ fn library_object_context_changes_invalidate_relations_and_unavailable_is_termin
 }
 
 #[test]
+fn library_object_context_changes_are_transactional_inside_savepoints() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let target = interner.intern_object(ObjectType {
+        properties: vec![optional_property("length", wk.number)],
+        ..Default::default()
+    });
+    let parameter = TypeParamId(99_004);
+    let missing_length = interner.intern_object(ObjectType::default());
+    let array = interner.intern_array(wk.string);
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+    let missing = library_object_context_with_array_templates_for_test(
+        &mut interner,
+        target,
+        missing_length,
+        missing_length,
+        parameter,
+    );
+    let replacement = library_object_context_for_test(&mut interner, target);
+    let assignable = |interner: &mut Interner,
+                      state: &mut SemanticQueryState,
+                      next_type_param: &mut u32| {
+        SemanticQueryCoordinator::new(interner, &published, state, next_type_param)
+            .is_assignable(array, target)
+    };
+
+    state.set_library_object_context(Some(missing));
+    state.savepoint();
+    state.set_library_object_context(Some(replacement));
+    assert!(matches!(
+        assignable(&mut interner, &mut state, &mut next_type_param),
+        RelationOutcome::Yes
+    ));
+    state.rollback();
+    assert!(matches!(
+        assignable(&mut interner, &mut state, &mut next_type_param),
+        RelationOutcome::No(_)
+    ));
+
+    state.savepoint();
+    state.set_library_object_context(Some(replacement));
+    assert!(matches!(
+        assignable(&mut interner, &mut state, &mut next_type_param),
+        RelationOutcome::Yes
+    ));
+    state.commit();
+    assert!(matches!(
+        assignable(&mut interner, &mut state, &mut next_type_param),
+        RelationOutcome::Yes
+    ));
+}
+
+#[test]
 fn demand_preserves_durable_union_normalization() {
     let mut interner = Interner::with_intrinsics();
     let wk = interner.well_known();
