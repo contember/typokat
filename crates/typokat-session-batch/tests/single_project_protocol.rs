@@ -145,6 +145,31 @@ fn single_project_checks_one_real_ordered_multi_file_project() {
 }
 
 #[test]
+fn single_project_preserves_object_freeze_assignability() {
+    let output = invoke_request(json!({
+        "case_id": "object-freeze-linkage",
+        "files": [{
+            "path": "main.ts",
+            "source": "export const value: Object = Object.freeze({ value: 27 });\n",
+        }],
+        "schema": 1,
+    }));
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+
+    let receipt: Value = serde_json::from_slice(&output.stdout).expect("runner response JSON");
+    assert_eq!(
+        receipt["semantic"],
+        json!({
+            "diagnostics": [],
+            "exit_code": 0,
+            "incompletes": [],
+            "parse_errors": [],
+        })
+    );
+}
+
+#[test]
 fn single_project_rejects_noncanonical_or_nonexclusive_requests() {
     assert_rejected("", "exactly one canonical JSON request");
     assert_rejected(
