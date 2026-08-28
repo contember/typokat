@@ -241,8 +241,40 @@ class SessionBatchLiveCollectorTests(unittest.TestCase):
             ],
         )
         environment = captured["environment"]
+        self.assertEqual(
+            environment["RUSTUP_TOOLCHAIN"],
+            "1.95.0-x86_64-unknown-linux-gnu",
+        )
         self.assertEqual(environment["RUSTC_WRAPPER"], "")
         self.assertEqual(environment["RUSTC_WORKSPACE_WRAPPER"], "")
+
+    def test_cargo_configuration_discovery_fails_on_any_external_config(self) -> None:
+        host = object.__new__(collect.SystemLiveHost)
+        with tempfile.TemporaryDirectory(dir="/tmp") as directory:
+            root = Path(directory)
+            cwd = root / "run"
+            cargo_home = root / "cargo-home"
+            cwd.mkdir()
+            cargo_home.mkdir()
+            host._validate_cargo_configuration(cwd, cargo_home)
+
+            ancestor_config = root / ".cargo" / "config.toml"
+            ancestor_config.parent.mkdir()
+            ancestor_config.write_text("[build]\nrustc-wrapper = 'other'\n")
+            with self.assertRaisesRegex(
+                batch.BatchContractError,
+                "Cargo configuration",
+            ):
+                host._validate_cargo_configuration(cwd, cargo_home)
+            ancestor_config.unlink()
+
+            cargo_home_config = cargo_home / "config"
+            cargo_home_config.write_text("[build]\njobs = 99\n")
+            with self.assertRaisesRegex(
+                batch.BatchContractError,
+                "Cargo configuration",
+            ):
+                host._validate_cargo_configuration(cwd, cargo_home)
 
     def test_live_preflight_owns_build_protocol_process_and_fault_sequence(self) -> None:
         host = FakeLiveHost(self.contract)
