@@ -61,3 +61,26 @@ fn global_array_binding_keeps_its_typed_incomplete_receipt() {
         })
     );
 }
+
+#[test]
+fn project_local_switch_retains_discriminated_union_members() {
+    let receipt = invoke(
+        "project-local-switch-narrowing",
+        "type Item = { kind: true; a: string } | { kind: false; b: string };\n\
+         function select(item: Item) {\n\
+           switch (item.kind) {\n\
+             case true: return item.a;\n\
+             case false: return item.b;\n\
+           }\n\
+         }\n",
+    );
+    assert_eq!(
+        receipt["semantic"],
+        json!({
+            "diagnostics": [],
+            "exit_code": 0,
+            "incompletes": [],
+            "parse_errors": [],
+        })
+    );
+}
