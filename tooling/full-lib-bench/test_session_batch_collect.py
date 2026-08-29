@@ -149,11 +149,15 @@ class FakePanelHost:
         fail_at: int | None = None,
         final_mutation=None,
         reuse_cross_panel_pid: bool = False,
+        runner_collision: str | None = None,
+        profile_mutation: str | None = None,
     ) -> None:
         self.contract = contract
         self.fail_at = fail_at
         self.final_mutation = final_mutation
         self.reuse_cross_panel_pid = reuse_cross_panel_pid
+        self.runner_collision = runner_collision
+        self.profile_mutation = profile_mutation
         self.candidate = {
             "commit": "a" * 40,
             "tree": "b" * 40,
@@ -201,7 +205,17 @@ class FakePanelHost:
                 else self.contract["tsgo"]["upstream_revision"]
             ),
         }
+        if tool == "tsgo" and self.runner_collision in {
+            "path", "source_sha256", "binary_sha256"
+        }:
+            runner[self.runner_collision] = self.runners["typokat"][
+                self.runner_collision
+            ]
         self.runners[tool] = copy.deepcopy(runner)
+        if tool == "tsgo" and self.runner_collision == "binary_sha256":
+            for receipt in self.controls["tsgo"].values():
+                receipt["executable_before_sha256"] = runner["binary_sha256"]
+                receipt["executable_after_sha256"] = runner["binary_sha256"]
         return runner
 
     def _authenticate_runner(self, tool: str, runner: dict[str, object]) -> None:
@@ -222,6 +236,8 @@ class FakePanelHost:
         return info
 
     def observe_timing_boundary(self) -> dict[str, object]:
+        if self.runner_collision is not None:
+            raise AssertionError("collector reached timing after a runner collision")
         ordinal = sum(call[0] == "observe_timing_boundary" for call in self.calls)
         self.calls.append(("observe_timing_boundary", ordinal))
         value = copy.deepcopy(self.timing_boundary)
@@ -247,6 +263,18 @@ class FakePanelHost:
                         "length_framed_sha256"
                     ]
                 refresh_responses(sample)
+            if self.profile_mutation == "warmup":
+                for warmup in panel["warmups"]:
+                    source = next(
+                        sample
+                        for sample in panel["samples"]
+                        if sample["tool"] == warmup["tool"]
+                    )
+                    warmup["frames"] = copy.deepcopy(source["frames"])
+                panel["warmups"][0]["frames"][0]["shared_product_identity"] = "0" * 64
+            elif self.profile_mutation == "sample":
+                panel["samples"][0]["frames"][0]["shared_product_identity"] = "0" * 64
+                refresh_responses(panel["samples"][0])
             self._panels[projects] = panel
             self._batch_offsets[projects] = 0
             self.panel_order.append(projects)
@@ -1160,6 +1188,34 @@ class SessionBatchLivePanelCollectorTests(unittest.TestCase):
         with self.assertRaisesRegex(batch.BatchContractError, "pid|process"):
             collect._collect_live_panels(reused_pid, self.contract)
         self.assertEqual(reused_pid.panel_order, [1, 32])
+
+    def test_live_panel_collector_rejects_each_runner_identity_collision(self) -> None:
+        for axis in ("path", "source_sha256", "binary_sha256", "commit"):
+            contract = copy.deepcopy(self.contract)
+            host = FakePanelHost(contract, runner_collision=axis)
+            if axis == "commit":
+                host.candidate["commit"] = contract["tsgo"]["upstream_revision"]
+            with self.subTest(axis=axis), self.assertRaisesRegex(
+                batch.BatchContractError,
+                rf"runner.*{axis}.*collision",
+            ):
+                collect._collect_live_panels(host, contract)
+            self.assertFalse(
+                any(call[0] in {"run_fault", "run_batch"} for call in host.calls)
+            )
+
+    def test_live_panel_collector_authenticates_every_frame_product_identity(self) -> None:
+        contract = copy.deepcopy(self.contract)
+        contract["panel_project_counts"] = [1]
+        contract["speed_gated_project_counts"] = []
+        contract["sampling"]["panel_timeout_seconds"] = [10]
+        for phase in ("warmup", "sample"):
+            host = FakePanelHost(contract, profile_mutation=phase)
+            with self.subTest(phase=phase), self.assertRaisesRegex(
+                batch.BatchContractError,
+                "shared product identity",
+            ):
+                collect._collect_live_panels(host, contract)
 
     def test_live_panel_collector_rejects_every_final_attestation_drift(self) -> None:
         contract = copy.deepcopy(self.contract)
