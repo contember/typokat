@@ -154,6 +154,33 @@ fn project_local_enum_alias_constraints_retain_comparison_overlap() {
 }
 
 #[test]
+fn project_local_nested_enum_alias_constraints_retain_comparison_overlap() {
+    let receipt = invoke(
+        "project-local-nested-enum-alias-constraint-overlap",
+        "enum Choice { Yes, No }\n\
+         type OnlyYes = Choice.Yes;\n\
+         type WithNo<T> = T | Choice.No;\n\
+         function inspect<T extends OnlyYes, U extends T | Choice.No>(value: U) {\n\
+           if (value === Choice.Yes) {}\n\
+           switch (value) { case Choice.Yes: break; }\n\
+         }\n\
+         function inspectAlias<T extends OnlyYes, U extends WithNo<T>>(value: U) {\n\
+           if (value === Choice.Yes) {}\n\
+           switch (value) { case Choice.Yes: break; }\n\
+         }\n",
+    );
+    assert_eq!(
+        receipt["semantic"],
+        json!({
+            "diagnostics": [],
+            "exit_code": 0,
+            "incompletes": [],
+            "parse_errors": [],
+        })
+    );
+}
+
+#[test]
 fn project_local_disjoint_enum_aliases_remain_non_overlapping() {
     let receipt = invoke(
         "project-local-disjoint-enum-aliases",
