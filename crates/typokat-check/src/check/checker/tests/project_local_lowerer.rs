@@ -11,7 +11,7 @@ use crate::check::query::{PublishedClassLookup, SemanticQueryCoordinator, Semant
 use crate::class_semantics::{DemandOutcome, PublishedClassSurface, PublishedClasses};
 use crate::relate::relation::RelationOutcome;
 use crate::source::{CompilationOrigin, LibraryFileOrdinal};
-use crate::types::repr::{ClassId, ObjectType, PropertyType};
+use crate::types::repr::{ClassId, ModifierOp, ObjectType, PropertyType, TypeTag};
 use crate::types::{Interner, PropertyKey};
 use oxc_allocator::Allocator;
 use oxc_parser::Parser;
@@ -23,11 +23,11 @@ use typokat_library_product::{
     DeclarationLexicalScope, DeclarationPayload, DeclarationRecipe, DeclarationSlots,
     DependencyKind, DependencyLinkRecipe, DependencyRecipe, DependencyTarget, GroupKey,
     IntrinsicMarker, IntrinsicMarkerRecipe, KeywordKind, LexicalStepKind, LexicalStepRecipe,
-    LibraryDeclarationProduct, MemberKey, MemberKind, MemberRecipe, ParameterRecipe,
-    ProductAssembly, PropertyNameRecipe, RegionKey, RegionKind, RegionRecipe, SignatureRecipe,
-    SourceClassification, SourceKey, SourceRecipe, SourceSite, TypeParameterRecipe, TypeRecipe,
-    TypeRecipeKey, TypeRecipeNode, TypeReferenceResolution, ValueAttachmentRecipe,
-    ValueReferenceResolution, Variance,
+    LibraryDeclarationProduct, MappedModifier, MemberKey, MemberKind, MemberRecipe,
+    ParameterRecipe, ProductAssembly, PropertyNameRecipe, RegionKey, RegionKind, RegionRecipe,
+    SignatureRecipe, SourceClassification, SourceKey, SourceRecipe, SourceSite,
+    TypeParameterRecipe, TypeRecipe, TypeRecipeKey, TypeRecipeNode, TypeReferenceResolution,
+    ValueAttachmentRecipe, ValueReferenceResolution, Variance,
 };
 use typokat_types::alias_semantics::{
     PublishedAliasTerminal, PublishedAliasUnavailable, PublishedAliases,
@@ -330,6 +330,97 @@ fn product_group(product: &LibraryDeclarationProduct, name: &str) -> usize {
         .iter()
         .position(|group| product.strings()[group.name.index()] == name)
         .unwrap_or_else(|| panic!("missing source-extracted group {name}"))
+}
+
+#[test]
+fn source_mapped_alias_preserves_active_key_and_modifiers() {
+    let product = extract_library_product(
+        "type R<T> = { readonly [P in keyof T]: T[P] };",
+        "mapped-alias-contract",
+    );
+    let group = product_group(&product, "R");
+    let declaration = product.groups()[group].fragments[0];
+    let DeclarationPayload::TypeAlias { value, .. } =
+        &product.declarations()[declaration.index()].payload
+    else {
+        panic!("R is a type alias")
+    };
+    let TypeRecipeNode::Mapped {
+        optional, readonly, ..
+    } = &product.types()[value.index()].node
+    else {
+        panic!("R has a mapped body")
+    };
+    let mut interner = Interner::with_intrinsics();
+    let receipt = lower_product_groups_for_test(
+        &product,
+        &mut interner,
+        &[group],
+        &BTreeMap::new(),
+        [None, None],
+        None,
+    );
+    let template = receipt.group_types[group].expect("ready alias template");
+    let alias = interner
+        .store()
+        .alias_template_id(template)
+        .expect("published alias identity");
+    let PublishedAliasTerminal::Ready(surface) = receipt
+        .aliases
+        .terminal(alias)
+        .expect("published alias terminal")
+    else {
+        panic!("mapped alias is ready")
+    };
+    let mapped = interner
+        .store()
+        .mapped_type(surface.body())
+        .copied()
+        .expect("published alias body is mapped");
+
+    assert!(mapped.homomorphic);
+    assert_eq!(interner.store().tag(mapped.key_source), TypeTag::TypeParam);
+    assert_eq!(
+        interner.store().tag(mapped.value_template),
+        TypeTag::MappedValue,
+        "T[P] on the active mapped key becomes the evaluator placeholder"
+    );
+    assert_eq!(
+        (*optional, *readonly),
+        (MappedModifier::Preserve, MappedModifier::Add)
+    );
+    assert_eq!(mapped.optional_modifier, ModifierOp::Keep);
+    assert_eq!(mapped.readonly_modifier, ModifierOp::Add);
+
+    let parameter = surface.type_params()[0];
+    let number = interner.well_known().number;
+    let source = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", number)],
+        ..ObjectType::default()
+    });
+    let mut expected_property = PropertyType::public("value", number);
+    expected_property.readonly = true;
+    let expected = interner.intern_object(ObjectType {
+        properties: vec![expected_property],
+        ..ObjectType::default()
+    });
+    let application = interner.intern_instantiation(template, vec![(parameter, source)]);
+    let published = AliasPublication {
+        classes: PublishedClasses::empty(),
+        aliases: receipt.aliases,
+    };
+    let mut state = SemanticQueryState::default();
+    let mut next_type_parameter = 1;
+    assert!(matches!(
+        SemanticQueryCoordinator::new(
+            &mut interner,
+            &published,
+            &mut state,
+            &mut next_type_parameter,
+        )
+        .is_assignable(application, expected),
+        RelationOutcome::Yes
+    ));
 }
 
 #[test]
