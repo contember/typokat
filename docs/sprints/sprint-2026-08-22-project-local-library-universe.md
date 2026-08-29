@@ -790,3 +790,16 @@ numbers are invalid without `--no-smt`.
   discovery path before and after build. Independent review recomputed the evidence and passed.
   This is not WU6 `GO`: cold linkage, progressive panels, concurrency, allocation evidence, and
   performance gates remain uncollected. No candidate timing has run.
+- **2026-08-29 — WU6 live cold/session linkage passed.** The non-injectable collector ran under a
+  two-vCPU no-SMT lease at clean candidate `6a6254bec3c5fb025ffa6a16e299baed9e59d77b`
+  (tree `f790d2ced7915211ac8ff22fb3934a9cf1495fdd`) and returned `LINKAGE-PASS`. The
+  retained local artifact is `target/wu6/session-linkage-6a6254be.json` (file SHA-256
+  `f8006b525738b182688f5a555dc1896e466b49befca98b8d2d8c1fe0e2ee6329`, canonical evidence
+  SHA-256 `648e01403e385bcf5225860ce9a276013a1d83b79271992d8e39ef738f4dcb5d`). It links
+  the ordinary cold CLIs and the same-binary single/batch runners across all four frozen rows
+  (`1 / 1 / 2 / 32` files), authenticates the exact 82-file profile, source and binary identities,
+  and retains dead-session/cache lifecycle receipts. Independent raw recomputation returned
+  `LINKAGE-RECOMPUTED` with oracle SHA-256
+  `2df1b378c1d31367db41b538700c38e6f068a3a0bec9264f60bbf34c1b26a785`. This is still not
+  WU6 `GO`: the progressive 1/32/687 timing and memory panels, concurrency evidence, allocation
+  receipt, and current-provider 687-frame comparison remain uncollected.
