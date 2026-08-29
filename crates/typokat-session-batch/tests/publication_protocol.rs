@@ -206,3 +206,67 @@ fn project_local_disjoint_enum_aliases_remain_non_overlapping() {
         })
     );
 }
+
+#[test]
+fn project_local_native_relation_identities_are_cold_order_independent() {
+    for (case_id, source) in [
+        (
+            "project-local-boolean-wrapper-cold",
+            "let source: boolean = true;\nlet target: Boolean = source;\n",
+        ),
+        (
+            "project-local-number-wrapper-cold",
+            "let source: number = 1;\nlet target: Number = source;\n",
+        ),
+        (
+            "project-local-string-wrapper-cold",
+            "let source: string = \"value\";\nlet target: String = source;\n",
+        ),
+        (
+            "project-local-object-wrapper-cold",
+            "let source: number = 1;\nlet target: Object = source;\n",
+        ),
+        (
+            "project-local-number-wrapper-after-object",
+            "let prior: Object = {};\n\
+             let source: number = 1;\n\
+             let target: Number = source;\n",
+        ),
+    ] {
+        let receipt = invoke(case_id, source);
+        assert_eq!(
+            receipt["semantic"],
+            json!({
+                "diagnostics": [],
+                "exit_code": 0,
+                "incompletes": [],
+                "parse_errors": [],
+            }),
+            "{case_id}"
+        );
+    }
+}
+
+#[test]
+fn project_local_native_relation_context_keeps_augmentation_and_direction() {
+    let receipt = invoke(
+        "project-local-native-wrapper-augmentation",
+        "interface Boolean { marker(): string }\n\
+         interface Same { marker(): string }\n\
+         interface Missing { missing(): string }\n\
+         let primitive: boolean = true;\n\
+         let wrapper: Boolean = primitive;\n\
+         let structural: Same = primitive;\n\
+         primitive = wrapper;\n\
+         let missing: Missing = primitive;\n",
+    );
+    assert_eq!(
+        receipt["semantic"],
+        json!({
+            "diagnostics": ["7:2322", "8:2322"],
+            "exit_code": 1,
+            "incompletes": [],
+            "parse_errors": [],
+        })
+    );
+}
