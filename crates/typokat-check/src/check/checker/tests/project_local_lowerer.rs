@@ -457,10 +457,10 @@ fn mapped_alias_rejects_applied_parameters_and_visits_their_arguments() {
     assert_eq!(
         incomplete_ids
             .iter()
-            .filter(|id| **id == "annotation-lower/intrinsic-keyword/self")
+            .filter(|id| **id == "annotation-lower/type-reference/unresolved")
             .count(),
         2,
-        "both rejected parameter applications still walk their argument subtree"
+        "both rejected parameter applications still visit their unresolved argument"
     );
 }
 
