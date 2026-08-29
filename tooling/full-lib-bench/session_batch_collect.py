@@ -735,13 +735,19 @@ def _collect_live_panels(host: Any, contract: dict[str, Any]) -> dict[str, Any]:
                 row.update(block=block, slot=slot, tool=tool)
                 samples.append(row)
 
+        derived = batch.recompute_abba_statistics(samples, contract)
         panel = {
             "projects": projects,
             "warmups": warmups,
             "samples": samples,
-            "derived": batch.recompute_abba_statistics(samples, contract),
+            "derived": derived,
             "negative_controls": copy.deepcopy(controls),
         }
+        derived["typokat_accepted_progress"] = (
+            batch.recompute_typokat_accepted_progress(
+                panel, batch.oracle_panel(authority, projects), contract
+            )
+        )
         raw_panels.append(panel)
         return panel
 

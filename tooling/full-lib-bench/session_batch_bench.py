@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from functools import lru_cache
 import hashlib
@@ -128,6 +129,7 @@ def verify_contract(path: Path = CONTRACT_PATH) -> dict[str, Any]:
             "tsgo_batch_oracle", "tsgo_batch_oracle_ordered_semantic_sha256",
             "tsgo_batch_oracle_relative_path", "tsgo_batch_oracle_sha256",
             "typescript_baseline_authority", "typescript_git_cache_relative_path",
+            "typokat_accepted_diagnostic_removals",
             "typokat_batch_oracle_relative_path", "typokat_batch_oracle_sha256",
         },
         "current_typokat_baseline": {
@@ -170,6 +172,33 @@ def verify_contract(path: Path = CONTRACT_PATH) -> dict[str, Any]:
     }
     for key, keys in nested_shapes.items():
         _exact_keys(contract[key], keys, f"batch contract {key}")
+    removals = contract["oracles"]["typokat_accepted_diagnostic_removals"]
+    if not isinstance(removals, list) or not removals:
+        _fail("accepted diagnostic removals must be a nonempty list")
+    removal_keys: list[tuple[str, str]] = []
+    for removal in removals:
+        _exact_keys(
+            removal,
+            {"case_id", "diagnostic", "multiplicity"},
+            "accepted diagnostic removal",
+        )
+        case_id = removal["case_id"]
+        diagnostic = removal["diagnostic"]
+        multiplicity = removal["multiplicity"]
+        if (
+            not isinstance(case_id, str)
+            or not case_id
+            or not isinstance(diagnostic, str)
+            or re.fullmatch(r"\d+:\d+", diagnostic) is None
+            or type(multiplicity) is not int
+            or multiplicity <= 0
+        ):
+            _fail("accepted diagnostic removal types differ")
+        removal_keys.append((case_id, diagnostic))
+    if removal_keys != sorted(removal_keys) or len(set(removal_keys)) != len(
+        removal_keys
+    ):
+        _fail("accepted diagnostic removals are not canonical and unique")
     if contract["schema"] != 1:
         _fail("unsupported batch contract schema")
     fixed = {
@@ -412,9 +441,13 @@ def _parse_scoreboard(data: bytes) -> dict[str, dict[str, Any]]:
         if case_id in rows:
             _fail(f"duplicate scoreboard case {case_id}")
         chunks = [] if identities == "-" else identities.split("|")
-        diagnostics: list[str] = []
-        for chunk in chunks[:2]:
-            diagnostics.extend(item for item in chunk.split(",") if item)
+        matched = [] if not chunks else [item for item in chunks[0].split(",") if item]
+        false_positives = (
+            [] if len(chunks) < 2 else [item for item in chunks[1].split(",") if item]
+        )
+        matched.sort(key=lambda item: tuple(map(int, item.split(":"))))
+        false_positives.sort(key=lambda item: tuple(map(int, item.split(":"))))
+        diagnostics = [*matched, *false_positives]
         diagnostics.sort(key=lambda item: tuple(map(int, item.split(":"))))
         incompletes = [] if len(chunks) < 3 else [item for item in chunks[2].split(",") if item]
         rows[case_id] = {
@@ -424,6 +457,8 @@ def _parse_scoreboard(data: bytes) -> dict[str, dict[str, Any]]:
             "parse_errors": [],
             "diagnostics": diagnostics,
             "incompletes": sorted(incompletes),
+            "matched_diagnostics": matched,
+            "false_positive_diagnostics": false_positives,
         }
     return rows
 
@@ -654,23 +689,68 @@ def load_authenticated_batch_oracles(
         _fail("scoreboard identity differs from contract")
     typokat_rows = _parse_scoreboard(scoreboard)
     exact_tsgo = load_authenticated_exact_flags_tsgo_oracle(contract)
+    exact_tsgo_by_case = {row["case_id"]: row for row in exact_tsgo}
+    accepted_removals = oracle_contract["typokat_accepted_diagnostic_removals"]
+    for removal in accepted_removals:
+        case_id = removal["case_id"]
+        row = typokat_rows.get(case_id)
+        exact = exact_tsgo_by_case.get(case_id)
+        if row is None or exact is None:
+            _fail(f"accepted diagnostic removal case is not eligible: {case_id}")
+        diagnostic = removal["diagnostic"]
+        multiplicity = removal["multiplicity"]
+        if Counter(row["false_positive_diagnostics"])[diagnostic] != multiplicity:
+            _fail("accepted diagnostic removal is not an exact scoreboard false positive")
+        if Counter(row["matched_diagnostics"])[diagnostic]:
+            _fail("accepted diagnostic removal names a matched diagnostic")
+        if Counter(exact["normalized_semantic"]["diagnostics"])[diagnostic]:
+            _fail("accepted diagnostic removal is present in exact-flags TSGo truth")
     typokat: list[dict[str, Any]] = []
+    typokat_ratchet: list[dict[str, Any]] = []
     tsgo_rows: list[dict[str, Any]] = []
     for frame, exact in zip(frames, exact_tsgo, strict=True):
         case_id = frame["name"]
         scoreboard_row = typokat_rows.get(case_id)
         if scoreboard_row is None:
             _fail(f"eligible frame lacks an authenticated scoreboard outcome: {case_id}")
-        outcome = {key: value for key, value in scoreboard_row.items() if key != "status"}
+        outcome = {
+            key: scoreboard_row[key]
+            for key in (
+                "case_id",
+                "exit_code",
+                "parse_errors",
+                "diagnostics",
+                "incompletes",
+            )
+        }
         if scoreboard_row["status"] == "OOS:parse-error":
-            outcome["exit_code"] = 2
-            outcome["parse_errors"] = ["parse-error"]
+            outcome.update(
+                exit_code=2,
+                parse_errors=["parse-error"],
+                diagnostics=[],
+                incompletes=[],
+            )
         elif scoreboard_row["status"] == "OOS:unresolved":
-            outcome["exit_code"] = 3
-            outcome["incompletes"] = ["unresolved"]
+            outcome.update(
+                exit_code=3,
+                parse_errors=[],
+                diagnostics=[],
+                incompletes=["unresolved"],
+            )
         elif scoreboard_row["status"] not in ("IN", "OOS:unsupported"):
             _fail(f"eligible frame has an unauthenticated scoreboard class: {case_id}")
         typokat.append(outcome)
+        typokat_ratchet.append(
+            {
+                "case_id": case_id,
+                "status": scoreboard_row["status"],
+                "matched_diagnostics": scoreboard_row["matched_diagnostics"],
+                "false_positive_diagnostics": scoreboard_row[
+                    "false_positive_diagnostics"
+                ],
+                "incompletes": scoreboard_row["incompletes"],
+            }
+        )
         tsgo_rows.append({"case_id": case_id, **exact["normalized_semantic"]})
     frame_authority = [
         {
@@ -685,6 +765,8 @@ def load_authenticated_batch_oracles(
         "frame_count": len(frames),
         "frames": frame_authority,
         "typokat": typokat,
+        "typokat_ratchet": typokat_ratchet,
+        "typokat_accepted_diagnostic_removals": accepted_removals,
         "tsgo": tsgo_rows,
     }
 
@@ -710,12 +792,17 @@ def oracle_panel(authority: dict[str, Any], projects: int) -> dict[str, Any]:
             for frame in authority["frames"][:projects]
         ]
     }
-    for tool in ("typokat", "tsgo"):
-        rows = authority[tool][:projects]
-        result[tool] = {
-            "returncode": 0,
-            "ordered_semantic_sha256": _semantic_digest(rows),
-        }
+    result["typokat"] = {
+        "returncode": 0,
+        "ratchet_rows": authority["typokat_ratchet"][:projects],
+        "accepted_diagnostic_removals": authority[
+            "typokat_accepted_diagnostic_removals"
+        ],
+    }
+    result["tsgo"] = {
+        "returncode": 0,
+        "ordered_semantic_sha256": _semantic_digest(authority["tsgo"][:projects]),
+    }
     return result
 
 
@@ -911,6 +998,155 @@ def _raw_semantic_digest(frames: list[dict[str, Any]]) -> str:
     return _sha(_canonical(rows))
 
 
+def _counter_contains(container: Counter[str], required: Counter[str]) -> bool:
+    return all(container[item] >= count for item, count in required.items())
+
+
+def _diagnostic_order(item: str) -> tuple[int, int]:
+    try:
+        line, code = item.split(":")
+        return int(line), int(code)
+    except (ValueError, AttributeError) as error:
+        raise BatchContractError("typokat diagnostic identity is invalid") from error
+
+
+def _typokat_ratchet_progress(
+    frames: list[dict[str, Any]],
+    expected: dict[str, Any],
+    contract: dict[str, Any],
+) -> list[dict[str, Any]]:
+    ratchet_rows = expected.get("ratchet_rows")
+    if not isinstance(ratchet_rows, list) or len(ratchet_rows) != len(frames):
+        _fail("typokat ratchet authority frame count differs")
+    accepted = expected.get("accepted_diagnostic_removals")
+    if accepted != contract["oracles"]["typokat_accepted_diagnostic_removals"]:
+        _fail("typokat accepted diagnostic removal authority differs")
+    accepted_by_case: dict[str, Counter[str]] = {}
+    for row in accepted:
+        accepted_by_case.setdefault(row["case_id"], Counter())[row["diagnostic"]] += row[
+            "multiplicity"
+        ]
+    progress: list[dict[str, Any]] = []
+    for frame, frozen in zip(frames, ratchet_rows, strict=True):
+        _exact_keys(
+            frozen,
+            {
+                "case_id",
+                "status",
+                "matched_diagnostics",
+                "false_positive_diagnostics",
+                "incompletes",
+            },
+            "typokat ratchet row",
+        )
+        if frame.get("case_id") != frozen["case_id"]:
+            _fail("typokat ratchet frame order differs")
+        semantic = frame.get("semantic")
+        _exact_keys(
+            semantic,
+            {"diagnostics", "exit_code", "incompletes", "parse_errors"},
+            "typokat raw semantic",
+        )
+        status = frozen["status"]
+        if status == "OOS:parse-error":
+            if semantic != {
+                "exit_code": 2,
+                "parse_errors": ["parse-error"],
+                "diagnostics": [],
+                "incompletes": [],
+            }:
+                _fail("typokat parse-error class token differs")
+            continue
+        if status == "OOS:unresolved":
+            if semantic != {
+                "exit_code": 3,
+                "parse_errors": [],
+                "diagnostics": [],
+                "incompletes": ["unresolved"],
+            }:
+                _fail("typokat unresolved class token differs")
+            continue
+        if status not in ("IN", "OOS:unsupported"):
+            _fail("typokat ratchet status is not eligible")
+        diagnostics = semantic["diagnostics"]
+        incompletes = semantic["incompletes"]
+        if (
+            semantic["parse_errors"] != []
+            or not isinstance(diagnostics, list)
+            or not all(isinstance(item, str) for item in diagnostics)
+            or not isinstance(incompletes, list)
+            or not all(isinstance(item, str) for item in incompletes)
+            or diagnostics != sorted(diagnostics, key=_diagnostic_order)
+            or incompletes != sorted(incompletes)
+        ):
+            _fail("typokat ratchet semantic shape or ordering differs")
+        if status == "IN" and incompletes:
+            _fail("typokat IN row gained an incomplete identity")
+
+        observed_diagnostics = Counter(diagnostics)
+        matched = Counter(frozen["matched_diagnostics"])
+        false_positives = Counter(frozen["false_positive_diagnostics"])
+        frozen_diagnostics = matched + false_positives
+        if not _counter_contains(observed_diagnostics, matched):
+            _fail("typokat dropped a matched diagnostic")
+        if not _counter_contains(frozen_diagnostics, observed_diagnostics):
+            _fail("typokat emitted a new false-positive diagnostic")
+        removed = frozen_diagnostics - observed_diagnostics
+        removed_false_positives = false_positives & removed
+        if removed != removed_false_positives:
+            _fail("typokat removed a matched diagnostic")
+        allowed_removed = accepted_by_case.get(frozen["case_id"], Counter())
+        if not _counter_contains(allowed_removed, removed_false_positives):
+            _fail("typokat removed an unauthenticated false-positive diagnostic")
+
+        frozen_incompletes = Counter(frozen["incompletes"])
+        observed_incompletes = Counter(incompletes)
+        if not _counter_contains(observed_incompletes, frozen_incompletes):
+            _fail("typokat dropped an incomplete identity")
+        gained_incompletes = observed_incompletes - frozen_incompletes
+        expected_exit = 3 if incompletes else (1 if diagnostics else 0)
+        if semantic["exit_code"] != expected_exit:
+            _fail("typokat ratchet exit class differs")
+
+        removed_rows = sorted(
+            removed_false_positives.elements(), key=_diagnostic_order
+        )
+        gained_rows = sorted(gained_incompletes.elements())
+        if removed_rows or gained_rows:
+            progress.append(
+                {
+                    "case_id": frozen["case_id"],
+                    "removed_false_positive_diagnostics": removed_rows,
+                    "gained_incomplete_identities": gained_rows,
+                }
+            )
+    progress.sort(key=lambda row: row["case_id"])
+    return progress
+
+
+def recompute_typokat_accepted_progress(
+    evidence: dict[str, Any], expected: dict[str, Any], contract: dict[str, Any]
+) -> list[dict[str, Any]]:
+    typokat_expected = expected.get("typokat")
+    if not isinstance(typokat_expected, dict) or "ratchet_rows" not in typokat_expected:
+        return []
+    samples = [sample for sample in evidence.get("samples", []) if sample.get("tool") == "typokat"]
+    if not samples:
+        _fail("raw oracle evidence lacks typokat samples")
+    first = samples[0]
+    first_identity = (first.get("returncode"), _raw_semantic_digest(first.get("frames", [])))
+    for sample in samples[1:]:
+        current = (
+            sample.get("returncode"),
+            _raw_semantic_digest(sample.get("frames", [])),
+        )
+        if current != first_identity:
+            _fail("typokat raw semantic outcomes are nondeterministic")
+    if first.get("returncode") != typokat_expected.get("returncode"):
+        _fail("typokat raw process returncode differs from authority")
+    return _typokat_ratchet_progress(first["frames"], typokat_expected, contract)
+
+
 def verify_raw_oracles(
     evidence: dict[str, Any], expected: dict[str, Any], contract: dict[str, Any]
 ) -> None:
@@ -948,9 +1184,27 @@ def verify_raw_oracles(
             _fail(f"{sample['tool']} raw semantic outcomes are nondeterministic")
     if set(observed) != {"typokat", "tsgo"}:
         _fail("raw oracle evidence lacks a tool")
-    for tool, (returncode, digest) in observed.items():
-        if expected.get(tool) != {"returncode": returncode, "ordered_semantic_sha256": digest}:
-            _fail(f"{tool} raw oracle differs from authority")
+    typokat_expected = expected.get("typokat")
+    if isinstance(typokat_expected, dict) and "ratchet_rows" in typokat_expected:
+        progress = recompute_typokat_accepted_progress(evidence, expected, contract)
+        derived = evidence.get("derived")
+        claimed = (
+            derived.get("typokat_accepted_progress")
+            if isinstance(derived, dict)
+            else None
+        )
+        if claimed != progress and not (claimed is None and not progress):
+            _fail("typokat accepted progress differs from raw rows")
+    elif expected.get("typokat") != {
+        "returncode": observed["typokat"][0],
+        "ordered_semantic_sha256": observed["typokat"][1],
+    }:
+        _fail("typokat raw oracle differs from authority")
+    if expected.get("tsgo") != {
+        "returncode": observed["tsgo"][0],
+        "ordered_semantic_sha256": observed["tsgo"][1],
+    }:
+        _fail("tsgo raw oracle differs from authority")
 
 
 def verify_negative_controls(controls: dict[str, Any], contract: dict[str, Any]) -> None:
