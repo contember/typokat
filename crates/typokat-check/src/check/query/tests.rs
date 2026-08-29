@@ -1,6 +1,9 @@
 use super::*;
 use crate::class_semantics::{ClassConstructionState, PublishedClassPoison, PublishedClassSurface};
-use crate::relate::Reason;
+use crate::relate::cache::{
+    finish_relation_cache_depth_measure, start_relation_cache_depth_measure, RelationKey,
+};
+use crate::relate::{Reason, RelationKind};
 use crate::types::repr::{
     ClassId, ConditionalType, DeclaredRecipeNode, EnumId, EnumMemberFact, EnumMemberId, EnumNumber,
     EnumType, EnumValue, FunctionType, GenericTypeParam, LiteralValue, MappedType, ModifierOp,
@@ -4820,11 +4823,11 @@ fn canonical_object_lazily_selects_each_native_apparent_surface() {
     );
     assert_eq!(
         initial_plan.apparent_surface(interner.store(), wk.string),
-        ApparentSurface::Ready(context.string)
+        ApparentSurface::Ready(context.string.expect("full test context has String"))
     );
     assert_eq!(
         initial_plan.apparent_surface(interner.store(), template),
-        ApparentSurface::Ready(context.string)
+        ApparentSurface::Ready(context.string.expect("full test context has String"))
     );
 
     let published = PublishedClasses::empty();
@@ -5716,12 +5719,11 @@ fn library_object_context_changes_are_transactional_inside_savepoints() {
         parameter,
     );
     let replacement = library_object_context_for_test(&mut interner, target);
-    let assignable = |interner: &mut Interner,
-                      state: &mut SemanticQueryState,
-                      next_type_param: &mut u32| {
-        SemanticQueryCoordinator::new(interner, &published, state, next_type_param)
-            .is_assignable(array, target)
-    };
+    let assignable =
+        |interner: &mut Interner, state: &mut SemanticQueryState, next_type_param: &mut u32| {
+            SemanticQueryCoordinator::new(interner, &published, state, next_type_param)
+                .is_assignable(array, target)
+        };
 
     state.set_library_object_context(Some(missing));
     state.savepoint();
@@ -5747,6 +5749,30 @@ fn library_object_context_changes_are_transactional_inside_savepoints() {
         assignable(&mut interner, &mut state, &mut next_type_param),
         RelationOutcome::Yes
     ));
+}
+
+#[test]
+fn nested_library_context_reset_does_not_leak_relation_cache_layers() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let target = interner.intern_object(ObjectType::default());
+    let context = library_object_context_for_test(&mut interner, target);
+    let speculative = RelationKey::new(wk.string, target, RelationKind::Assignable);
+    let absent = RelationKey::new(wk.number, target, RelationKind::Assignable);
+    let mut state = SemanticQueryState::default();
+
+    state.savepoint();
+    state.relation_cache.insert(speculative, true);
+    state.savepoint();
+    state.set_library_object_context(Some(context));
+    state.commit();
+    state.rollback();
+
+    assert_eq!(state.relation_cache.get(speculative), None);
+    start_relation_cache_depth_measure();
+    assert_eq!(state.relation_cache.get(absent), None);
+    let depth = finish_relation_cache_depth_measure();
+    assert_eq!(depth.max_depth, 0, "closed savepoints left a cache layer");
 }
 
 #[test]
