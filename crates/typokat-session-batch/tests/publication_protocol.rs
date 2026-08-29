@@ -293,3 +293,44 @@ fn project_local_native_relation_context_keeps_augmentation_and_direction() {
         })
     );
 }
+
+#[test]
+fn project_local_native_relation_context_reaches_every_relation_boundary() {
+    for (case_id, source) in [
+        (
+            "project-local-native-nested-object-relation",
+            "interface Source { value: boolean }\n\
+             interface Target { value: Boolean }\n\
+             declare let source: Source;\n\
+             let target: Target = source;\n",
+        ),
+        (
+            "project-local-native-nested-function-relation",
+            "declare let source: (value: Boolean) => boolean;\n\
+             let target: (value: boolean) => Boolean = source;\n",
+        ),
+        (
+            "project-local-native-inference-relation",
+            "declare function preserve<T extends Boolean>(value: T): T;\n\
+             const inferred = preserve(true);\n\
+             const exact: true = inferred;\n",
+        ),
+        (
+            "project-local-native-overload-relation",
+            "function convert(value: boolean): Boolean;\n\
+             function convert(value: Boolean): boolean { return true; }\n",
+        ),
+    ] {
+        let receipt = invoke(case_id, source);
+        assert_eq!(
+            receipt["semantic"],
+            json!({
+                "diagnostics": [],
+                "exit_code": 0,
+                "incompletes": [],
+                "parse_errors": [],
+            }),
+            "{case_id}"
+        );
+    }
+}
