@@ -232,6 +232,29 @@ fn project_local_native_relation_identities_are_cold_order_independent() {
              let source: number = 1;\n\
              let target: Number = source;\n",
         ),
+        (
+            "project-local-wrapper-alias-target",
+            "type Boxed = Boolean;\n\
+             let source: boolean = true;\n\
+             let target: Boxed = source;\n",
+        ),
+        (
+            "project-local-wrapper-union-target",
+            "let source: boolean = true;\n\
+             let target: Boolean | { missing(): void } = source;\n",
+        ),
+        (
+            "project-local-primitive-alias-source",
+            "type Raw = boolean;\n\
+             let source: Raw = true;\n\
+             let target: Boolean = source;\n",
+        ),
+        (
+            "project-local-constrained-primitive-source",
+            "function assign<T extends boolean>(source: T) {\n\
+               let target: Boolean = source;\n\
+             }\n",
+        ),
     ] {
         let receipt = invoke(case_id, source);
         assert_eq!(
