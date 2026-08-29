@@ -263,14 +263,14 @@ class FakePanelHost:
                         "length_framed_sha256"
                     ]
                 refresh_responses(sample)
+            for warmup in panel["warmups"]:
+                source = next(
+                    sample
+                    for sample in panel["samples"]
+                    if sample["tool"] == warmup["tool"]
+                )
+                warmup["frames"] = copy.deepcopy(source["frames"])
             if self.profile_mutation == "warmup":
-                for warmup in panel["warmups"]:
-                    source = next(
-                        sample
-                        for sample in panel["samples"]
-                        if sample["tool"] == warmup["tool"]
-                    )
-                    warmup["frames"] = copy.deepcopy(source["frames"])
                 panel["warmups"][0]["frames"][0]["shared_product_identity"] = "0" * 64
             elif self.profile_mutation == "sample":
                 panel["samples"][0]["frames"][0]["shared_product_identity"] = "0" * 64
