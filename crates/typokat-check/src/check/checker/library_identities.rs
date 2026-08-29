@@ -338,42 +338,30 @@ impl LibrarySemanticIdentities {
     pub(in crate::check::checker) fn object_relation_context(
         &self,
     ) -> Option<LibraryObjectRelationContext> {
-        let LibraryIdentityTerminal::Ready(array) = &self.inner.array else {
-            return None;
-        };
-        let LibraryIdentityTerminal::Ready(readonly_array) = &self.inner.readonly_array else {
-            return None;
-        };
-        let LibraryIdentityTerminal::Ready(string) = &self.inner.string else {
-            return None;
-        };
-        let LibraryIdentityTerminal::Ready(number) = &self.inner.number else {
-            return None;
-        };
-        let LibraryIdentityTerminal::Ready(boolean) = &self.inner.boolean else {
-            return None;
-        };
         let LibraryIdentityTerminal::Ready(object) = &self.inner.object else {
             return None;
         };
-        let LibraryIdentityTerminal::Ready(callable_function) = &self.inner.callable_function
-        else {
-            return None;
+        let generic = |terminal: &LibraryIdentityTerminal| {
+            let LibraryIdentityTerminal::Ready(identity) = terminal else {
+                return None;
+            };
+            let [parameter] = identity.parameters.as_slice() else {
+                return None;
+            };
+            Some((identity.template, *parameter))
         };
-        let [array_parameter] = array.parameters.as_slice() else {
-            return None;
+        let surface = |terminal: &LibraryIdentityTerminal| match terminal {
+            LibraryIdentityTerminal::Ready(identity) => Some(identity.template),
+            LibraryIdentityTerminal::Unavailable(_) => None,
         };
-        let [readonly_array_parameter] = readonly_array.parameters.as_slice() else {
-            return None;
-        };
-        Some(LibraryObjectRelationContext::new(
+        Some(LibraryObjectRelationContext::partial(
             object.template,
-            (array.template, *array_parameter),
-            (readonly_array.template, *readonly_array_parameter),
-            string.template,
-            number.template,
-            boolean.template,
-            callable_function.template,
+            generic(&self.inner.array),
+            generic(&self.inner.readonly_array),
+            surface(&self.inner.string),
+            surface(&self.inner.number),
+            surface(&self.inner.boolean),
+            surface(&self.inner.callable_function),
         ))
     }
 

@@ -43,15 +43,16 @@ pub(crate) struct GenericNativeSurface {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct LibraryObjectRelationContext {
     object: TypeId,
-    array: GenericNativeSurface,
-    readonly_array: GenericNativeSurface,
-    string: TypeId,
-    number: TypeId,
-    boolean: TypeId,
-    callable_function: TypeId,
+    array: Option<GenericNativeSurface>,
+    readonly_array: Option<GenericNativeSurface>,
+    string: Option<TypeId>,
+    number: Option<TypeId>,
+    boolean: Option<TypeId>,
+    callable_function: Option<TypeId>,
 }
 
 impl LibraryObjectRelationContext {
+    #[cfg(test)]
     pub(crate) fn new(
         object: TypeId,
         array: (TypeId, TypeParamId),
@@ -63,14 +64,40 @@ impl LibraryObjectRelationContext {
     ) -> Self {
         Self {
             object,
-            array: GenericNativeSurface {
+            array: Some(GenericNativeSurface {
                 template: array.0,
                 parameter: array.1,
-            },
-            readonly_array: GenericNativeSurface {
+            }),
+            readonly_array: Some(GenericNativeSurface {
                 template: readonly_array.0,
                 parameter: readonly_array.1,
-            },
+            }),
+            string: Some(string),
+            number: Some(number),
+            boolean: Some(boolean),
+            callable_function: Some(callable_function),
+        }
+    }
+
+    pub(crate) fn partial(
+        object: TypeId,
+        array: Option<(TypeId, TypeParamId)>,
+        readonly_array: Option<(TypeId, TypeParamId)>,
+        string: Option<TypeId>,
+        number: Option<TypeId>,
+        boolean: Option<TypeId>,
+        callable_function: Option<TypeId>,
+    ) -> Self {
+        Self {
+            object,
+            array: array.map(|(template, parameter)| GenericNativeSurface {
+                template,
+                parameter,
+            }),
+            readonly_array: readonly_array.map(|(template, parameter)| GenericNativeSurface {
+                template,
+                parameter,
+            }),
             string,
             number,
             boolean,
@@ -766,12 +793,14 @@ struct ResetSemanticContext {
     evaluation_memo: FxHashMap<TypeId, TypeId>,
     completed_identities: FxHashMap<CompletedIdentityKey, bool>,
     relation_cache: RelationCache,
+    relation_cache_depth: usize,
     completed_relations: FxHashMap<CompletedRelationKey, CompletedRelationOutcome>,
     completed_relation_no_candidates: FxHashSet<CompletedRelationKey>,
     publication_clean: FxHashSet<TypeId>,
     alias_publication: FxHashMap<AliasId, AliasPublicationPreflight>,
     publication_store_identity: Option<Arc<()>>,
     publication_snapshot_identity: Option<Arc<()>>,
+    library_object_context: Option<LibraryObjectRelationContext>,
 }
 
 /// Pass-local durable semantic-query state. A tainted query changes none of it.
@@ -816,20 +845,11 @@ impl SemanticQueryState {
         &mut self,
         value: Option<LibraryObjectRelationContext>,
     ) {
-        if self.library_object_context == value || !self.savepoints.is_empty() {
+        if self.library_object_context == value {
             return;
         }
-        self.projection_memo.clear();
-        self.evaluation_memo.clear();
-        self.completed_identities.clear();
-        self.relation_cache = RelationCache::new();
-        self.completed_relations.clear();
-        self.completed_relation_no_candidates.clear();
-        self.publication_clean.clear();
-        self.alias_publication.clear();
-        self.publication_store_identity = None;
-        self.publication_snapshot_identity = None;
-        self.journal.clear();
+        let reset = self.take_semantic_context_reset();
+        self.record(SemanticQueryUndo::ContextReset(Box::new(reset)));
         self.library_object_context = value;
     }
 
@@ -904,17 +924,24 @@ impl SemanticQueryState {
                     projection_memo,
                     evaluation_memo,
                     completed_identities,
-                    relation_cache,
+                    mut relation_cache,
+                    mut relation_cache_depth,
                     completed_relations,
                     completed_relation_no_candidates,
                     publication_clean,
                     alias_publication,
                     publication_store_identity,
                     publication_snapshot_identity,
+                    library_object_context,
                 } = *reset;
                 self.projection_memo = projection_memo;
                 self.evaluation_memo = evaluation_memo;
                 self.completed_identities = completed_identities;
+                let rollback_layer_depth = self.savepoints.len() + 1;
+                while relation_cache_depth > rollback_layer_depth {
+                    relation_cache.commit();
+                    relation_cache_depth -= 1;
+                }
                 self.relation_cache = relation_cache;
                 self.completed_relations = completed_relations;
                 self.completed_relation_no_candidates = completed_relation_no_candidates;
@@ -924,6 +951,7 @@ impl SemanticQueryState {
                 // exactly as a discarded copy of the pre-reset state would have been.
                 self.publication_store_identity = publication_store_identity;
                 self.publication_snapshot_identity = publication_snapshot_identity;
+                self.library_object_context = library_object_context;
             }
         }
     }
@@ -1012,17 +1040,25 @@ impl SemanticQueryState {
     /// Drop every memo the changed store/publication identity invalidated. The
     /// pre-reset context moves into the journal, so undoing costs no copy either.
     fn reset_semantic_context(&mut self, store_identity: &Arc<()>, publication_identity: &Arc<()>) {
+        let reset = self.take_semantic_context_reset();
+        self.record(SemanticQueryUndo::ContextReset(Box::new(reset)));
+        self.publication_store_identity = Some(Arc::clone(store_identity));
+        self.publication_snapshot_identity = Some(Arc::clone(publication_identity));
+    }
+
+    fn take_semantic_context_reset(&mut self) -> ResetSemanticContext {
         // A layered relation cache must keep one layer per open savepoint, so the
         // replacement is rebuilt to the same depth rather than left flat.
         let mut cleared_cache = RelationCache::default();
         for _ in 0..self.savepoints.len() {
             cleared_cache.savepoint();
         }
-        let reset = ResetSemanticContext {
+        ResetSemanticContext {
             projection_memo: std::mem::take(&mut self.projection_memo),
             evaluation_memo: std::mem::take(&mut self.evaluation_memo),
             completed_identities: std::mem::take(&mut self.completed_identities),
             relation_cache: std::mem::replace(&mut self.relation_cache, cleared_cache),
+            relation_cache_depth: self.savepoints.len(),
             completed_relations: std::mem::take(&mut self.completed_relations),
             completed_relation_no_candidates: std::mem::take(
                 &mut self.completed_relation_no_candidates,
@@ -1031,10 +1067,8 @@ impl SemanticQueryState {
             alias_publication: std::mem::take(&mut self.alias_publication),
             publication_store_identity: self.publication_store_identity.take(),
             publication_snapshot_identity: self.publication_snapshot_identity.take(),
-        };
-        self.record(SemanticQueryUndo::ContextReset(Box::new(reset)));
-        self.publication_store_identity = Some(Arc::clone(store_identity));
-        self.publication_snapshot_identity = Some(Arc::clone(publication_identity));
+            library_object_context: self.library_object_context,
+        }
     }
 
     #[cfg(any(test, feature = "test-utils"))]
@@ -2478,21 +2512,21 @@ impl RelationNormalization for ProjectionPlan<'_> {
             NativeSourceSurfaceClass::Array { .. } => {
                 ApparentSurface::Needs(RelationDemand::ApparentSurface(ty))
             }
-            NativeSourceSurfaceClass::Static(NativeStaticSurface::String) => {
-                ApparentSurface::Ready(context.string)
-            }
-            NativeSourceSurfaceClass::Static(NativeStaticSurface::Number) => {
-                ApparentSurface::Ready(context.number)
-            }
-            NativeSourceSurfaceClass::Static(NativeStaticSurface::Boolean) => {
-                ApparentSurface::Ready(context.boolean)
-            }
+            NativeSourceSurfaceClass::Static(NativeStaticSurface::String) => context
+                .string
+                .map_or(ApparentSurface::Unavailable, ApparentSurface::Ready),
+            NativeSourceSurfaceClass::Static(NativeStaticSurface::Number) => context
+                .number
+                .map_or(ApparentSurface::Unavailable, ApparentSurface::Ready),
+            NativeSourceSurfaceClass::Static(NativeStaticSurface::Boolean) => context
+                .boolean
+                .map_or(ApparentSurface::Unavailable, ApparentSurface::Ready),
             NativeSourceSurfaceClass::Static(NativeStaticSurface::Object) => {
                 ApparentSurface::Ready(context.object)
             }
-            NativeSourceSurfaceClass::Static(NativeStaticSurface::Function) => {
-                ApparentSurface::Ready(context.callable_function)
-            }
+            NativeSourceSurfaceClass::Static(NativeStaticSurface::Function) => context
+                .callable_function
+                .map_or(ApparentSurface::Unavailable, ApparentSurface::Ready),
         }
     }
 
@@ -2829,6 +2863,10 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
                 } else {
                     context.array
                 };
+                let Some(generic) = generic else {
+                    self.plan.apparent_surface_unavailable.insert(source);
+                    return;
+                };
                 let substitutions = FxHashMap::from_iter([(generic.parameter, argument)]);
                 let surface = match substitute_with_outcome(
                     self.interner,
@@ -2843,11 +2881,11 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
                 };
                 self.override_native_length(surface, length)
             }
-            NativeSourceSurface::String => Some(context.string),
-            NativeSourceSurface::Number => Some(context.number),
-            NativeSourceSurface::Boolean => Some(context.boolean),
+            NativeSourceSurface::String => context.string,
+            NativeSourceSurface::Number => context.number,
+            NativeSourceSurface::Boolean => context.boolean,
             NativeSourceSurface::Object => Some(context.object),
-            NativeSourceSurface::Function => Some(context.callable_function),
+            NativeSourceSurface::Function => context.callable_function,
         };
         match surface {
             Some(surface) => {
