@@ -130,3 +130,52 @@ fn project_local_enum_aliases_retain_comparison_overlap() {
         })
     );
 }
+
+#[test]
+fn project_local_enum_alias_constraints_retain_comparison_overlap() {
+    let receipt = invoke(
+        "project-local-enum-alias-constraint-overlap",
+        "enum Choice { Yes, No }\n\
+         type YesNo = Choice.Yes | Choice.No;\n\
+         function inspect<T extends YesNo>(value: T) {\n\
+           if (value === Choice.Yes) {}\n\
+           switch (value) { case Choice.Yes: break; }\n\
+         }\n",
+    );
+    assert_eq!(
+        receipt["semantic"],
+        json!({
+            "diagnostics": [],
+            "exit_code": 0,
+            "incompletes": [],
+            "parse_errors": [],
+        })
+    );
+}
+
+#[test]
+fn project_local_disjoint_enum_aliases_remain_non_overlapping() {
+    let receipt = invoke(
+        "project-local-disjoint-enum-aliases",
+        "enum Choice { Yes, No }\n\
+         type OnlyYes = Choice.Yes;\n\
+         type OnlyNo = Choice.No;\n\
+         function constrained<T extends OnlyNo>(value: T) {\n\
+           if (value === Choice.Yes) {}\n\
+           switch (value) { case Choice.Yes: break; }\n\
+         }\n\
+         function aliases(left: OnlyNo, right: OnlyYes) {\n\
+           if (left === right) {}\n\
+           switch (left) { case right: break; }\n\
+         }\n",
+    );
+    assert_eq!(
+        receipt["semantic"],
+        json!({
+            "diagnostics": ["5:2367", "6:2678", "9:2367", "10:2678"],
+            "exit_code": 1,
+            "incompletes": [],
+            "parse_errors": [],
+        })
+    );
+}
