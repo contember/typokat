@@ -324,7 +324,7 @@ fn project_local_native_relation_context_reaches_every_relation_boundary() {
         ),
         (
             "project-local-native-overload-relation",
-            "function convert(value: boolean): Boolean;\n\
+            "function convert(value: boolean): boolean;\n\
              function convert(value: Boolean): boolean { return true; }\n",
         ),
         (
