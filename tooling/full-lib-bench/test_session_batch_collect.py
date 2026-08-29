@@ -141,6 +141,213 @@ class FakeLiveHost:
         }
 
 
+class FakePanelHost:
+    def __init__(
+        self,
+        contract: dict[str, object],
+        *,
+        fail_at: int | None = None,
+        final_mutation=None,
+        reuse_cross_panel_pid: bool = False,
+    ) -> None:
+        self.contract = contract
+        self.fail_at = fail_at
+        self.final_mutation = final_mutation
+        self.reuse_cross_panel_pid = reuse_cross_panel_pid
+        self.candidate = {
+            "commit": "a" * 40,
+            "tree": "b" * 40,
+            "dirty": False,
+        }
+        self.authority = batch.load_authenticated_batch_oracles(contract)
+        self.calls: list[tuple[object, ...]] = []
+        self.panel_order: list[int] = []
+        self.process_receipts: list[dict[str, object]] = []
+        self._panels: dict[int, dict[str, object]] = {}
+        self._batch_offsets: dict[int, int] = {}
+        self._fault_offset = 0
+        self._first_batch_pid: int | None = None
+        self.final_affinity = [2, 4]
+        control_fixture = raw_panel_evidence(1, 2.0, 100_000, 150_000)
+        self.controls = copy.deepcopy(control_fixture["negative_controls"])
+        for tool, binary in (("typokat", "2" * 64), ("tsgo", "3" * 64)):
+            for receipt in self.controls[tool].values():
+                receipt["executable_before_sha256"] = binary
+                receipt["executable_after_sha256"] = binary
+        self.runners: dict[str, dict[str, object]] = {}
+        self.timing_boundary = {
+            "lease_argv": ["cpu-lease", "run", "-n", "2", "--no-smt", "--"],
+            "lease_vcpus": 2,
+            "cpuset": [2, 4],
+            "thread_siblings": {"2": [2, 3], "4": [4, 5]},
+            "environment": {"LANG": "C", "LC_ALL": "C", "TZ": "UTC"},
+            "address_space_rlimit": [1 << 30, 1 << 30],
+        }
+
+    def freeze_candidate(self) -> dict[str, object]:
+        self.calls.append(("freeze_candidate",))
+        return copy.deepcopy(self.candidate)
+
+    def build_runner(self, tool: str, candidate: dict[str, object]) -> dict[str, object]:
+        self.calls.append(("build_runner", tool, candidate["commit"]))
+        runner = {
+            "tool": tool,
+            "path": f"/tmp/{tool}-panel-runner",
+            "source_sha256": "4" * 64 if tool == "typokat" else "5" * 64,
+            "binary_sha256": "2" * 64 if tool == "typokat" else "3" * 64,
+            "commit": (
+                candidate["commit"]
+                if tool == "typokat"
+                else self.contract["tsgo"]["upstream_revision"]
+            ),
+        }
+        self.runners[tool] = copy.deepcopy(runner)
+        return runner
+
+    def _authenticate_runner(self, tool: str, runner: dict[str, object]) -> None:
+        if runner != self.runners.get(tool):
+            raise AssertionError("collector used the wrong tool runner")
+
+    def protocol_info(
+        self, tool: str, runner: dict[str, object]
+    ) -> dict[str, object]:
+        self._authenticate_runner(tool, runner)
+        self.calls.append(("protocol_info", tool, runner["binary_sha256"]))
+        info = protocol_info(tool)
+        info.update(
+            source_sha256=runner["source_sha256"],
+            binary_sha256=runner["binary_sha256"],
+            upstream_revision=runner["commit"],
+        )
+        return info
+
+    def observe_timing_boundary(self) -> dict[str, object]:
+        ordinal = sum(call[0] == "observe_timing_boundary" for call in self.calls)
+        self.calls.append(("observe_timing_boundary", ordinal))
+        value = copy.deepcopy(self.timing_boundary)
+        value["affinity"] = [2, 4] if ordinal == 0 else copy.deepcopy(self.final_affinity)
+        return value
+
+    def _panel(self, projects: int) -> dict[str, object]:
+        if projects not in self._panels:
+            typokat_rss = 600_000 if projects == self.fail_at else 100_000
+            panel = raw_panel_evidence(projects, 2.0, typokat_rss, 150_000)
+            apply_real_oracle(panel, self.authority)
+            pid_offset = self.contract["panel_project_counts"].index(projects) * 1_000_000
+            for process in [*panel["warmups"], *panel["samples"]]:
+                process["pid"] += pid_offset
+                binary = "2" * 64 if process["tool"] == "typokat" else "3" * 64
+                process["executable_before_sha256"] = binary
+                process["executable_after_sha256"] = binary
+            for sample in panel["samples"]:
+                for frame in sample["frames"]:
+                    frame["shared_product_identity"] = self.contract["profile"][
+                        "length_framed_sha256"
+                    ]
+                refresh_responses(sample)
+            self._panels[projects] = panel
+            self._batch_offsets[projects] = 0
+            self.panel_order.append(projects)
+        return self._panels[projects]
+
+    def run_batch(
+        self,
+        tool: str,
+        runner: dict[str, object],
+        request_stream: str,
+        *,
+        timeout_seconds: int,
+        address_space_limit_bytes: int,
+    ) -> dict[str, object]:
+        self._authenticate_runner(tool, runner)
+        projects = len(request_stream.splitlines())
+        panel = self._panel(projects)
+        offset = self._batch_offsets[projects]
+        expected_rows = [*panel["warmups"], *panel["samples"]]
+        if offset >= len(expected_rows):
+            raise AssertionError("collector launched an extra panel process")
+        expected = expected_rows[offset]
+        if tool != expected["tool"]:
+            raise AssertionError("collector changed warmup/ABBA tool order")
+        if request_stream != panel["samples"][0]["request_stream"]:
+            raise AssertionError("collector changed authenticated panel request bytes")
+        panel_index = self.contract["panel_project_counts"].index(projects)
+        expected_timeout = self.contract["sampling"]["panel_timeout_seconds"][panel_index]
+        if timeout_seconds != expected_timeout:
+            raise AssertionError("collector changed panel timeout")
+        if address_space_limit_bytes != self.contract["child_address_space_limit_bytes"]:
+            raise AssertionError("collector changed child address-space limit")
+        if runner["binary_sha256"] != expected["executable_before_sha256"]:
+            raise AssertionError("collector changed runner identity")
+        phase = "warmup" if offset < len(panel["warmups"]) else "sample"
+        self.calls.append(("run_batch", projects, phase, offset, tool))
+        self._batch_offsets[projects] = offset + 1
+        record = copy.deepcopy(expected)
+        if self._first_batch_pid is None:
+            self._first_batch_pid = record["pid"]
+        elif self.reuse_cross_panel_pid and projects != 1 and offset == 0:
+            record["pid"] = self._first_batch_pid
+        self.process_receipts.append(copy.deepcopy(record))
+        return record
+
+    def run_fault(
+        self,
+        tool: str,
+        runner: dict[str, object],
+        fault: str,
+        *,
+        timeout_seconds: int,
+        address_space_limit_bytes: int,
+    ) -> dict[str, object]:
+        self._authenticate_runner(tool, runner)
+        expected_faults = [
+            ("typokat", "reuse-session"),
+            ("typokat", "retain-cache"),
+            ("tsgo", "reuse-checker"),
+            ("tsgo", "retain-frame"),
+        ]
+        offset = self._fault_offset
+        if offset >= len(expected_faults) or (tool, fault) != expected_faults[offset]:
+            raise AssertionError("collector changed negative-control order")
+        expected_timeout = self.contract["sampling"]["panel_timeout_seconds"][0]
+        if timeout_seconds != expected_timeout:
+            raise AssertionError("collector changed fault timeout")
+        if address_space_limit_bytes != self.contract["child_address_space_limit_bytes"]:
+            raise AssertionError("collector changed fault address-space limit")
+        record = copy.deepcopy(self.controls[tool][fault])
+        if runner["binary_sha256"] != record["executable_before_sha256"]:
+            raise AssertionError("collector changed fault runner identity")
+        self.calls.append(("run_fault", tool, fault))
+        self._fault_offset = offset + 1
+        self.process_receipts.append(copy.deepcopy(record))
+        return record
+
+    def final_panel_attestation(
+        self,
+        candidate: dict[str, object],
+        runners: dict[str, dict[str, object]],
+    ) -> dict[str, object]:
+        self.calls.append(("final_panel_attestation", candidate["commit"]))
+        value = {
+            "candidate": copy.deepcopy(candidate),
+            "runners": copy.deepcopy(runners),
+            "profile": {
+                "file_count": self.contract["profile"]["file_count"],
+                "length_framed_sha256": self.contract["profile"][
+                    "length_framed_sha256"
+                ],
+            },
+            "process_receipts_sha256": hashlib.sha256(
+                json.dumps(
+                    self.process_receipts, sort_keys=True, separators=(",", ":")
+                ).encode()
+            ).hexdigest(),
+        }
+        if self.final_mutation is not None:
+            self.final_mutation(value)
+        return value
+
+
 class FakeLinkageHost:
     def __init__(self, contract: dict[str, object]) -> None:
         self.contract = contract
@@ -731,6 +938,251 @@ class SessionBatchLiveCollectorTests(unittest.TestCase):
         refresh_responses(initialization.samples["typokat"])
         with self.assertRaisesRegex(batch.BatchContractError, "initialization"):
             collect._collect_live_preflight(initialization, self.contract)
+
+
+class SessionBatchLivePanelCollectorTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.contract = batch.verify_contract()
+
+    def test_public_live_panel_collector_is_non_injectable_atomic_and_progressive(
+        self,
+    ) -> None:
+        signature = inspect.signature(collect.collect_live_panels)
+        self.assertEqual(list(signature.parameters), ["output"])
+        self.assertEqual(
+            signature.parameters["output"].kind,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
+
+        host = FakePanelHost(self.contract)
+        timing_receipt = {
+            **host.timing_boundary,
+            "oracle_authority_sha256": hashlib.sha256(
+                json.dumps(
+                    host.authority, sort_keys=True, separators=(",", ":")
+                ).encode()
+            ).hexdigest(),
+            "control_receipts_sha256": hashlib.sha256(
+                json.dumps(
+                    host.controls, sort_keys=True, separators=(",", ":")
+                ).encode()
+            ).hexdigest(),
+            "affinity_before": [2, 4],
+            "affinity_after": [2, 4],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "progressive-panels.json"
+            with (
+                mock.patch.object(collect, "SystemLiveHost", return_value=host) as constructor,
+                mock.patch.object(
+                    batch,
+                    "validate_timing_preconditions",
+                    wraps=batch.validate_timing_preconditions,
+                ) as timing_validation,
+                mock.patch.object(
+                    batch,
+                    "collect_progressive_panels",
+                    wraps=batch.collect_progressive_panels,
+                ) as progressive,
+            ):
+                result = collect.collect_live_panels(output=output)
+                with self.assertRaisesRegex(batch.BatchContractError, "exists"):
+                    collect.collect_live_panels(output=output)
+
+            constructor.assert_called_once()
+            (constructed_contract,) = constructor.call_args.args
+            self.assertEqual(constructed_contract, self.contract)
+            timing_validation.assert_called_once_with(timing_receipt, self.contract)
+            progressive.assert_called_once()
+            self.assertIs(progressive.call_args.args[1], self.contract)
+            self.assertEqual(
+                output.read_bytes(),
+                json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
+                + b"\n",
+            )
+
+        failure_contract = copy.deepcopy(self.contract)
+        failure_contract["panel_project_counts"] = [1]
+        failure_contract["speed_gated_project_counts"] = []
+        failure_contract["sampling"]["panel_timeout_seconds"] = [10]
+        failure_host = FakePanelHost(
+            failure_contract,
+            final_mutation=lambda row: row["candidate"].update(commit="c" * 40),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            failed_output = Path(directory) / "failed-panels.json"
+            with (
+                mock.patch.object(batch, "verify_contract", return_value=failure_contract),
+                mock.patch.object(collect, "SystemLiveHost", return_value=failure_host),
+            ):
+                with self.assertRaises(batch.BatchContractError):
+                    collect.collect_live_panels(output=failed_output)
+            self.assertFalse(failed_output.exists())
+            self.assertEqual(list(Path(directory).iterdir()), [])
+
+        self.assertEqual(result["verdict"], "PANEL-PASS")
+        self.assertIn(result["verdict"], {"PANEL-PASS", "PANEL-FAIL"})
+        self.assertNotIn(result["verdict"], {"GO", "PASS", "LINKAGE-PASS"})
+        self.assertEqual(host.panel_order, [1, 32, 687])
+        self.assertEqual(
+            host.calls[:10],
+            [
+                ("freeze_candidate",),
+                ("build_runner", "typokat", "a" * 40),
+                ("build_runner", "tsgo", "a" * 40),
+                ("protocol_info", "typokat", "2" * 64),
+                ("protocol_info", "tsgo", "3" * 64),
+                ("observe_timing_boundary", 0),
+                ("run_fault", "typokat", "reuse-session"),
+                ("run_fault", "typokat", "retain-cache"),
+                ("run_fault", "tsgo", "reuse-checker"),
+                ("run_fault", "tsgo", "retain-frame"),
+            ],
+        )
+        self.assertEqual(host.calls[-2], ("observe_timing_boundary", 1))
+        self.assertEqual(host.calls[-1], ("final_panel_attestation", "a" * 40))
+        for projects in (1, 32, 687):
+            runs = [
+                call
+                for call in host.calls
+                if call[0] == "run_batch" and call[1] == projects
+            ]
+            self.assertEqual(
+                [call[0] for call in runs],
+                ["run_batch"] * 66,
+            )
+            self.assertEqual(
+                [call[-1] for call in runs[:6]],
+                ["typokat", "tsgo", "typokat", "tsgo", "typokat", "tsgo"],
+            )
+            self.assertEqual(
+                [call[-1] for call in runs[6:66]],
+                ["typokat", "tsgo", "tsgo", "typokat"] * 15,
+            )
+        self.assertEqual(len(host.process_receipts), 4 + 3 * (6 + 60))
+
+        evidence = result["evidence"]
+        self.assertEqual(
+            set(evidence),
+            {
+                "candidate",
+                "final_attestation",
+                "panel_receipts",
+                "process_receipts_sha256",
+                "profile",
+                "protocols",
+                "raw_panels",
+                "runners",
+                "schema",
+                "timing",
+            },
+        )
+        self.assertEqual(
+            [row["projects"] for row in evidence["raw_panels"]], [1, 32, 687]
+        )
+        self.assertEqual(
+            [row["projects"] for row in evidence["panel_receipts"]], [1, 32, 687]
+        )
+        for panel in evidence["raw_panels"]:
+            self.assertEqual(panel["negative_controls"], host.controls)
+            for process in [*panel["warmups"], *panel["samples"]]:
+                expected_binary = (
+                    "2" * 64 if process["tool"] == "typokat" else "3" * 64
+                )
+                self.assertEqual(process["executable_before_sha256"], expected_binary)
+                self.assertEqual(process["executable_after_sha256"], expected_binary)
+        panel_pids = [
+            process["pid"]
+            for panel in evidence["raw_panels"]
+            for process in [*panel["warmups"], *panel["samples"]]
+        ]
+        self.assertEqual(len(panel_pids), len(set(panel_pids)))
+        self.assertEqual(evidence["candidate"], host.candidate)
+        self.assertEqual(
+            evidence["profile"],
+            {
+                "file_count": 82,
+                "length_framed_sha256": self.contract["profile"][
+                    "length_framed_sha256"
+                ],
+            },
+        )
+        self.assertEqual(
+            evidence["process_receipts_sha256"],
+            evidence["final_attestation"]["process_receipts_sha256"],
+        )
+        self.assertEqual(evidence["timing"], timing_receipt)
+        serialized_scope = json.dumps(evidence, sort_keys=True, separators=(",", ":"))
+        for excluded in ("cold", "linkage", "concurrency", "allocation"):
+            self.assertNotIn(f'"{excluded}"', serialized_scope)
+        self.assertEqual(
+            result["evidence_sha256"],
+            hashlib.sha256(serialized_scope.encode()).hexdigest(),
+        )
+
+    def test_live_panel_collector_is_fail_fast_at_each_progressive_boundary(self) -> None:
+        swapped = FakePanelHost(self.contract)
+        candidate = swapped.freeze_candidate()
+        typokat_runner = swapped.build_runner("typokat", candidate)
+        tsgo_runner = swapped.build_runner("tsgo", candidate)
+        self.assertNotEqual(typokat_runner, tsgo_runner)
+        with self.assertRaisesRegex(AssertionError, "wrong tool runner"):
+            swapped.run_fault(
+                "typokat",
+                tsgo_runner,
+                "reuse-session",
+                timeout_seconds=10,
+                address_space_limit_bytes=1 << 30,
+            )
+
+        dirty = FakePanelHost(self.contract)
+        dirty.candidate["dirty"] = True
+        with self.assertRaisesRegex(batch.BatchContractError, "candidate"):
+            collect._collect_live_panels(dirty, self.contract)
+        self.assertEqual(dirty.calls, [("freeze_candidate",)])
+
+        for failed, expected in ((1, [1]), (32, [1, 32])):
+            host = FakePanelHost(self.contract, fail_at=failed)
+            result = collect._collect_live_panels(host, self.contract)
+            with self.subTest(failed=failed):
+                self.assertEqual(result["verdict"], "PANEL-FAIL")
+                self.assertEqual(host.panel_order, expected)
+                self.assertFalse(any(projects > failed for projects in host.panel_order))
+                self.assertEqual(
+                    [row["projects"] for row in result["evidence"]["raw_panels"]],
+                    expected,
+                )
+
+        reused_pid = FakePanelHost(self.contract, reuse_cross_panel_pid=True)
+        with self.assertRaisesRegex(batch.BatchContractError, "pid|process"):
+            collect._collect_live_panels(reused_pid, self.contract)
+        self.assertEqual(reused_pid.panel_order, [1, 32])
+
+    def test_live_panel_collector_rejects_every_final_attestation_drift(self) -> None:
+        contract = copy.deepcopy(self.contract)
+        contract["panel_project_counts"] = [1]
+        contract["speed_gated_project_counts"] = []
+        contract["sampling"]["panel_timeout_seconds"] = [10]
+        mutations = {
+            "candidate": lambda row: row["candidate"].update(commit="c" * 40),
+            "runner": lambda row: row["runners"]["typokat"].update(
+                binary_sha256="8" * 64
+            ),
+            "profile": lambda row: row["profile"].update(
+                length_framed_sha256="8" * 64
+            ),
+            "process": lambda row: row.update(process_receipts_sha256="8" * 64),
+        }
+        for label, mutation in mutations.items():
+            host = FakePanelHost(contract, final_mutation=mutation)
+            with self.subTest(label=label), self.assertRaises(batch.BatchContractError):
+                collect._collect_live_panels(host, contract)
+
+        affinity = FakePanelHost(contract)
+        affinity.final_affinity = [2, 6]
+        with self.assertRaisesRegex(batch.BatchContractError, "affinity|timing"):
+            collect._collect_live_panels(affinity, contract)
 
 
 class SessionBatchLiveLinkageCollectorTests(unittest.TestCase):
