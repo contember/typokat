@@ -45,3 +45,4 @@ a commit message suffices.
 - [`0027`](0027-produce-library-census-from-the-project-publisher.md) — produce the library census from the project-local production publisher — superseded by 0028 (2026-08-27)
 - [`0028`](0028-rebaseline-the-production-owned-library-census.md) — rebaseline the production-owned library census — accepted (2026-08-28)
 - [`0029`](0029-gate-the-library-record-census-behind-an-opt-in-feature.md) — gate the library record census behind an opt-in feature — accepted (2026-08-28)
+- [`0030`](0030-treat-the-wu6-typokat-oracle-as-a-regression-ratchet.md) — treat the WU6 typokat oracle as a regression ratchet — accepted (2026-08-29)

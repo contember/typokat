@@ -489,6 +489,11 @@ These conditions may not be relaxed after candidate results are visible.
   comparable lifecycles.
 - **Performance failures optimize the target model.** They do not authorize frozen semantics,
   sparse replay, or an unfair comparator.
+- **The typokat performance oracle is a conservative regression ratchet.** It retains the committed
+  scoreboard's diagnostic and incomplete multisets. Only a pre-authenticated accepted-progress
+  multiset may remove an occurrence; it initially contains only `indexersInClassType.ts` at
+  `15:2339`. →
+  [ADR-0030](../decisions/0030-treat-the-wu6-typokat-oracle-as-a-regression-ratchet.md)
 - **Recursive aliases are immutable lazy applications.** Alias declaration identity is
   project-local, bodies publish outside the store behind an SCC terminal, and queries unfold one
   outer layer. → [ADR-0024](../decisions/0024-represent-recursive-aliases-as-immutable-applications.md)
@@ -803,3 +808,12 @@ numbers are invalid without `--no-smt`.
   `2df1b378c1d31367db41b538700c38e6f068a3a0bec9264f60bbf34c1b26a785`. This is still not
   WU6 `GO`: the progressive 1/32/687 timing and memory panels, concurrency evidence, allocation
   receipt, and current-provider 687-frame comparison remain uncollected.
+- **2026-08-29 — first progressive panel rejected before performance.** The clean `a1af4243`
+  collector completed the live 1-project panel and rejected the 32-project panel against the
+  typokat semantic authority; atomic publication left no artifact. One isolated 32-frame
+  diagnostic run named thirteen differences. Every row came from the comparator collapsing
+  ordinary precise incomplete IDs to `unresolved`; `indexersInClassType.ts` also removed the old
+  `15:2339` false positive, and the pinned TypeScript-Go exact-flags row is clean. Restoring that
+  false positive or blessing candidate output would both be invalid. The scoreboard remains the
+  immutable authority and now feeds ADR-0030's conservative benchmark-specific projection. →
+  [ADR-0030](../decisions/0030-treat-the-wu6-typokat-oracle-as-a-regression-ratchet.md)
