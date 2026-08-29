@@ -310,6 +310,13 @@ fn project_local_native_relation_context_reaches_every_relation_boundary() {
              let target: (value: boolean) => Boolean = source;\n",
         ),
         (
+            "project-local-native-nested-index-relation",
+            "interface Source { [key: string]: boolean }\n\
+             interface Target { [key: string]: Boolean }\n\
+             declare let source: Source;\n\
+             let target: Target = source;\n",
+        ),
+        (
             "project-local-native-inference-relation",
             "declare function preserve<T extends Boolean>(value: T): T;\n\
              const inferred = preserve(true);\n\
@@ -319,6 +326,17 @@ fn project_local_native_relation_context_reaches_every_relation_boundary() {
             "project-local-native-overload-relation",
             "function convert(value: boolean): Boolean;\n\
              function convert(value: Boolean): boolean { return true; }\n",
+        ),
+        (
+            "project-local-native-multi-demand-relation",
+            "interface BooleanSource { value: boolean }\n\
+             interface BooleanTarget { value: Boolean }\n\
+             interface NumberSource { value: number }\n\
+             interface NumberTarget { value: Number }\n\
+             declare let booleanSource: BooleanSource;\n\
+             let booleanTarget: BooleanTarget = booleanSource;\n\
+             declare let numberSource: NumberSource;\n\
+             let numberTarget: NumberTarget = numberSource;\n",
         ),
     ] {
         let receipt = invoke(case_id, source);
