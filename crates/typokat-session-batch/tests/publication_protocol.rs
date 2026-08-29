@@ -4,12 +4,11 @@ use serde_json::{json, Value};
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-#[test]
-fn ordinary_record_annotation_commits_its_demanded_library_terminal() {
+fn invoke(case_id: &str, source: &str) -> Value {
     let request = serde_json::to_string(&json!({
-        "case_id": "record-annotation-publication",
+        "case_id": case_id,
         "schema": 1,
-        "source": "function f(value: Record<string, unknown>) {}\n",
+        "source": source,
     }))
     .expect("request JSON")
         + "\n";
@@ -29,13 +28,35 @@ fn ordinary_record_annotation_commits_its_demanded_library_terminal() {
 
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stderr.is_empty());
-    let receipt: Value = serde_json::from_slice(&output.stdout).expect("runner receipt JSON");
+    serde_json::from_slice(&output.stdout).expect("runner receipt JSON")
+}
+
+#[test]
+fn ordinary_record_annotation_commits_its_demanded_library_terminal() {
+    let receipt = invoke(
+        "record-annotation-publication",
+        "function f(value: Record<string, unknown>) {}\n",
+    );
     assert_eq!(
         receipt["semantic"],
         json!({
             "diagnostics": [],
             "exit_code": 0,
             "incompletes": [],
+            "parse_errors": [],
+        })
+    );
+}
+
+#[test]
+fn global_array_binding_keeps_its_typed_incomplete_receipt() {
+    let receipt = invoke("global-array-binding-publication", "var [value] = [1];\n");
+    assert_eq!(
+        receipt["semantic"],
+        json!({
+            "diagnostics": [],
+            "exit_code": 3,
+            "incompletes": ["bind/binding-pattern/array-pattern"],
             "parse_errors": [],
         })
     );
