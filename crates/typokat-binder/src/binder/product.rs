@@ -3958,8 +3958,10 @@ fn lower_tuple_element(
 
 fn mapped_modifier(value: Option<TSMappedTypeModifierOperator>) -> product::MappedModifier {
     match value {
-        None | Some(TSMappedTypeModifierOperator::True) => product::MappedModifier::Preserve,
-        Some(TSMappedTypeModifierOperator::Plus) => product::MappedModifier::Add,
+        None => product::MappedModifier::Preserve,
+        Some(TSMappedTypeModifierOperator::True | TSMappedTypeModifierOperator::Plus) => {
+            product::MappedModifier::Add
+        }
         Some(TSMappedTypeModifierOperator::Minus) => product::MappedModifier::Remove,
     }
 }

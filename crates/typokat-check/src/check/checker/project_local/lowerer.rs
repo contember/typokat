@@ -195,6 +195,7 @@ struct ProductLowerer<'product, 'interner> {
     alias_bodies: Vec<Option<TypeId>>,
     alias_unavailable: Vec<Option<PublishedAliasUnavailable>>,
     alias_indirection_depth: u32,
+    mapped_frames: Vec<ProductMappedFrame>,
     resolving_alias_depth: Vec<Option<u32>>,
     seed_aliases: PublishedAliases,
     records: LibraryRecordAccumulator,
@@ -215,6 +216,13 @@ struct PendingDefaultApplication {
     group: usize,
     supplied: usize,
     owner: IssueOwner,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ProductMappedFrame {
+    parameter: TypeParameterKey,
+    homomorphic: bool,
+    modifiers_source: Option<TypeId>,
 }
 
 #[derive(Clone)]
@@ -468,6 +476,7 @@ impl<'product, 'interner> ProductLowerer<'product, 'interner> {
             alias_bodies: vec![None; product.group_count()],
             alias_unavailable: vec![None; product.group_count()],
             alias_indirection_depth: 0,
+            mapped_frames: Vec::new(),
             resolving_alias_depth: vec![None; product.group_count()],
             seed_aliases,
             records: LibraryRecordAccumulator::default(),
@@ -1874,6 +1883,20 @@ impl<'product, 'interner> ProductLowerer<'product, 'interner> {
                 }
             }
             TypeRecipeNode::IndexedAccess { object, index } => {
+                if self.mapped_frames.last().is_some_and(|frame| {
+                    self.bare_recipe_type_parameter(index) == Some(frame.parameter)
+                }) {
+                    let modifiers_source = self.bare_recipe_type_parameter(object).is_some();
+                    let object = self.lower_type(object, owner)?;
+                    let frame = self
+                        .mapped_frames
+                        .last_mut()
+                        .expect("active mapped key still has its lowering frame");
+                    if !frame.homomorphic && modifiers_source {
+                        frame.modifiers_source.get_or_insert(object);
+                    }
+                    return Ok(self.interner.intern_mapped_value());
+                }
                 let mut error = None;
                 let object = remember_lowering_error(&mut error, self.lower_type(object, owner));
                 let index = remember_lowering_error(&mut error, self.lower_type(index, owner));
@@ -2014,7 +2037,7 @@ impl<'product, 'interner> ProductLowerer<'product, 'interner> {
         arguments: &[TypeRecipeKey],
     ) -> Result<TypeId, ProductLoweringError> {
         if let Some(parameter) = self.contextual_type_parameters[recipe.index()] {
-            return Ok(self.type_parameter_types[parameter.index()]);
+            return self.lower_type_parameter_reference(parameter, arguments, owner);
         }
         match resolution {
             TypeReferenceResolution::Group(group) => {
@@ -2118,7 +2141,7 @@ impl<'product, 'interner> ProductLowerer<'product, 'interner> {
                 }
             }
             TypeReferenceResolution::TypeParameter(parameter) => {
-                Ok(self.type_parameter_types[parameter.index()])
+                self.lower_type_parameter_reference(parameter, arguments, owner)
             }
             TypeReferenceResolution::Unresolved { .. } => {
                 self.stage_qualified_path_validation(recipe, owner);
@@ -2130,6 +2153,19 @@ impl<'product, 'interner> ProductLowerer<'product, 'interner> {
                 )
             }
         }
+    }
+
+    fn lower_type_parameter_reference(
+        &mut self,
+        parameter: TypeParameterKey,
+        arguments: &[TypeRecipeKey],
+        owner: IssueOwner,
+    ) -> Result<TypeId, ProductLoweringError> {
+        if arguments.is_empty() {
+            return Ok(self.type_parameter_types[parameter.index()]);
+        }
+        let _ = self.lower_types(arguments, owner);
+        Err(ProductLoweringError::UnsupportedRecipe)
     }
 
     fn lower_types(
@@ -2746,6 +2782,15 @@ impl<'product, 'interner> ProductLowerer<'product, 'interner> {
                 error = Some(ProductLoweringError::UnsupportedRecipe);
             }
         }
+        let homomorphic = parameter_row.constraint.is_some_and(|constraint| {
+            matches!(
+                self.product.types()[constraint.index()].node,
+                TypeRecipeNode::Operator {
+                    operator: TypeOperator::Keyof,
+                    ..
+                }
+            )
+        });
         let key_source = parameter_row.constraint.and_then(|constraint| {
             match self.product.types()[constraint.index()].node {
                 TypeRecipeNode::Operator {
@@ -2766,28 +2811,47 @@ impl<'product, 'interner> ProductLowerer<'product, 'interner> {
                 error = Some(ProductLoweringError::UnsupportedRecipe);
             }
         }
+        self.mapped_frames.push(ProductMappedFrame {
+            parameter,
+            homomorphic,
+            modifiers_source: None,
+        });
         let value_template = match value {
             Some(value) => remember_lowering_error(&mut error, self.lower_type(value, owner)),
             None => Some(self.interner.well_known().any),
         };
+        let frame = self
+            .mapped_frames
+            .pop()
+            .expect("mapped value lowering closes its own frame");
         if let Some(error) = error {
             return Err(error);
         }
         Ok(MappedType {
-            homomorphic: parameter_row.constraint.is_some_and(|constraint| {
-                matches!(
-                    self.product.types()[constraint.index()].node,
-                    TypeRecipeNode::Operator {
-                        operator: TypeOperator::Keyof,
-                        ..
-                    }
-                )
-            }),
+            homomorphic,
             key_source: key_source.expect("successful mapped key source"),
             value_template: value_template.expect("successful mapped value"),
-            modifiers_source: None,
+            modifiers_source: frame.modifiers_source,
             optional_modifier: mapped_modifier(optional),
             readonly_modifier: mapped_modifier(readonly),
+        })
+    }
+
+    fn bare_recipe_type_parameter(&self, recipe: TypeRecipeKey) -> Option<TypeParameterKey> {
+        let TypeRecipeNode::Reference {
+            resolution,
+            arguments,
+            ..
+        } = &self.product.types()[recipe.index()].node
+        else {
+            return None;
+        };
+        if !arguments.is_empty() {
+            return None;
+        }
+        self.contextual_type_parameters[recipe.index()].or_else(|| match resolution {
+            TypeReferenceResolution::TypeParameter(parameter) => Some(*parameter),
+            _ => None,
         })
     }
 
