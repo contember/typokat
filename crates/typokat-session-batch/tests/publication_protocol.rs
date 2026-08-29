@@ -105,3 +105,28 @@ fn project_local_in_operator_retains_alias_union_members() {
         })
     );
 }
+
+#[test]
+fn project_local_enum_aliases_retain_comparison_overlap() {
+    let receipt = invoke(
+        "project-local-enum-alias-overlap",
+        "enum Choice { Unknown, Yes, No }\n\
+         type YesNo = Choice.Yes | Choice.No;\n\
+         function inspect(a: Choice.Yes, b: YesNo) {\n\
+           if (a === b) {}\n\
+           switch (b) {\n\
+             case Choice.Yes: break;\n\
+             case Choice.No: break;\n\
+           }\n\
+         }\n",
+    );
+    assert_eq!(
+        receipt["semantic"],
+        json!({
+            "diagnostics": [],
+            "exit_code": 0,
+            "incompletes": [],
+            "parse_errors": [],
+        })
+    );
+}
