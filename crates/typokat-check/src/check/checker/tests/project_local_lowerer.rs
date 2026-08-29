@@ -424,6 +424,47 @@ fn source_mapped_alias_preserves_active_key_and_modifiers() {
 }
 
 #[test]
+fn mapped_alias_rejects_applied_parameters_and_visits_their_arguments() {
+    let product = extract_library_product(
+        concat!(
+            "type BadKey<T> = { [P in keyof T]: T[P<intrinsic>] };",
+            "type BadSource<T> = { [P in \"x\"]: T<intrinsic>[P] };",
+        ),
+        "mapped-applied-parameter-contract",
+    );
+    let bad_key = product_group(&product, "BadKey");
+    let bad_source = product_group(&product, "BadSource");
+    let mut interner = Interner::with_intrinsics();
+    let receipt = lower_product_groups_for_test(
+        &product,
+        &mut interner,
+        &[bad_key, bad_source],
+        &BTreeMap::new(),
+        [None, None],
+        None,
+    );
+
+    assert!(receipt.unavailable.contains(&bad_key));
+    assert!(receipt.unavailable.contains(&bad_source));
+    let incomplete_ids = receipt
+        .library_records
+        .iter()
+        .filter_map(|record| match &record.record {
+            crate::check::checker::project_local::project_local_pass_port::NormalizedCheckerRecordForTest::Incomplete(incomplete) => Some(incomplete.id.as_str()),
+            crate::check::checker::project_local::project_local_pass_port::NormalizedCheckerRecordForTest::Diagnostic(_) => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        incomplete_ids
+            .iter()
+            .filter(|id| **id == "annotation-lower/intrinsic-keyword/self")
+            .count(),
+        2,
+        "both rejected parameter applications still walk their argument subtree"
+    );
+}
+
+#[test]
 fn standalone_interface_discards_deferred_member_and_keeps_supported_sibling() {
     let mut fixture = Fixture::new();
     let number = fixture.keyword(KeywordKind::Number, 102);
