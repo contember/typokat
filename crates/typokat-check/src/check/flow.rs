@@ -554,6 +554,12 @@ fn narrow_by_discriminant_query<L: PublishedClassLookup + ?Sized>(
     if ty == wk.any || ty == wk.error {
         return DemandOutcome::Ready(ty);
     }
+    let ty = match demand_flow_union_root(interner, published, state, next_type_param, ty) {
+        DemandOutcome::Ready(ty) => ty,
+        DemandOutcome::Exhausted(exhaustion) => {
+            return DemandOutcome::Exhausted(exhaustion);
+        }
+    };
     let members = interner
         .store()
         .union_members(ty)
@@ -592,6 +598,24 @@ fn narrow_by_discriminant_query<L: PublishedClassLookup + ?Sized>(
         }
     }
     DemandOutcome::Ready(interner.union(kept))
+}
+
+fn demand_flow_union_root<L: PublishedClassLookup + ?Sized>(
+    interner: &mut Interner,
+    published: &L,
+    state: &mut SemanticQueryState,
+    next_type_param: &mut u32,
+    ty: TypeId,
+) -> DemandOutcome<TypeId> {
+    let store = interner.store();
+    let outer_alias = store
+        .instantiation_type(ty)
+        .is_some_and(|application| store.alias_template_id(application.base).is_some());
+    if outer_alias {
+        SemanticQueryCoordinator::new(interner, published, state, next_type_param).demand(ty)
+    } else {
+        DemandOutcome::Ready(ty)
+    }
 }
 
 /// Narrow `ty` by the **`in` operator** `"prop" in x` (M8, architecture §5).
@@ -654,6 +678,12 @@ fn narrow_by_in_operator_query<L: PublishedClassLookup + ?Sized>(
     if ty == wk.any || ty == wk.error {
         return DemandOutcome::Ready(ty);
     }
+    let ty = match demand_flow_union_root(interner, published, state, next_type_param, ty) {
+        DemandOutcome::Ready(ty) => ty,
+        DemandOutcome::Exhausted(exhaustion) => {
+            return DemandOutcome::Exhausted(exhaustion);
+        }
+    };
     let members = interner
         .store()
         .union_members(ty)

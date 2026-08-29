@@ -744,6 +744,28 @@ impl PublishedTypeEnvironment {
     }
 }
 
+impl PublishedClassLookup for PublishedTypeEnvironment {
+    fn published_class(&self, class: ClassId) -> DemandOutcome<&PublishedClassSurface> {
+        self.classes.published_class(class)
+    }
+
+    fn require_class(&self, class: ClassId) -> DemandOutcome<()> {
+        self.classes.require(class)
+    }
+
+    fn publication_identity(&self) -> &Arc<()> {
+        &self.semantic_publication_identity
+    }
+
+    fn published_alias(&self, alias: AliasId) -> Option<&PublishedAliasTerminal> {
+        self.aliases.terminal(alias)
+    }
+
+    fn published_class_lookup_is_observational(&self) -> bool {
+        false
+    }
+}
+
 #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 fn published_type_groups_from_terminals(
     terminals: Vec<PublishedTypeGroupTerminal>,

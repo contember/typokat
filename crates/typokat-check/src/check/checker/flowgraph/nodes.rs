@@ -175,7 +175,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         let t = if guard_symbol == symbol {
                             match narrow_query(
                                 self.interner,
-                                self.type_environment.published().classes(),
+                                self.type_environment.published(),
                                 &mut self.semantic_queries,
                                 &mut self.next_type_param,
                                 base,
