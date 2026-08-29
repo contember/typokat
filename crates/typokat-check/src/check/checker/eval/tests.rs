@@ -2078,10 +2078,10 @@ fn deferred_mapped_over_free_param_is_returned_unchanged() {
 
 /// M28 — a **deferred `keyof`** over a free type parameter is returned unchanged
 /// (and not memoized); once its operand is concrete (an object) it resolves
-/// through the SHARED keyof computation to the key-literal union; an error
-/// operand degrades to the error type; a concrete-but-non-object operand (a
-/// primitive after substitution) stays a deferred node — never a permissive
-/// fallback.
+/// through the SHARED keyof computation to the key-literal union; `any` resolves
+/// to the full property-key domain; an error operand degrades to the error type;
+/// a concrete-but-non-object operand (a primitive after substitution) stays a
+/// deferred node — never a permissive fallback.
 #[test]
 fn deferred_keyof_defers_and_resolves_via_shared_computation() {
     let mut interner = Interner::with_intrinsics();
@@ -2119,6 +2119,14 @@ fn deferred_keyof_defers_and_resolves_via_shared_computation() {
     assert_eq!(
         eval(&mut interner, &mut next, &mut memo, keyof_err),
         wk.error
+    );
+
+    // `keyof any`: the exact string | number | symbol property-key domain.
+    let keyof_any = interner.intern_keyof(wk.any);
+    let property_keys = interner.union(vec![wk.string, wk.number, wk.symbol]);
+    assert_eq!(
+        eval(&mut interner, &mut next, &mut memo, keyof_any),
+        property_keys
     );
 
     // Concrete non-object operand: stays deferred (conservative, not permissive).
