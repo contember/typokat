@@ -516,6 +516,30 @@ class SessionBatchContractTests(unittest.TestCase):
         with self.assertRaises(batch.BatchContractError):
             batch.recompute_panel(dropped_incomplete, expected, self.contract)
 
+        in_scope_became_incomplete = copy.deepcopy(base)
+        in_scope_case = (
+            "conformance/classes/members/accessibility/classPropertyAsPrivate.ts"
+        )
+        mutate_typokat_semantic(
+            in_scope_became_incomplete,
+            in_scope_case,
+            lambda semantic: (
+                semantic["incompletes"].append("class/member/new-gap"),
+                semantic.update(exit_code=3),
+            ),
+        )
+        in_scope_became_incomplete["derived"]["typokat_accepted_progress"] = [
+            {
+                "case_id": in_scope_case,
+                "removed_false_positive_diagnostics": [],
+                "gained_incomplete_identities": ["class/member/new-gap"],
+            }
+        ]
+        with self.assertRaises(batch.BatchContractError):
+            batch.recompute_panel(
+                in_scope_became_incomplete, expected, self.contract
+            )
+
         arbitrary_old_false_positive = copy.deepcopy(base)
         arbitrary_case = (
             "conformance/classes/members/accessibility/classPropertyAsPrivate.ts"
