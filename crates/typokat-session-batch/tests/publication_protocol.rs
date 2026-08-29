@@ -84,3 +84,24 @@ fn project_local_switch_retains_discriminated_union_members() {
         })
     );
 }
+
+#[test]
+fn project_local_in_operator_retains_alias_union_members() {
+    let receipt = invoke(
+        "project-local-in-narrowing",
+        "type Item = { a: string } | { b: string };\n\
+         function select(item: Item) {\n\
+           if (\"a\" in item) return item.a;\n\
+           return item.b;\n\
+         }\n",
+    );
+    assert_eq!(
+        receipt["semantic"],
+        json!({
+            "diagnostics": [],
+            "exit_code": 0,
+            "incompletes": [],
+            "parse_errors": [],
+        })
+    );
+}
