@@ -1153,10 +1153,10 @@ class SessionBatchContractTests(unittest.TestCase):
             "control_receipts_sha256": "7" * 64,
             "lease_argv": ["cpu-lease", "run", "-n", "2", "--no-smt", "--"],
             "lease_vcpus": 2,
-            "cpuset": [8, 10],
-            "thread_siblings": {"8": [8, 9], "10": [10, 11]},
-            "affinity_before": [8, 10],
-            "affinity_after": [8, 10],
+            "reserved_cpuset": [8, 9],
+            "thread_siblings": {"8": [8, 9], "9": [8, 9]},
+            "execution_affinity_before": [8],
+            "execution_affinity_after": [8],
             "environment": {"LANG": "C", "LC_ALL": "C", "TZ": "UTC"},
             "address_space_rlimit": [1 << 30, 1 << 30],
         }
@@ -1166,8 +1166,6 @@ class SessionBatchContractTests(unittest.TestCase):
             "control_receipts_sha256": "0" * 64,
             "lease_argv": ["cpu-lease", "run", "-n", "2", "--"],
             "lease_vcpus": 1,
-            "cpuset": [8, 9],
-            "affinity_after": [8],
             "environment": {"RAYON_NUM_THREADS": "1"},
             "address_space_rlimit": [0, 0],
         }
@@ -1175,6 +1173,22 @@ class SessionBatchContractTests(unittest.TestCase):
             red = copy.deepcopy(preconditions)
             red[key] = bad_value
             with self.assertRaises(batch.BatchContractError):
+                batch.validate_timing_preconditions(red, self.contract)
+
+        topology_mutations = {
+            "partial-reserved-pair": {"reserved_cpuset": [8]},
+            "two-partial-reserved-pairs": {
+                "reserved_cpuset": [8, 10],
+                "thread_siblings": {"8": [8, 9], "10": [10, 11]},
+            },
+            "execution-outside-reserve": {"execution_affinity_before": [10]},
+            "both-siblings-executing": {"execution_affinity_before": [8, 9]},
+            "sibling-switch-after": {"execution_affinity_after": [9]},
+        }
+        for label, changes in topology_mutations.items():
+            red = copy.deepcopy(preconditions)
+            red.update(changes)
+            with self.subTest(label=label), self.assertRaises(batch.BatchContractError):
                 batch.validate_timing_preconditions(red, self.contract)
 
 

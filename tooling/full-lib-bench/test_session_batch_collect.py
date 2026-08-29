@@ -167,7 +167,7 @@ class FakePanelHost:
         self._batch_offsets: dict[int, int] = {}
         self._fault_offset = 0
         self._first_batch_pid: int | None = None
-        self.final_affinity = [2, 4]
+        self.final_execution_affinity = [8]
         control_fixture = raw_panel_evidence(1, 2.0, 100_000, 150_000)
         self.controls = copy.deepcopy(control_fixture["negative_controls"])
         for tool, binary in (("typokat", "2" * 64), ("tsgo", "3" * 64)):
@@ -178,8 +178,8 @@ class FakePanelHost:
         self.timing_boundary = {
             "lease_argv": ["cpu-lease", "run", "-n", "2", "--no-smt", "--"],
             "lease_vcpus": 2,
-            "cpuset": [2, 4],
-            "thread_siblings": {"2": [2, 3], "4": [4, 5]},
+            "reserved_cpuset": [8, 9],
+            "thread_siblings": {"8": [8, 9], "9": [8, 9]},
             "environment": {"LANG": "C", "LC_ALL": "C", "TZ": "UTC"},
             "address_space_rlimit": [1 << 30, 1 << 30],
         }
@@ -225,7 +225,9 @@ class FakePanelHost:
         ordinal = sum(call[0] == "observe_timing_boundary" for call in self.calls)
         self.calls.append(("observe_timing_boundary", ordinal))
         value = copy.deepcopy(self.timing_boundary)
-        value["affinity"] = [2, 4] if ordinal == 0 else copy.deepcopy(self.final_affinity)
+        value["execution_affinity"] = (
+            [8] if ordinal == 0 else copy.deepcopy(self.final_execution_affinity)
+        )
         return value
 
     def _panel(self, projects: int) -> dict[str, object]:
@@ -968,8 +970,8 @@ class SessionBatchLivePanelCollectorTests(unittest.TestCase):
                     host.controls, sort_keys=True, separators=(",", ":")
                 ).encode()
             ).hexdigest(),
-            "affinity_before": [2, 4],
-            "affinity_after": [2, 4],
+            "execution_affinity_before": [8],
+            "execution_affinity_after": [8],
         }
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "progressive-panels.json"
@@ -1180,7 +1182,7 @@ class SessionBatchLivePanelCollectorTests(unittest.TestCase):
                 collect._collect_live_panels(host, contract)
 
         affinity = FakePanelHost(contract)
-        affinity.final_affinity = [2, 6]
+        affinity.final_execution_affinity = [9]
         with self.assertRaisesRegex(batch.BatchContractError, "affinity|timing"):
             collect._collect_live_panels(affinity, contract)
 
