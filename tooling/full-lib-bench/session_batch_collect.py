@@ -3,7 +3,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import copy
+from dataclasses import asdict, dataclass
 import errno
 import hashlib
 import json
@@ -565,6 +566,243 @@ def _collect_live_linkage(host: Any, contract: dict[str, Any]) -> dict[str, Any]
     }
 
 
+def _panel_request_stream(authority: dict[str, Any], projects: int) -> str:
+    frames = authority.get("frames")
+    if not isinstance(frames, list) or projects <= 0 or len(frames) < projects:
+        _fail("authenticated panel source authority is incomplete")
+    requests = []
+    for frame in frames[:projects]:
+        _exact_keys(frame, {"case_id", "source", "source_bytes", "source_sha256"}, "panel source")
+        source = frame["source"]
+        if not isinstance(source, str):
+            _fail("authenticated panel source is not text")
+        source_bytes = source.encode()
+        if len(source_bytes) != frame["source_bytes"] or _sha(source_bytes) != frame["source_sha256"]:
+            _fail("authenticated panel source bytes differ")
+        requests.append(
+            _canonical({"schema": 1, "case_id": frame["case_id"], "source": source}).decode()
+        )
+    return "".join(f"{request}\n" for request in requests)
+
+
+def _validate_timing_boundary(value: Any, label: str) -> dict[str, Any]:
+    keys = {
+        "lease_argv", "lease_vcpus", "reserved_cpuset", "thread_siblings",
+        "execution_affinity", "environment", "address_space_rlimit",
+    }
+    _exact_keys(value, keys, label)
+    return dict(value)
+
+
+def _parse_cpu_list(value: str, label: str) -> list[int]:
+    if not value or value != value.strip():
+        _fail(f"{label} is empty or noncanonical")
+    cpus: set[int] = set()
+    try:
+        for part in value.split(","):
+            fields = part.split("-")
+            if len(fields) == 1:
+                start = end = int(fields[0])
+            elif len(fields) == 2:
+                start, end = map(int, fields)
+            else:
+                raise ValueError
+            if start < 0 or end < start:
+                raise ValueError
+            expanded = set(range(start, end + 1))
+            if cpus & expanded:
+                _fail(f"{label} contains overlapping CPUs")
+            cpus.update(expanded)
+    except ValueError as error:
+        raise batch.BatchContractError(f"{label} is invalid") from error
+    if not cpus:
+        _fail(f"{label} is empty")
+    return sorted(cpus)
+
+
+def _collect_live_panels(host: Any, contract: dict[str, Any]) -> dict[str, Any]:
+    candidate = host.freeze_candidate()
+    _validate_candidate(candidate)
+
+    runners: dict[str, dict[str, Any]] = {}
+    for tool in ("typokat", "tsgo"):
+        runner = host.build_runner(tool, candidate)
+        _validate_runner(runner, tool, candidate, contract)
+        runners[tool] = runner
+    for axis in ("path", "source_sha256", "binary_sha256", "commit"):
+        if runners["typokat"][axis] == runners["tsgo"][axis]:
+            _fail(f"runner {axis} identity collision")
+
+    protocols: dict[str, dict[str, Any]] = {}
+    for tool in ("typokat", "tsgo"):
+        protocol = host.protocol_info(tool, runners[tool])
+        batch.validate_protocol_info(protocol, tool, runners[tool], contract)
+        protocols[tool] = protocol
+
+    authority = batch.load_authenticated_batch_oracles(contract)
+    authority_sha256 = _sha(_canonical(authority))
+    before = _validate_timing_boundary(
+        host.observe_timing_boundary(), "initial timing boundary"
+    )
+
+    process_receipts: list[dict[str, Any]] = []
+    controls: dict[str, dict[str, Any]] = {"typokat": {}, "tsgo": {}}
+    control_timeout = contract["sampling"]["panel_timeout_seconds"][0]
+    limit = contract["child_address_space_limit_bytes"]
+    for tool in ("typokat", "tsgo"):
+        for fault in contract["negative_controls"][tool]:
+            record = host.run_fault(
+                tool,
+                runners[tool],
+                fault,
+                timeout_seconds=control_timeout,
+                address_space_limit_bytes=limit,
+            )
+            _link_process_record(record, runners[tool], f"{tool} {fault}")
+            if record.get("stderr"):
+                _fail(f"{tool} {fault} stderr is not empty")
+            _retain_fault_response(record, tool, fault)
+            controls[tool][fault] = copy.deepcopy(record)
+            process_receipts.append(copy.deepcopy(record))
+    batch.verify_negative_controls(controls, contract)
+    control_sha256 = _sha(_canonical(controls))
+
+    raw_panels: list[dict[str, Any]] = []
+    observed_pids: set[int] = set()
+
+    def retain_process(
+        record: Any, tool: str, label: str, projects: int
+    ) -> dict[str, Any]:
+        _link_process_record(record, runners[tool], label)
+        if record.get("stderr"):
+            _fail(f"{label} stderr is not empty")
+        frames = record.get("frames", [])
+        if not isinstance(frames, list) or len(frames) != projects:
+            _fail(f"{label} frame receipt count differs")
+        expected_product = contract["profile"]["length_framed_sha256"]
+        for frame in frames:
+            if (
+                not isinstance(frame, dict)
+                or frame.get("shared_product_identity") != expected_product
+            ):
+                _fail(f"{label} shared product identity differs")
+        pid = record.get("pid")
+        if type(pid) is not int or pid <= 0:
+            _fail(f"{label} process PID is invalid")
+        if pid in observed_pids:
+            _fail("live panel process PID was reused")
+        observed_pids.add(pid)
+        process_receipts.append(copy.deepcopy(record))
+        return dict(record)
+
+    def collect_panel(projects: int) -> dict[str, Any]:
+        try:
+            panel_index = contract["panel_project_counts"].index(projects)
+        except ValueError as error:
+            raise batch.BatchContractError("panel project count is not canonical") from error
+        timeout = contract["sampling"]["panel_timeout_seconds"][panel_index]
+        request_stream = _panel_request_stream(authority, projects)
+        warmups = []
+        for ordinal in range(contract["sampling"]["warmups_per_tool"]):
+            for tool in ("typokat", "tsgo"):
+                raw = host.run_batch(
+                    tool,
+                    runners[tool],
+                    request_stream,
+                    timeout_seconds=timeout,
+                    address_space_limit_bytes=limit,
+                )
+                row = retain_process(
+                    raw, tool, f"{projects}-project {tool} warmup", projects
+                )
+                row.update(ordinal=ordinal, tool=tool)
+                warmups.append(row)
+
+        samples = []
+        schedule = ("typokat", "tsgo", "tsgo", "typokat")
+        for block in range(contract["sampling"]["blocks"]):
+            for slot, tool in enumerate(schedule):
+                raw = host.run_batch(
+                    tool,
+                    runners[tool],
+                    request_stream,
+                    timeout_seconds=timeout,
+                    address_space_limit_bytes=limit,
+                )
+                row = retain_process(
+                    raw, tool, f"{projects}-project {tool} sample", projects
+                )
+                row.update(block=block, slot=slot, tool=tool)
+                samples.append(row)
+
+        panel = {
+            "projects": projects,
+            "warmups": warmups,
+            "samples": samples,
+            "derived": batch.recompute_abba_statistics(samples, contract),
+            "negative_controls": copy.deepcopy(controls),
+        }
+        raw_panels.append(panel)
+        return panel
+
+    progressive = batch.collect_progressive_panels(collect_panel, contract)
+    if progressive.get("verdict") not in {"PANEL-PASS", "PANEL-FAIL"}:
+        _fail("progressive panel verdict differs")
+
+    after = _validate_timing_boundary(
+        host.observe_timing_boundary(), "final timing boundary"
+    )
+    common_timing = set(before) - {"execution_affinity"}
+    if any(before[key] != after[key] for key in common_timing):
+        _fail("timing boundary facts changed")
+    timing = {
+        **{key: before[key] for key in common_timing},
+        "oracle_authority_sha256": authority_sha256,
+        "control_receipts_sha256": control_sha256,
+        "execution_affinity_before": before["execution_affinity"],
+        "execution_affinity_after": after["execution_affinity"],
+    }
+    batch.validate_timing_preconditions(timing, contract)
+
+    process_sha256 = _sha(_canonical(process_receipts))
+    profile = {
+        "file_count": contract["profile"]["file_count"],
+        "length_framed_sha256": contract["profile"]["length_framed_sha256"],
+    }
+    attestation = host.final_panel_attestation(candidate, runners)
+    _exact_keys(
+        attestation,
+        {"candidate", "runners", "profile", "process_receipts_sha256"},
+        "final panel attestation",
+    )
+    if attestation["candidate"] != candidate:
+        _fail("final candidate identity differs")
+    if attestation["runners"] != runners:
+        _fail("final runner identity differs")
+    if attestation["profile"] != profile:
+        _fail("final profile identity differs")
+    if attestation["process_receipts_sha256"] != process_sha256:
+        _fail("final process receipt digest differs")
+
+    evidence = {
+        "schema": 1,
+        "candidate": candidate,
+        "runners": runners,
+        "protocols": protocols,
+        "profile": profile,
+        "timing": timing,
+        "raw_panels": raw_panels,
+        "panel_receipts": [asdict(panel) for panel in progressive["panels"]],
+        "process_receipts_sha256": process_sha256,
+        "final_attestation": attestation,
+    }
+    return {
+        "verdict": progressive["verdict"],
+        "evidence_sha256": _sha(_canonical(evidence)),
+        "evidence": evidence,
+    }
+
+
 def _atomic_write_new(path: Path, data: bytes) -> None:
     parent = path.parent
     if parent.is_symlink() or not parent.is_dir():
@@ -616,6 +854,17 @@ def collect_live_linkage(*, output: Path) -> dict[str, Any]:
     return result
 
 
+def collect_live_panels(*, output: Path) -> dict[str, Any]:
+    output = Path(output)
+    if output.exists() or output.is_symlink():
+        _fail(f"output already exists: {output}")
+    contract = batch.verify_contract()
+    host = SystemLiveHost(contract)
+    result = _collect_live_panels(host, host.contract)
+    _atomic_write_new(output, _canonical(result) + b"\n")
+    return result
+
+
 class SystemLiveHost:
     """Real build and process boundary used only by the public collector."""
 
@@ -629,6 +878,12 @@ class SystemLiveHost:
         self._tsgo_checkout_tree: str | None = None
         self._go_toolchain_identity: str | None = None
         self._rust_build: tuple[Path, Path, dict[str, str]] | None = None
+        self._panel_process_receipts: list[dict[str, Any]] = []
+
+    def _record_panel_process(self, record: dict[str, Any]) -> None:
+        journal = getattr(self, "_panel_process_receipts", None)
+        if journal is not None:
+            journal.append(copy.deepcopy(record))
 
     def freeze_candidate(self) -> dict[str, Any]:
         commit = self._git(ROOT, "rev-parse", "HEAD")
@@ -727,22 +982,31 @@ class SystemLiveHost:
         after = _sha_file(Path(runner["path"]), f"{tool} runner")
         request_lines = request_stream.splitlines()
         response_lines = measurement.stdout.splitlines()
-        if len(request_lines) != 1 or len(response_lines) != 1:
-            _fail(f"{tool} one-frame JSONL stream count differs")
-        try:
-            response = json.loads(response_lines[0])
-        except json.JSONDecodeError as error:
-            raise batch.BatchContractError(f"invalid {tool} frame JSON: {error}") from error
-        if not isinstance(response, dict):
-            _fail(f"{tool} frame response is not an object")
-        canonical_response = _canonical(response)
-        frame = dict(response)
-        frame.update({
-            "raw_request": request_lines[0],
-            "raw_response": canonical_response.decode(),
-            "raw_response_sha256": _sha(canonical_response),
-        })
-        return {
+        if not request_lines or len(response_lines) != len(request_lines):
+            _fail(f"{tool} JSONL stream count differs")
+        frames = []
+        for ordinal, (request, response_line) in enumerate(
+            zip(request_lines, response_lines, strict=True)
+        ):
+            try:
+                response = json.loads(response_line)
+            except json.JSONDecodeError as error:
+                raise batch.BatchContractError(
+                    f"invalid {tool} frame JSON: {error}"
+                ) from error
+            if not isinstance(response, dict):
+                _fail(f"{tool} frame response is not an object")
+            canonical_response = _canonical(response)
+            frame = dict(response)
+            frame.update(
+                raw_request=request,
+                raw_response=canonical_response.decode(),
+                raw_response_sha256=_sha(canonical_response),
+            )
+            if frame.get("ordinal") != ordinal:
+                _fail(f"{tool} frame ordinal differs")
+            frames.append(frame)
+        record = {
             "block": 0,
             "slot": 0,
             "tool": tool,
@@ -765,8 +1029,10 @@ class SystemLiveHost:
             "response_stream_sha256": _sha(measurement.stdout.encode()),
             "time_report": measurement.time_report,
             "rss_kib": measurement.rss_kib,
-            "frames": [frame],
+            "frames": frames,
         }
+        self._record_panel_process(record)
+        return record
 
     def run_single_project(
         self,
@@ -920,7 +1186,7 @@ class SystemLiveHost:
         self._validate_live_fault_response(tool, fault, response)
         if measurement.returncode != 2:
             _fail(f"{tool} {fault} process did not use the rejection exit status")
-        return {
+        record = {
             "raw_request": request,
             "stdout": measurement.stdout,
             "stderr": measurement.stderr,
@@ -934,6 +1200,8 @@ class SystemLiveHost:
             "fault_hook_activations": response.get("fault_hook_activations"),
             "response": response,
         }
+        self._record_panel_process(record)
+        return record
 
     def final_attestation(
         self,
@@ -968,6 +1236,82 @@ class SystemLiveHost:
         if ending_candidate != observed_candidate:
             _fail("candidate changed during final attestation")
         return {"candidate": ending_candidate, "runners": observed_runners}
+
+    def observe_timing_boundary(self) -> dict[str, Any]:
+        try:
+            cgroup_lines = Path("/proc/self/cgroup").read_text().splitlines()
+            execution_affinity = sorted(os.sched_getaffinity(0))
+        except (OSError, ValueError) as error:
+            raise batch.BatchContractError(
+                f"cannot observe timing boundary: {error}"
+            ) from error
+        unified = []
+        for line in cgroup_lines:
+            fields = line.split(":", 2)
+            if len(fields) == 3 and fields[0] == "0" and fields[1] == "":
+                unified.append(fields[2])
+        if len(unified) != 1 or re.search(
+            r"(?:^|/)leases\.slice/lease-[^/]+\.scope$", unified[0]
+        ) is None:
+            _fail("timing collector is not running inside a CPU lease")
+        cgroup_path = Path("/sys/fs/cgroup") / unified[0].lstrip("/")
+        reserved = _parse_cpu_list(
+            _read_regular(
+                cgroup_path / "cpuset.cpus.effective",
+                "reserved CPU lease cpuset",
+            ).decode().strip(),
+            "reserved CPU lease cpuset",
+        )
+        siblings: dict[str, list[int]] = {}
+        for cpu in reserved:
+            path = Path(
+                f"/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list"
+            )
+            try:
+                text = _read_regular(path, f"CPU {cpu} sibling topology").decode().strip()
+            except UnicodeDecodeError as error:
+                raise batch.BatchContractError(
+                    f"CPU {cpu} sibling topology is not UTF-8"
+                ) from error
+            siblings[str(cpu)] = _parse_cpu_list(
+                text, f"CPU {cpu} sibling topology"
+            )
+        vcpus = self.contract["cpu_lease_vcpus"]
+        limit = self.contract["child_address_space_limit_bytes"]
+        return {
+            "lease_argv": [
+                "cpu-lease", "run", "-n", str(vcpus), "--no-smt", "--"
+            ],
+            "lease_vcpus": vcpus,
+            "reserved_cpuset": reserved,
+            "thread_siblings": siblings,
+            "execution_affinity": execution_affinity,
+            "environment": {"LANG": "C", "LC_ALL": "C", "TZ": "UTC"},
+            "address_space_rlimit": [limit, limit],
+        }
+
+    def final_panel_attestation(
+        self,
+        candidate: dict[str, Any],
+        runners: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        attestation = self.final_attestation(candidate, runners)
+        profile = self._authenticate_staged_tsgo_profile()
+        expected_profile = {
+            "file_count": self.contract["profile"]["file_count"],
+            "length_framed_sha256": self.contract["profile"][
+                "length_framed_sha256"
+            ],
+        }
+        if profile != expected_profile:
+            _fail("final staged profile identity differs")
+        return {
+            **attestation,
+            "profile": profile,
+            "process_receipts_sha256": _sha(
+                _canonical(self._panel_process_receipts)
+            ),
+        }
 
     def final_linkage_attestation(
         self,
@@ -1363,7 +1707,9 @@ class SystemLiveHost:
         address_space_limit_bytes: int,
         measured: bool,
     ) -> _ProcessMeasurement:
-        environment = {"GOMAXPROCS": "1"} if tool == "tsgo" else {}
+        environment = {"LANG": "C", "LC_ALL": "C", "TZ": "UTC"}
+        if tool == "tsgo":
+            environment["GOMAXPROCS"] = "1"
         return _supervise(
             [runner["path"], *arguments],
             stdin,

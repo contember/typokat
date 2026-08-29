@@ -1739,21 +1739,53 @@ def validate_timing_preconditions(evidence: dict[str, Any], contract: dict[str, 
     expected_argv = ["cpu-lease", "run", "-n", str(contract["cpu_lease_vcpus"]), "--no-smt", "--"]
     if evidence.get("lease_argv") != expected_argv or evidence.get("lease_vcpus") != contract["cpu_lease_vcpus"]:
         _fail("timing CPU lease differs")
-    cpuset = evidence.get("cpuset")
+    reserved = evidence.get("reserved_cpuset")
     siblings = evidence.get("thread_siblings")
     if (
-        not isinstance(cpuset, list)
-        or len(cpuset) != contract["cpu_lease_vcpus"]
-        or len(set(cpuset)) != len(cpuset)
+        not isinstance(reserved, list)
+        or len(reserved) != contract["cpu_lease_vcpus"]
+        or any(type(cpu) is not int or cpu < 0 for cpu in reserved)
+        or len(set(reserved)) != len(reserved)
         or not isinstance(siblings, dict)
+        or set(siblings) != {str(cpu) for cpu in reserved}
     ):
-        _fail("timing cpuset differs")
-    for cpu in cpuset:
+        _fail("timing reserved cpuset differs")
+    reserved_set = set(reserved)
+    sibling_groups: set[frozenset[int]] = set()
+    normalized_groups: dict[int, frozenset[int]] = {}
+    for cpu in reserved:
         group = siblings.get(str(cpu))
-        if not isinstance(group, list) or cpu not in group or any(other in group for other in cpuset if other != cpu):
-            _fail("timing cpuset includes SMT siblings")
-    if evidence.get("affinity_before") != cpuset or evidence.get("affinity_after") != cpuset:
-        _fail("timing affinity differs")
+        if (
+            not isinstance(group, list)
+            or not group
+            or any(type(member) is not int or member < 0 for member in group)
+            or len(set(group)) != len(group)
+            or cpu not in group
+            or not set(group).issubset(reserved_set)
+        ):
+            _fail("timing reserved sibling group is incomplete")
+        frozen = frozenset(group)
+        normalized_groups[cpu] = frozen
+        sibling_groups.add(frozen)
+    if any(
+        normalized_groups[member] != group
+        for group in sibling_groups
+        for member in group
+    ):
+        _fail("timing sibling topology is inconsistent")
+    before = evidence.get("execution_affinity_before")
+    after = evidence.get("execution_affinity_after")
+    if (
+        not isinstance(before, list)
+        or not isinstance(after, list)
+        or not before
+        or before != after
+        or any(type(cpu) is not int or cpu < 0 for cpu in before)
+        or len(set(before)) != len(before)
+        or not set(before).issubset(reserved_set)
+        or any(len(set(before) & group) != 1 for group in sibling_groups)
+    ):
+        _fail("timing execution affinity differs")
     if evidence.get("environment") != {"LANG": "C", "LC_ALL": "C", "TZ": "UTC"}:
         _fail("timing environment differs")
     limit = contract["child_address_space_limit_bytes"]
