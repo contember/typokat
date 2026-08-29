@@ -100,14 +100,14 @@ impl<'a> ConditionalEvaluator<'a> {
 
     /// Resolve a deferred `keyof` whose operand has been evaluated (M28 — the operand
     /// result is on top of the value stack). A concrete object or union-of-objects
-    /// operand keys through the shared [`keyof_of_type`] computation; an error/any
+    /// operand keys through the shared [`keyof_of_type`] computation; an error
     /// operand degrades to the error type (M22 cascade suppression); any other shape
     /// stays a deferred value (rebuilt over the evaluated operand), never a permissive
     /// fallback.
     pub(super) fn build_keyof(&mut self, ty: TypeId, values: &mut Vec<TypeId>, error: TypeId) {
         let operand = values.pop().unwrap_or(error);
         let wk = self.interner.well_known();
-        if operand == wk.error || operand == wk.any {
+        if operand == wk.error {
             values.push(error);
             return;
         }
@@ -124,7 +124,8 @@ impl<'a> ConditionalEvaluator<'a> {
     }
 }
 
-/// Compute `keyof` over a concrete object or union of objects. Object operands use
+/// Compute `keyof` over `any`, a concrete object, or a union of objects. `any` yields
+/// the full property-key domain (`string | number | symbol`). Object operands use
 /// [`keyof_of_object`]; union operands intersect the members' known keys (`keyof (A | B)`
 /// is the keys common to every member). `None` means the operand shape is outside this
 /// subset and the caller decides the fallback.
@@ -133,6 +134,9 @@ pub(in crate::check::checker) fn keyof_of_type(
     operand: TypeId,
 ) -> Option<TypeId> {
     let wk = interner.well_known();
+    if operand == wk.any {
+        return Some(interner.union(vec![wk.string, wk.number, wk.symbol]));
+    }
     if operand == wk.object {
         return Some(wk.never);
     }

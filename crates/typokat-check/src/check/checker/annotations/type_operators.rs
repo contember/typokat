@@ -448,9 +448,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// resolves it at a value-position demand (previously these collapsed to the
     /// permissive error type — a silent-false-negative generator).
     ///
-    /// Anything else — a primitive, a union, an array, a tuple — stays the **M20
-    /// out-of-scope error type** (no crash; the error type suppresses cascade), as
-    /// does an error/`any` operand.
+    /// `keyof any` is the property-key domain (`string | number | symbol`). Anything
+    /// else — a primitive, a union, an array, a tuple — stays the **M20 out-of-scope
+    /// error type** (no crash; the error type suppresses cascade), as does an error
+    /// operand.
     pub(super) fn keyof_type(&mut self, operand: TypeId) -> TypeId {
         // Reserved declaration objects are still empty during construction; demand
         // evaluates the node after atomic publication has filled their stable ids.
