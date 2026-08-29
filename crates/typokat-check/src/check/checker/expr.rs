@@ -1009,11 +1009,17 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 | BinaryOperator::StrictInequality
                 | BinaryOperator::Equality
                 | BinaryOperator::Inequality
-        ) && (type_contains_enum(self.interner.store(), left)
-            || type_contains_enum(self.interner.store(), right))
-            && crate::check::flow::enum_equality_overlap(self.interner.store(), left, right)
-                == crate::check::flow::EqualityOverlap::Never
-        {
+        ) && matches!(
+            crate::check::flow::enum_equality_overlap_query(
+                self.interner,
+                self.type_environment.published(),
+                &mut self.semantic_queries,
+                &mut self.next_type_param,
+                left,
+                right,
+            ),
+            DemandOutcome::Ready(crate::check::flow::EqualityOverlap::Never)
+        ) {
             let left = render_type(self.interner.store(), left, false);
             let right = render_type(self.interner.store(), right, false);
             self.emit_diagnostic(Diagnostic::comparison_has_no_overlap(span, &left, &right));
@@ -3450,10 +3456,12 @@ fn is_numeric_property_name(name: &str) -> bool {
     name.parse::<f64>().map(|n| n.is_finite()).unwrap_or(false)
 }
 
+#[cfg(test)]
 pub(in crate::check::checker) fn type_contains_enum(store: &Store, ty: TypeId) -> bool {
     type_contains_enum_inner(store, ty, &mut rustc_hash::FxHashSet::default())
 }
 
+#[cfg(test)]
 fn type_contains_enum_inner(
     store: &Store,
     ty: TypeId,

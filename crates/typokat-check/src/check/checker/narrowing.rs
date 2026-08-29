@@ -7,6 +7,7 @@ use super::statements::ReturnCheckPolicy;
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::SymbolId;
 use crate::check::flow::{NarrowOp, TypeofTag};
+use crate::class_semantics::DemandOutcome;
 use crate::diagnostics::Diagnostic;
 use crate::types::repr::LiteralValue;
 use crate::types::store::TypeId;
@@ -83,14 +84,17 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             if let Some(test) = &case.test {
                 let case_ty = self.infer_expr(switch_scope, test).map(|(ty, _)| ty);
                 if let (Some(discriminant_ty), Some(case_ty)) = (discriminant_ty, case_ty) {
-                    if (super::expr::type_contains_enum(self.interner.store(), discriminant_ty)
-                        || super::expr::type_contains_enum(self.interner.store(), case_ty))
-                        && crate::check::flow::enum_equality_overlap(
-                            self.interner.store(),
+                    if matches!(
+                        crate::check::flow::enum_equality_overlap_query(
+                            self.interner,
+                            self.type_environment.published(),
+                            &mut self.semantic_queries,
+                            &mut self.next_type_param,
                             discriminant_ty,
                             case_ty,
-                        ) == crate::check::flow::EqualityOverlap::Never
-                    {
+                        ),
+                        DemandOutcome::Ready(crate::check::flow::EqualityOverlap::Never)
+                    ) {
                         let case_display =
                             crate::diagnostics::render_type(self.interner.store(), case_ty, false);
                         let discriminant_display = crate::diagnostics::render_type(

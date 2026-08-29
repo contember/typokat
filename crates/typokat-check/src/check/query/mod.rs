@@ -1122,6 +1122,10 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         self.interner.store()
     }
 
+    pub(crate) fn intern_union(&mut self, members: Vec<TypeId>) -> TypeId {
+        self.interner.union(members)
+    }
+
     pub fn new(
         interner: &'a mut Interner,
         published: &'a L,

@@ -894,6 +894,119 @@ pub(crate) fn enum_equality_overlap(
     enum_equality_overlap_inner(store, left, right, &mut rustc_hash::FxHashSet::default())
 }
 
+pub(crate) fn enum_equality_overlap_query<L: PublishedClassLookup + ?Sized>(
+    interner: &mut Interner,
+    published: &L,
+    state: &mut SemanticQueryState,
+    next_type_param: &mut u32,
+    left: TypeId,
+    right: TypeId,
+) -> DemandOutcome<EqualityOverlap> {
+    state.savepoint();
+    let outcome = {
+        let mut coordinator =
+            SemanticQueryCoordinator::new(interner, published, state, next_type_param);
+        let mut active_parameters = rustc_hash::FxHashSet::default();
+        match demand_enum_overlap_operand(&mut coordinator, left, &mut active_parameters) {
+            DemandOutcome::Ready(left) => {
+                match demand_enum_overlap_operand(&mut coordinator, right, &mut active_parameters) {
+                    DemandOutcome::Ready(right) => DemandOutcome::Ready(
+                        if enum_overlap_type_contains_enum(coordinator.store(), left)
+                            || enum_overlap_type_contains_enum(coordinator.store(), right)
+                        {
+                            enum_equality_overlap(coordinator.store(), left, right)
+                        } else {
+                            EqualityOverlap::Maybe
+                        },
+                    ),
+                    DemandOutcome::Exhausted(exhaustion) => DemandOutcome::Exhausted(exhaustion),
+                }
+            }
+            DemandOutcome::Exhausted(exhaustion) => DemandOutcome::Exhausted(exhaustion),
+        }
+    };
+    if matches!(outcome, DemandOutcome::Ready(_)) {
+        state.commit();
+    } else {
+        state.rollback();
+    }
+    outcome
+}
+
+fn demand_enum_overlap_operand<L: PublishedClassLookup + ?Sized>(
+    coordinator: &mut SemanticQueryCoordinator<'_, L>,
+    root: TypeId,
+    active_parameters: &mut rustc_hash::FxHashSet<crate::types::repr::TypeParamId>,
+) -> DemandOutcome<TypeId> {
+    let current = match coordinator.demand(root) {
+        DemandOutcome::Ready(current) => current,
+        DemandOutcome::Exhausted(exhaustion) => {
+            return DemandOutcome::Exhausted(exhaustion);
+        }
+    };
+    if let Some(parameter) = coordinator
+        .store()
+        .type_param(current)
+        .map(|parameter| parameter.id)
+    {
+        if !active_parameters.insert(parameter) {
+            return DemandOutcome::Ready(current);
+        }
+        let constraint = coordinator.store().type_param_constraint(parameter);
+        let result = match constraint {
+            Some(constraint) => {
+                demand_enum_overlap_operand(coordinator, constraint, active_parameters)
+            }
+            None => DemandOutcome::Ready(current),
+        };
+        active_parameters.remove(&parameter);
+        return result;
+    }
+    let Some(members) = coordinator
+        .store()
+        .union_members(current)
+        .map(<[_]>::to_vec)
+    else {
+        return DemandOutcome::Ready(current);
+    };
+    let mut normalized = Vec::with_capacity(members.len());
+    for member in members {
+        match demand_enum_overlap_operand(coordinator, member, active_parameters) {
+            DemandOutcome::Ready(member) => normalized.push(member),
+            DemandOutcome::Exhausted(exhaustion) => {
+                return DemandOutcome::Exhausted(exhaustion);
+            }
+        }
+    }
+    DemandOutcome::Ready(coordinator.intern_union(normalized))
+}
+
+fn enum_overlap_type_contains_enum(store: &crate::types::store::Store, ty: TypeId) -> bool {
+    fn visit(
+        store: &crate::types::store::Store,
+        ty: TypeId,
+        seen: &mut rustc_hash::FxHashSet<crate::types::repr::TypeParamId>,
+    ) -> bool {
+        match store.tag(ty) {
+            TypeTag::Enum | TypeTag::EnumMember => true,
+            TypeTag::Union => store.union_members(ty).is_some_and(|members| {
+                members
+                    .iter()
+                    .any(|member| visit(store, *member, &mut seen.clone()))
+            }),
+            TypeTag::TypeParam => store.type_param(ty).is_some_and(|parameter| {
+                seen.insert(parameter.id)
+                    && store
+                        .type_param_constraint(parameter.id)
+                        .is_some_and(|constraint| visit(store, constraint, seen))
+            }),
+            _ => false,
+        }
+    }
+
+    visit(store, ty, &mut rustc_hash::FxHashSet::default())
+}
+
 fn enum_equality_overlap_inner(
     store: &crate::types::store::Store,
     left: TypeId,
