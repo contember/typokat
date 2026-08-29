@@ -3153,7 +3153,7 @@ fn bind_declarator_with_object_patterns(
                 DeclarationKind::Variable,
             );
         }
-    } else if !admit_flat_object {
+    } else {
         bind_syntax_only_pattern_values(
             state,
             scope,
