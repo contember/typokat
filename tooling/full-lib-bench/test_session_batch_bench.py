@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import copy
+from collections.abc import Callable
 from dataclasses import replace
 import hashlib
 import json
@@ -316,6 +317,285 @@ class SessionBatchContractTests(unittest.TestCase):
             one_frame, batch.oracle_panel(authority, 1), self.contract
         )
         self.assertEqual(verified.projects, 1)
+
+    def test_typokat_scoreboard_authority_preserves_ratchet_identities(self) -> None:
+        authority = batch.load_authenticated_batch_oracles(self.contract)
+        accepted_removal = {
+            "case_id": (
+                "conformance/classes/members/classTypes/"
+                "indexersInClassType.ts"
+            ),
+            "diagnostic": "15:2339",
+            "multiplicity": 1,
+        }
+        self.assertEqual(
+            self.contract["oracles"]["typokat_accepted_diagnostic_removals"],
+            [accepted_removal],
+        )
+        rows = authority["typokat_ratchet"]
+        indexers = next(
+            row
+            for row in rows
+            if row["case_id"].endswith("/indexersInClassType.ts")
+        )
+        self.assertEqual(
+            indexers,
+            {
+                "case_id": (
+                    "conformance/classes/members/classTypes/"
+                    "indexersInClassType.ts"
+                ),
+                "status": "OOS:unsupported",
+                "matched_diagnostics": [],
+                "false_positive_diagnostics": ["15:2339"],
+                "incompletes": [
+                    "class/class-index-signature/self",
+                    "class/class-index-signature/self",
+                ],
+            },
+        )
+        unresolved = {
+            row["case_id"]
+            for row in rows
+            if row["status"] == "OOS:unresolved"
+        }
+        self.assertEqual(
+            unresolved,
+            {
+                "conformance/types/intersection/intersectionWithUnionConstraint.ts",
+                "conformance/types/keyof/keyofAndIndexedAccessErrors.ts",
+                "conformance/types/literal/numericStringLiteralTypes.ts",
+                "conformance/types/tuple/wideningTuples2.ts",
+            },
+        )
+        normalized = {row["case_id"]: row for row in authority["typokat"]}
+        exact_tsgo = {row["case_id"]: row for row in authority["tsgo"]}
+        self.assertNotIn(
+            accepted_removal["diagnostic"],
+            exact_tsgo[accepted_removal["case_id"]]["diagnostics"],
+        )
+        newly_matched_case = (
+            "conformance/classes/members/accessibility/classPropertyAsPrivate.ts"
+        )
+        self.assertNotIn("2:2564", normalized[newly_matched_case]["diagnostics"])
+        self.assertIn("2:2564", exact_tsgo[newly_matched_case]["diagnostics"])
+        for row in rows:
+            semantic = normalized[row["case_id"]]
+            if row["status"] == "OOS:parse-error":
+                self.assertEqual(
+                    semantic,
+                    {
+                        "case_id": row["case_id"],
+                        "exit_code": 2,
+                        "parse_errors": ["parse-error"],
+                        "diagnostics": [],
+                        "incompletes": [],
+                    },
+                )
+            elif row["status"] == "OOS:unresolved":
+                self.assertEqual(
+                    semantic,
+                    {
+                        "case_id": row["case_id"],
+                        "exit_code": 3,
+                        "parse_errors": [],
+                        "diagnostics": [],
+                        "incompletes": ["unresolved"],
+                    },
+                )
+
+    def test_typokat_accepted_removal_contract_is_authenticated_and_canonical(
+        self,
+    ) -> None:
+        indexers = {
+            "case_id": (
+                "conformance/classes/members/classTypes/"
+                "indexersInClassType.ts"
+            ),
+            "diagnostic": "15:2339",
+            "multiplicity": 1,
+        }
+        second = {
+            "case_id": (
+                "conformance/classes/members/accessibility/"
+                "classPropertyAsPrivate.ts"
+            ),
+            "diagnostic": "21:2349",
+            "multiplicity": 1,
+        }
+        authenticate_contract_removals([indexers])
+        authenticate_contract_removals([second, indexers])
+
+        invalid = {
+            "unknown-case": [
+                {**indexers, "case_id": "conformance/not-a-real-case.ts"}
+            ],
+            "absent-token": [{**indexers, "diagnostic": "99:9999"}],
+            "matched-token": [
+                {
+                    **indexers,
+                    "case_id": second["case_id"],
+                    "diagnostic": "15:2341",
+                }
+            ],
+            "zero-multiplicity": [{**indexers, "multiplicity": 0}],
+            "excess-multiplicity": [{**indexers, "multiplicity": 2}],
+            "boolean-multiplicity": [{**indexers, "multiplicity": True}],
+            "duplicate": [indexers, indexers],
+            "noncanonical-order": [indexers, second],
+        }
+        for label, removals in invalid.items():
+            with self.subTest(label=label), self.assertRaises(
+                batch.BatchContractError
+            ):
+                authenticate_contract_removals(removals)
+
+    def test_typokat_panel_uses_scoreboard_ratchet_not_exact_equality(self) -> None:
+        authority = batch.load_authenticated_batch_oracles(self.contract)
+        expected = batch.oracle_panel(authority, 32)
+        base = raw_panel_evidence(32, 1.2, 100_000, 110_000)
+        apply_real_oracle(base, authority)
+        base["derived"]["typokat_accepted_progress"] = []
+        batch.recompute_panel(base, expected, self.contract)
+
+        matched_case = (
+            "conformance/classes/members/accessibility/"
+            "privateStaticMemberAccessibility.ts"
+        )
+        false_positive_case = (
+            "conformance/classes/members/classTypes/indexersInClassType.ts"
+        )
+
+        dropped_match = copy.deepcopy(base)
+        mutate_typokat_semantic(
+            dropped_match,
+            matched_case,
+            lambda semantic: semantic["diagnostics"].remove("6:2341"),
+        )
+        with self.assertRaises(batch.BatchContractError):
+            batch.recompute_panel(dropped_match, expected, self.contract)
+
+        new_false_positive_occurrence = copy.deepcopy(base)
+        mutate_typokat_semantic(
+            new_false_positive_occurrence,
+            false_positive_case,
+            lambda semantic: semantic["diagnostics"].append("15:2339"),
+        )
+        with self.assertRaises(batch.BatchContractError):
+            batch.recompute_panel(
+                new_false_positive_occurrence, expected, self.contract
+            )
+
+        new_false_positive = copy.deepcopy(base)
+        mutate_typokat_semantic(
+            new_false_positive,
+            false_positive_case,
+            lambda semantic: semantic["diagnostics"].append("99:9999"),
+        )
+        with self.assertRaises(batch.BatchContractError):
+            batch.recompute_panel(new_false_positive, expected, self.contract)
+
+        newly_matched = copy.deepcopy(base)
+        matched_progress_case = (
+            "conformance/classes/members/accessibility/classPropertyAsPrivate.ts"
+        )
+        mutate_typokat_semantic(
+            newly_matched,
+            matched_progress_case,
+            lambda semantic: semantic["diagnostics"].append("2:2564"),
+        )
+        with self.assertRaises(batch.BatchContractError):
+            batch.recompute_panel(newly_matched, expected, self.contract)
+
+        dropped_incomplete = copy.deepcopy(base)
+        mutate_typokat_semantic(
+            dropped_incomplete,
+            false_positive_case,
+            lambda semantic: semantic["incompletes"].pop(),
+        )
+        with self.assertRaises(batch.BatchContractError):
+            batch.recompute_panel(dropped_incomplete, expected, self.contract)
+
+        arbitrary_old_false_positive = copy.deepcopy(base)
+        arbitrary_case = (
+            "conformance/classes/members/accessibility/classPropertyAsPrivate.ts"
+        )
+        mutate_typokat_semantic(
+            arbitrary_old_false_positive,
+            arbitrary_case,
+            lambda semantic: semantic["diagnostics"].remove("21:2349"),
+        )
+        arbitrary_old_false_positive["derived"]["typokat_accepted_progress"] = [
+            {
+                "case_id": arbitrary_case,
+                "removed_false_positive_diagnostics": ["21:2349"],
+                "gained_incomplete_identities": [],
+            }
+        ]
+        with self.assertRaises(batch.BatchContractError):
+            batch.recompute_panel(
+                arbitrary_old_false_positive, expected, self.contract
+            )
+
+        accepted_progress = copy.deepcopy(base)
+        apply_accepted_typokat_progress(accepted_progress)
+        self.assertEqual(
+            accepted_progress["derived"]["typokat_accepted_progress"],
+            accepted_typokat_progress_receipt(),
+        )
+        batch.recompute_panel(accepted_progress, expected, self.contract)
+
+    def test_typokat_accepted_progress_is_recomputed_from_raw_rows(self) -> None:
+        authority = batch.load_authenticated_batch_oracles(self.contract)
+        expected = batch.oracle_panel(authority, 32)
+        case_id = "conformance/classes/members/classTypes/indexersInClassType.ts"
+        evidence = raw_panel_evidence(32, 1.2, 100_000, 110_000)
+        apply_real_oracle(evidence, authority)
+        apply_accepted_typokat_progress(evidence)
+
+        omitted = copy.deepcopy(evidence)
+        omitted["derived"].pop("typokat_accepted_progress")
+        with self.assertRaisesRegex(batch.BatchContractError, "accepted progress"):
+            batch.recompute_panel(omitted, expected, self.contract)
+
+        forged = copy.deepcopy(evidence)
+        forged["derived"]["typokat_accepted_progress"][1][
+            "removed_false_positive_diagnostics"
+        ] = ["99:9999"]
+        with self.assertRaisesRegex(batch.BatchContractError, "accepted progress"):
+            batch.recompute_panel(forged, expected, self.contract)
+
+        reordered_rows = copy.deepcopy(evidence)
+        reordered_rows["derived"]["typokat_accepted_progress"].reverse()
+        with self.assertRaisesRegex(batch.BatchContractError, "accepted progress"):
+            batch.recompute_panel(reordered_rows, expected, self.contract)
+
+        reordered_list = copy.deepcopy(evidence)
+        reordered_list["derived"]["typokat_accepted_progress"][0][
+            "gained_incomplete_identities"
+        ] = ["reviewed/z", "reviewed/a", "reviewed/a"]
+        with self.assertRaisesRegex(batch.BatchContractError, "accepted progress"):
+            batch.recompute_panel(reordered_list, expected, self.contract)
+
+        extra_field = copy.deepcopy(evidence)
+        extra_field["derived"]["typokat_accepted_progress"][0]["count"] = 3
+        with self.assertRaisesRegex(batch.BatchContractError, "accepted progress"):
+            batch.recompute_panel(extra_field, expected, self.contract)
+
+        nondeterministic = copy.deepcopy(evidence)
+        first_typokat = next(
+            sample
+            for sample in nondeterministic["samples"]
+            if sample["tool"] == "typokat"
+        )
+        frame = next(
+            frame for frame in first_typokat["frames"] if frame["case_id"] == case_id
+        )
+        frame["semantic"]["diagnostics"].append("15:2339")
+        refresh_frame_response(frame)
+        refresh_sample_streams(first_typokat)
+        with self.assertRaisesRegex(batch.BatchContractError, "nondeterministic"):
+            batch.recompute_panel(nondeterministic, expected, self.contract)
 
     def test_exact_flags_tsgo_artifact_authenticates_every_raw_cold_invocation(self) -> None:
         exact = batch.load_authenticated_exact_flags_tsgo_oracle(self.contract)
@@ -1682,9 +1962,9 @@ def apply_real_oracle(evidence: dict[str, object], authority: dict[str, object])
             oracle = authority[sample["tool"]][ordinal]
             source = authority["frames"][ordinal]["source"]
             frame["case_id"] = oracle["case_id"]
-            frame["semantic"] = {
-                key: value for key, value in oracle.items() if key != "case_id"
-            }
+            frame["semantic"] = copy.deepcopy(
+                {key: value for key, value in oracle.items() if key != "case_id"}
+            )
             if sample["tool"] == "typokat" and frame["semantic"]["parse_errors"]:
                 frame.update(
                     lifecycle_disposition="parse-rejected",
@@ -1712,6 +1992,123 @@ def apply_real_oracle(evidence: dict[str, object], authority: dict[str, object])
                 frame["raw_response"].encode()
             ).hexdigest()
         refresh_sample_streams(sample)
+
+
+def mutate_typokat_semantic(
+    evidence: dict[str, object],
+    case_id: str,
+    mutation: Callable[[dict[str, object]], None],
+) -> None:
+    matched = 0
+    for sample in evidence["samples"]:
+        if sample["tool"] != "typokat":
+            continue
+        frame = next(
+            frame for frame in sample["frames"] if frame["case_id"] == case_id
+        )
+        mutation(frame["semantic"])
+        frame["semantic"]["diagnostics"].sort(
+            key=lambda item: tuple(map(int, item.split(":")))
+        )
+        frame["semantic"]["incompletes"].sort()
+        refresh_frame_response(frame)
+        refresh_sample_streams(sample)
+        matched += 1
+    if matched != 30:
+        raise AssertionError(f"expected 30 typokat samples, got {matched}")
+
+
+def accepted_typokat_progress_receipt() -> list[dict[str, object]]:
+    return [
+        {
+            "case_id": (
+                "conformance/classes/members/accessibility/"
+                "privateStaticMemberAccessibility.ts"
+            ),
+            "removed_false_positive_diagnostics": [],
+            "gained_incomplete_identities": [
+                "reviewed/a",
+                "reviewed/a",
+                "reviewed/z",
+            ],
+        },
+        {
+            "case_id": (
+                "conformance/classes/members/classTypes/"
+                "indexersInClassType.ts"
+            ),
+            "removed_false_positive_diagnostics": ["15:2339"],
+            "gained_incomplete_identities": ["reviewed/b"],
+        },
+    ]
+
+
+def apply_accepted_typokat_progress(evidence: dict[str, object]) -> None:
+    mutate_typokat_semantic(
+        evidence,
+        (
+            "conformance/classes/members/accessibility/"
+            "privateStaticMemberAccessibility.ts"
+        ),
+        lambda semantic: semantic["incompletes"].extend(
+            ["reviewed/z", "reviewed/a", "reviewed/a"]
+        ),
+    )
+    mutate_typokat_semantic(
+        evidence,
+        "conformance/classes/members/classTypes/indexersInClassType.ts",
+        lambda semantic: (
+            semantic["diagnostics"].remove("15:2339"),
+            semantic["incompletes"].append("reviewed/b"),
+        ),
+    )
+    evidence["derived"]["typokat_accepted_progress"] = (
+        accepted_typokat_progress_receipt()
+    )
+
+
+def authenticate_contract_removals(removals: list[dict[str, object]]) -> None:
+    source = (HERE / "session_batch_contract.toml").read_text()
+    marker = "[[oracles.typokat_accepted_diagnostic_removals]]"
+    start = source.index(marker)
+    end = source.index("\n[current_typokat_baseline]", start)
+    blocks = []
+    for removal in removals:
+        multiplicity = removal["multiplicity"]
+        if type(multiplicity) is bool:
+            rendered_multiplicity = "true" if multiplicity else "false"
+        else:
+            rendered_multiplicity = str(multiplicity)
+        blocks.append(
+            "\n".join(
+                [
+                    marker,
+                    f"case_id = {json.dumps(removal['case_id'])}",
+                    f"diagnostic = {json.dumps(removal['diagnostic'])}",
+                    f"multiplicity = {rendered_multiplicity}",
+                ]
+            )
+        )
+    candidate = source[:start] + "\n\n".join(blocks) + source[end:]
+    with tempfile.TemporaryDirectory() as temporary:
+        path = Path(temporary) / "session_batch_contract.toml"
+        path.write_text(candidate)
+        contract = batch.verify_contract(path)
+        batch.load_authenticated_batch_oracles(contract)
+
+
+def refresh_frame_response(frame: dict[str, object]) -> None:
+    response_source = {
+        key: value
+        for key, value in frame.items()
+        if key not in {"raw_request", "raw_response", "raw_response_sha256"}
+    }
+    frame["raw_response"] = json.dumps(
+        response_source, sort_keys=True, separators=(",", ":")
+    )
+    frame["raw_response_sha256"] = hashlib.sha256(
+        frame["raw_response"].encode()
+    ).hexdigest()
 
 
 def refresh_sample_streams(sample: dict[str, object]) -> None:

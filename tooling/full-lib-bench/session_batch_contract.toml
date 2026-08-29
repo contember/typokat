@@ -53,6 +53,11 @@ tsc_tsgo_first_mismatch_case_id = "conformance/classes/members/privateNames/priv
 tsc_tsgo_first_mismatch_source_sha256 = "1932666cae238490328c1a3e1535c90ebd061f22a9f567efdede116566201a2f"
 require_cold_cross_tool_agreement = true
 
+[[oracles.typokat_accepted_diagnostic_removals]]
+case_id = "conformance/classes/members/classTypes/indexersInClassType.ts"
+diagnostic = "15:2339"
+multiplicity = 1
+
 [current_typokat_baseline]
 artifact_relative_path = "docs/archive/project-local-library-index-feasibility-2026-08-22/lifecycle-baseline.json"
 artifact_sha256 = "950d5d7b38da7e7b5a0bc87da7ed423968b151ebf731c451021216c1d1880a18"
