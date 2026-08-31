@@ -328,6 +328,16 @@ fn project_local_native_relation_context_reaches_every_relation_boundary() {
              function convert(value: Boolean): boolean { return true; }\n",
         ),
         (
+            "project-local-native-flow-relation",
+            "type Item =\n\
+               | { kind: { length: number }; value: string }\n\
+               | { kind: number; other: string };\n\
+             function inspect(item: Item) {\n\
+               if (item.kind === \"x\") return item.value;\n\
+               return \"\";\n\
+             }\n",
+        ),
+        (
             "project-local-native-multi-demand-relation",
             "interface BooleanSource { value: boolean }\n\
              interface BooleanTarget { value: Boolean }\n\
