@@ -305,7 +305,7 @@ fn normalized_semantic(
         .map(|incomplete| incomplete.id.clone())
         .collect::<Vec<_>>();
     incompletes.sort();
-    if !incompletes.is_empty() && SCOREBOARD_UNRESOLVED_CASES.contains(&case_id) {
+    if parse_errors.is_empty() && SCOREBOARD_UNRESOLVED_CASES.contains(&case_id) {
         diagnostics.clear();
         incompletes = vec!["unresolved".to_owned()];
     }
