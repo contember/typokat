@@ -638,7 +638,11 @@ where
         match resolution {
             SurfaceNameResolution::Direct(ty) => {
                 if explicit.is_empty() {
-                    Ok(ty)
+                    Ok(if self.factory.store().tag(ty) == TypeTag::AliasTemplate {
+                        self.factory.intern_instantiation(ty, Vec::new())
+                    } else {
+                        ty
+                    })
                 } else {
                     Err(reference_exhaustion(
                         name,
@@ -1779,6 +1783,25 @@ mod tests {
             let stored = factory.store().class_instance_type(application).unwrap();
             assert_eq!(stored.class, ClassId(1));
             assert_eq!(stored.args, [factory.well_known().number]);
+        });
+    }
+
+    #[test]
+    fn direct_zero_argument_alias_reference_is_instantiated() {
+        with_alias_type("type X = State;", |annotation| {
+            let mut interner = Interner::with_intrinsics();
+            let (_, template) = interner.reserve_alias_template("State".to_string());
+            let mut resolver = Resolver::default();
+            resolver
+                .names
+                .insert("State".to_string(), SurfaceNameResolution::Direct(template));
+            let mut factory = SurfaceTypeFactory::new(&mut interner);
+            let mut lowerer = TypeSyntaxLowerer::new(&mut factory, &mut resolver);
+
+            let ty = lowerer.lower(annotation).unwrap();
+            let instantiation = factory.store().instantiation_type(ty).unwrap();
+            assert_eq!(instantiation.base, template);
+            assert!(instantiation.args.is_empty());
         });
     }
 
