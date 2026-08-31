@@ -1383,12 +1383,21 @@ impl<'a> Relater<'a> {
         if self.store.tag(src) == TypeTag::Mapped {
             return Relation::No(ReasonChain::leaf(src, tgt));
         }
-        // M28 — a **deferred `keyof`** source (`keyof T` over a free parameter) that did
-        // not evaluate relates conservatively: nothing in either direction but an
-        // identical node (the fast path) — mirroring the deferred mapped/conditional
-        // model (sprint WU2 item 1: no permissive fallback anywhere).
+        // A deferred `keyof T` has one certified upper bound even before `T` resolves:
+        // every possible key is a string, number, or symbol. Keep every narrower target
+        // conservative; an identical node was already accepted by the fast path.
         if self.store.tag(src) == TypeTag::Keyof {
-            return Relation::No(ReasonChain::leaf(src, tgt));
+            let is_property_key_domain = self.store.union_members(tgt).is_some_and(|members| {
+                members.len() == 3
+                    && [wk.string, wk.number, wk.symbol]
+                        .iter()
+                        .all(|member| members.contains(member))
+            });
+            return if is_property_key_domain {
+                Relation::Yes
+            } else {
+                Relation::No(ReasonChain::leaf(src, tgt))
+            };
         }
 
         // Enum identity and primitive facts are native relation rules. This precedes

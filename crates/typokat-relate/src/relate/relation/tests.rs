@@ -845,6 +845,32 @@ fn canonical_object_number_index_never_falls_back_past_an_active_binder_constrai
     }
 }
 
+#[test]
+fn deferred_keyof_relates_to_the_complete_property_key_domain_only() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let parameter = interner.intern_type_param(TypeParamId(91_014), "T");
+    let deferred_keyof = interner.intern_keyof(parameter);
+    let string_or_number = interner.union(vec![wk.string, wk.number]);
+    let string_or_symbol = interner.union(vec![wk.string, wk.symbol]);
+    let number_or_symbol = interner.union(vec![wk.number, wk.symbol]);
+    let property_key = interner.union(vec![wk.symbol, wk.string, wk.number]);
+    let mut relater = Relater::new(interner.store(), wk);
+
+    assert!(relater.is_assignable(deferred_keyof, property_key).is_yes());
+    for narrower in [
+        wk.string,
+        wk.number,
+        wk.symbol,
+        string_or_number,
+        string_or_symbol,
+        number_or_symbol,
+    ] {
+        assert!(!relater.is_assignable(deferred_keyof, narrower).is_yes());
+    }
+    assert!(!relater.is_assignable(property_key, deferred_keyof).is_yes());
+}
+
 fn measure_repeated_contextual_payload(width: usize, reverse: bool) -> RelationMeasure {
     use crate::types::repr::GenericTypeParam;
 
