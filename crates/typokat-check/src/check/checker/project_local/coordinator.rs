@@ -74,6 +74,7 @@ pub(super) struct ProjectLocalPassDemandGateway<'a, Commit> {
     augmented_groups: &'a BTreeMap<usize, TypeGroupId>,
     native_array_groups: [Option<usize>; 2],
     type_products: BTreeMap<TypeGroupId, usize>,
+    user_type_products: &'a BTreeMap<TypeGroupId, Vec<usize>>,
     value_products: BTreeMap<usize, usize>,
     commit: Commit,
 }
@@ -84,6 +85,7 @@ impl<'a, Commit> ProjectLocalPassDemandGateway<'a, Commit> {
         product: &'a LibraryDeclarationProduct,
         augmented_groups: &'a BTreeMap<usize, TypeGroupId>,
         native_array_groups: [Option<usize>; 2],
+        user_type_products: &'a BTreeMap<TypeGroupId, Vec<usize>>,
         commit: Commit,
     ) -> Self {
         let type_products = coordinator
@@ -114,6 +116,7 @@ impl<'a, Commit> ProjectLocalPassDemandGateway<'a, Commit> {
             augmented_groups,
             native_array_groups,
             type_products,
+            user_type_products,
             value_products,
             commit,
         }
@@ -124,6 +127,7 @@ impl<'a, Commit> ProjectLocalPassDemandGateway<'a, Commit> {
         product: &'a LibraryDeclarationProduct,
         augmented_groups: &'a BTreeMap<usize, TypeGroupId>,
         native_array_groups: [Option<usize>; 2],
+        user_type_products: &'a BTreeMap<TypeGroupId, Vec<usize>>,
         commit: Commit,
     ) -> Self {
         Self::new_inner(
@@ -131,6 +135,7 @@ impl<'a, Commit> ProjectLocalPassDemandGateway<'a, Commit> {
             product,
             augmented_groups,
             native_array_groups,
+            user_type_products,
             commit,
         )
     }
@@ -143,23 +148,30 @@ where
     fn demand(
         &mut self,
         interner: &mut super::project_local_pass_port::Interner,
-        product_group: usize,
+        product_groups: &[usize],
     ) -> Result<ProjectLocalDemandSnapshot, &'static str> {
-        if self.coordinator.session.cache().contains(product_group) {
-            self.verify_requested_ready(product_group)?;
+        if product_groups
+            .iter()
+            .all(|group| self.coordinator.session.cache().contains(*group))
+        {
+            for group in product_groups {
+                self.verify_requested_ready(*group)?;
+            }
             return self.snapshot();
         }
         self.coordinator.demand_product_groups_with_interner(
             self.product,
             interner,
-            &[product_group],
+            product_groups,
             self.augmented_groups,
             self.native_array_groups,
             #[cfg(any(test, feature = "test-utils"))]
             ProjectLocalSemanticPhaseForTest::Ordinary,
         );
         (self.commit)(self.coordinator)?;
-        self.verify_requested_ready(product_group)?;
+        for group in product_groups {
+            self.verify_requested_ready(*group)?;
+        }
         self.snapshot()
     }
 
@@ -281,15 +293,13 @@ where
         interner: &mut super::project_local_pass_port::Interner,
         group: TypeGroupId,
     ) -> Result<ProjectLocalDemandSnapshot, &'static str> {
-        let Some(product_group) = self.type_products.get(&group).copied() else {
-            return Ok(ProjectLocalDemandSnapshot {
-                aliases: PublishedAliases::empty(),
-                type_terminals: Vec::new(),
-                value_types: Vec::new(),
-                namespace_seeds: Vec::new(),
-            });
+        if let Some(product_group) = self.type_products.get(&group).copied() {
+            return self.demand(interner, &[product_group]);
+        }
+        let Some(product_groups) = self.user_type_products.get(&group).cloned() else {
+            return Ok(empty_demand_snapshot());
         };
-        self.demand(interner, product_group)
+        self.demand(interner, &product_groups)
     }
 
     fn demand_value(
@@ -298,19 +308,23 @@ where
         storage: ValueStorageId,
     ) -> Result<ProjectLocalDemandSnapshot, &'static str> {
         let Some(product_group) = self.value_products.get(&storage.index()).copied() else {
-            return Ok(ProjectLocalDemandSnapshot {
-                aliases: PublishedAliases::empty(),
-                type_terminals: Vec::new(),
-                value_types: Vec::new(),
-                namespace_seeds: Vec::new(),
-            });
+            return Ok(empty_demand_snapshot());
         };
-        self.demand(interner, product_group)
+        self.demand(interner, &[product_group])
     }
 
     fn commit_staged(&mut self) -> Result<ProjectLocalDemandSnapshot, &'static str> {
         (self.commit)(self.coordinator)?;
         self.snapshot()
+    }
+}
+
+fn empty_demand_snapshot() -> ProjectLocalDemandSnapshot {
+    ProjectLocalDemandSnapshot {
+        aliases: PublishedAliases::empty(),
+        type_terminals: Vec::new(),
+        value_types: Vec::new(),
+        namespace_seeds: Vec::new(),
     }
 }
 

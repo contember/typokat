@@ -133,11 +133,16 @@ pub(super) fn project_local_user_augmented_product_groups(
         .collect()
 }
 
-pub(in crate::check::checker) fn project_local_final_product_dependencies(
+pub(super) struct ProjectLocalFinalTypeDependencies {
+    pub(super) product: Vec<(usize, usize)>,
+    pub(super) user_products: BTreeMap<TypeGroupId, Vec<usize>>,
+}
+
+pub(super) fn project_local_final_type_dependencies(
     product: &LibraryDeclarationProduct,
     bound: &BoundProjectBinder,
     programs: &[ProjectProgram<'_>],
-) -> Result<Vec<(usize, usize)>, &'static str> {
+) -> Result<ProjectLocalFinalTypeDependencies, &'static str> {
     let map = bound
         .library_product_map_for_test()
         .ok_or("project-local binder has no immutable-product identity map")?;
@@ -183,13 +188,37 @@ pub(in crate::check::checker) fn project_local_final_product_dependencies(
             Some((map.group(key)?.symbol(), index))
         })
         .collect::<FxHashMap<_, _>>();
-    let mut rows = dependencies
-        .into_iter()
-        .filter_map(|(owner, target)| Some((*symbols.get(&owner)?, *symbols.get(&target)?)))
-        .collect::<Vec<_>>();
-    rows.sort_unstable();
-    rows.dedup();
-    Ok(rows)
+    let mut product_dependencies = Vec::new();
+    let mut user_products = BTreeMap::<TypeGroupId, Vec<usize>>::new();
+    for (owner, target) in dependencies {
+        let Some(target) = symbols.get(&target).copied() else {
+            continue;
+        };
+        if let Some(owner) = symbols.get(&owner).copied() {
+            product_dependencies.push((owner, target));
+        } else if let Some(group) = bound.binder.symbols.get(owner).and_then(|symbol| symbol.ty) {
+            user_products.entry(group).or_default().push(target);
+        }
+    }
+    product_dependencies.sort_unstable();
+    product_dependencies.dedup();
+    for targets in user_products.values_mut() {
+        targets.sort_unstable();
+        targets.dedup();
+    }
+    Ok(ProjectLocalFinalTypeDependencies {
+        product: product_dependencies,
+        user_products,
+    })
+}
+
+#[cfg(test)]
+pub(in crate::check::checker) fn project_local_final_product_dependencies(
+    product: &LibraryDeclarationProduct,
+    bound: &BoundProjectBinder,
+    programs: &[ProjectProgram<'_>],
+) -> Result<Vec<(usize, usize)>, &'static str> {
+    Ok(project_local_final_type_dependencies(product, bound, programs)?.product)
 }
 
 #[cfg(any(test, feature = "test-utils"))]

@@ -12,11 +12,11 @@ use super::lowerer::{build_semantic_probes, SemanticProbeInput};
 #[cfg(any(test, feature = "test-utils"))]
 use super::observation::ProjectLocalSemanticPhaseForTest;
 use super::project_local_pass_port::{
-    project_local_final_product_dependencies, project_local_published_types,
+    project_local_final_type_dependencies, project_local_published_types,
     project_local_user_augmented_product_groups, run_project_local_user_pass, BoundProjectBinder,
     CheckResult, ContainerKind, LibraryBinderUnit, LibraryDeclarationProduct, NamespaceId,
-    ProjectLocalNamespaceSeed, ProjectLocalPublishedTypeInputs, ProjectLocalUserPassOutput,
-    ProjectLocalUserPassRequest, ProjectProgram, TypeGroupId,
+    ProjectLocalFinalTypeDependencies, ProjectLocalNamespaceSeed, ProjectLocalPublishedTypeInputs,
+    ProjectLocalUserPassOutput, ProjectLocalUserPassRequest, ProjectProgram, TypeGroupId,
 };
 #[cfg(any(test, feature = "test-utils"))]
 use super::project_local_pass_port::{
@@ -171,6 +171,7 @@ struct PreparedProjectLocalExecution<'run, 'ast> {
     library_identity_groups: [Option<TypeGroupId>; 8],
     native_array_groups: [Option<usize>; 2],
     augmented_product_groups: std::collections::BTreeMap<usize, TypeGroupId>,
+    user_product_dependencies: std::collections::BTreeMap<TypeGroupId, Vec<usize>>,
     #[cfg(any(test, feature = "test-utils"))]
     ordinary_demand_root_keys: Vec<usize>,
     ordinary_validation_keys: Vec<usize>,
@@ -201,8 +202,7 @@ fn prepare_ordinary_project_local_execution<'run, 'ast>(
     let mapped_groups = mapped_product_groups(product, &bound)?;
     let coordinator =
         ProjectLocalSemanticCoordinator::new_ordinary(product, mapped_groups, Rc::clone(&session));
-    let final_product_dependencies =
-        final_product_dependencies(product, &bound, programs, coordinator.mapped_groups())?;
+    let final_type_dependencies = final_type_dependencies(product, &bound, programs)?;
     #[cfg(not(any(test, feature = "test-utils")))]
     let _ = library_units;
     prepare_project_local_execution(
@@ -215,7 +215,7 @@ fn prepare_ordinary_project_local_execution<'run, 'ast>(
         },
         session,
         coordinator,
-        final_product_dependencies,
+        final_type_dependencies,
         no_additional_product_demands,
         ProjectLocalSemanticCoordinator::commit_demanded_checked,
     )
@@ -258,10 +258,13 @@ fn prepare_project_local_execution_for_test<'run, 'ast>(
                 )
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let final_product_dependencies = if force_all {
-        Vec::new()
+    let final_type_dependencies = if force_all {
+        ProjectLocalFinalTypeDependencies {
+            product: Vec::new(),
+            user_products: std::collections::BTreeMap::new(),
+        }
     } else {
-        final_product_dependencies(product, &bound, programs, coordinator.mapped_groups())?
+        final_type_dependencies(product, &bound, programs)?
     };
     let prepared = prepare_project_local_execution(
         ProjectLocalExecutionInputs {
@@ -272,7 +275,7 @@ fn prepare_project_local_execution_for_test<'run, 'ast>(
         },
         session,
         coordinator,
-        final_product_dependencies,
+        final_type_dependencies,
         move |coordinator, product, augmented_product_groups, native_array_groups| {
             if requested_product_keys.is_empty() {
                 return Ok(());
@@ -295,18 +298,12 @@ fn prepare_project_local_execution_for_test<'run, 'ast>(
     })
 }
 
-fn final_product_dependencies(
+fn final_type_dependencies(
     product: &LibraryDeclarationProduct,
     bound: &BoundProjectBinder,
     programs: &[ProjectProgram<'_>],
-    mapped_groups: &[ProjectLocalMappedProductGroupForTest],
-) -> Result<Vec<(usize, usize)>, ProjectLocalCandidateErrorForTest> {
-    let augmented_product_groups =
-        project_local_user_augmented_product_groups(bound, mapped_groups);
-    if augmented_product_groups.is_empty() {
-        return Ok(Vec::new());
-    }
-    project_local_final_product_dependencies(product, bound, programs)
+) -> Result<ProjectLocalFinalTypeDependencies, ProjectLocalCandidateErrorForTest> {
+    project_local_final_type_dependencies(product, bound, programs)
         .map_err(ProjectLocalCandidateErrorForTest::UserPass)
 }
 
@@ -371,7 +368,7 @@ fn prepare_project_local_execution<'run, 'ast, Demand, Commit>(
     inputs: ProjectLocalExecutionInputs<'run, 'ast>,
     session: Rc<SessionCore>,
     mut coordinator: ProjectLocalSemanticCoordinator,
-    final_product_dependencies: Vec<(usize, usize)>,
+    final_type_dependencies: ProjectLocalFinalTypeDependencies,
     mut demand: Demand,
     mut commit: Commit,
 ) -> Result<PreparedProjectLocalExecution<'run, 'ast>, ProjectLocalCandidateErrorForTest>
@@ -443,7 +440,7 @@ where
     let ordinary_demand_root_keys = coordinator.demand_roots().to_vec();
     let ordinary_validation_closure = coordinator.validation_owner_closure(
         augmented_product_groups.keys().copied(),
-        &final_product_dependencies,
+        &final_type_dependencies.product,
     );
     let _ = coordinator.demand_product_groups(
         product,
@@ -468,6 +465,7 @@ where
         library_identity_groups,
         native_array_groups,
         augmented_product_groups,
+        user_product_dependencies: final_type_dependencies.user_products,
         #[cfg(any(test, feature = "test-utils"))]
         ordinary_demand_root_keys,
         ordinary_validation_keys,
@@ -534,6 +532,7 @@ fn run_ordinary_project_local_user_pass(
         &prepared.session,
         &mut prepared.coordinator,
         &prepared.augmented_product_groups,
+        &prepared.user_product_dependencies,
         prepared.native_array_groups,
         bound,
         prepared.library_identity_groups,
@@ -552,6 +551,7 @@ fn run_project_local_user_pass_core<'ast, Commit, Run>(
     session: &Rc<SessionCore>,
     coordinator: &mut ProjectLocalSemanticCoordinator,
     augmented_product_groups: &std::collections::BTreeMap<usize, TypeGroupId>,
+    user_product_dependencies: &std::collections::BTreeMap<TypeGroupId, Vec<usize>>,
     native_array_groups: [Option<usize>; 2],
     bound: BoundProjectBinder,
     library_identity_groups: [Option<TypeGroupId>; 8],
@@ -638,6 +638,7 @@ where
                 product,
                 augmented_product_groups,
                 native_array_groups,
+                user_product_dependencies,
                 commit,
             );
             run(
@@ -736,6 +737,7 @@ fn run_project_local_semantic_candidate(
         library_identity_groups,
         native_array_groups,
         augmented_product_groups,
+        user_product_dependencies,
         ordinary_demand_root_keys,
         ordinary_validation_keys,
         ordinary_materialized_keys,
@@ -816,6 +818,7 @@ fn run_project_local_semantic_candidate(
         &session,
         &mut coordinator,
         &augmented_product_groups,
+        &user_product_dependencies,
         native_array_groups,
         bound,
         library_identity_groups,

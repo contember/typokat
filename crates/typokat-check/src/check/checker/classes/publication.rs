@@ -863,7 +863,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     where
         Ticket: Ord,
     {
-        let prepared_interface_groups = self.prepare_class_interface_groups();
         let class_groups: Vec<crate::binder::declaration::TypeGroupId> = self
             .type_decls
             .changed_entries()
@@ -875,6 +874,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 )
             })
             .collect();
+        #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
+        for group in &class_groups {
+            let _ = self.demand_project_local_type_group(*group);
+        }
+        let prepared_interface_groups = self.prepare_class_interface_groups();
         for group in &class_groups {
             self.begin_type_group_construction(*group);
         }
