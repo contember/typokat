@@ -5702,6 +5702,8 @@ pub(in crate::check::checker) fn check_bound_project_local_programs<'a, 'ast>(
     );
     pass.project_local_demand_gateway = Some(demand_gateway);
     pass.project_local_library_identity_groups = Some(library_identity_groups);
+    pass.semantic_queries
+        .set_native_identity_availability(library_identity_groups.map(|group| group.is_some()));
     pass.install_project_local_type_environment_base(published_types);
     pass.global_object_type = Some(project_local_global_object);
     pass.terminalize_unavailable_type_groups();
@@ -7292,8 +7294,7 @@ fn evaluate_assign_obligation<Ticket: Copy + PartialEq + UserReportingOwner>(
     effects: &mut CheckerEffects<Ticket>,
     obligation: &AssignObligation,
 ) -> bool {
-    let outcome =
-        pass.with_semantic_query(|query| query.is_assignable(obligation.src, obligation.tgt));
+    let outcome = pass.is_assignable(obligation.src, obligation.tgt);
     match outcome {
         RelationOutcome::Yes => true,
         RelationOutcome::No(chain) => {
@@ -7415,9 +7416,7 @@ fn finish_semantic_effects<Ticket: Copy + PartialEq + UserReportingOwner>(
                     DemandOutcome::Exhausted(exhaustion) => Err(exhaustion),
                 }
             } else {
-                match pass
-                    .with_semantic_query(|query| query.is_assignable(check.source, check.target))
-                {
+                match pass.is_assignable(check.source, check.target) {
                     RelationOutcome::Yes => Ok(false),
                     RelationOutcome::No(_) => Ok(true),
                     RelationOutcome::Exhausted(exhaustion) => Err(exhaustion),
@@ -7484,15 +7483,13 @@ fn finish_semantic_effects<Ticket: Copy + PartialEq + UserReportingOwner>(
                     evaluate_satisfies_check(pass, &mut effects, &obligation.root);
                 }
                 DeferredRelationObligation::AssertionCompatibility(obligation) => {
-                    let source_to_asserted = pass.with_semantic_query(|query| {
-                        query.is_assignable(obligation.source, obligation.asserted)
-                    });
+                    let source_to_asserted =
+                        pass.is_assignable(obligation.source, obligation.asserted);
                     if matches!(&source_to_asserted, RelationOutcome::Yes) {
                         continue;
                     }
-                    let asserted_to_source = pass.with_semantic_query(|query| {
-                        query.is_assignable(obligation.asserted, obligation.source)
-                    });
+                    let asserted_to_source =
+                        pass.is_assignable(obligation.asserted, obligation.source);
                     if matches!(&asserted_to_source, RelationOutcome::Yes) {
                         continue;
                     }
@@ -7537,17 +7534,16 @@ fn finish_semantic_effects<Ticket: Copy + PartialEq + UserReportingOwner>(
             let _replay_scope =
                 owner.and_then(|owner| pass.replay_trace.as_ref().map(|trace| trace.scope(owner)));
             if check.base_is_method {
-                let strict = pass
-                    .with_semantic_query(|query| query.is_assignable(check.own_ty, check.base_ty));
+                let strict = pass.is_assignable(check.own_ty, check.base_ty);
                 let (compatible, exhaustion) = match strict {
                     RelationOutcome::Yes => (true, None),
-                    RelationOutcome::No(_) => match pass.with_semantic_query(|query| {
-                        query.overload_implementation_compatible(check.own_ty, check.base_ty)
-                    }) {
-                        RelationOutcome::Yes => (true, None),
-                        RelationOutcome::No(_) => (false, None),
-                        RelationOutcome::Exhausted(exhaustion) => (false, Some(exhaustion)),
-                    },
+                    RelationOutcome::No(_) => {
+                        match pass.overload_implementation_compatible(check.own_ty, check.base_ty) {
+                            RelationOutcome::Yes => (true, None),
+                            RelationOutcome::No(_) => (false, None),
+                            RelationOutcome::Exhausted(exhaustion) => (false, Some(exhaustion)),
+                        }
+                    }
                     RelationOutcome::Exhausted(exhaustion) => (false, Some(exhaustion)),
                 };
                 if matches!(exhaustion, Some(Exhaustion::ClassProjectionBudget)) {
@@ -7571,8 +7567,7 @@ fn finish_semantic_effects<Ticket: Copy + PartialEq + UserReportingOwner>(
                         ));
                 }
             } else {
-                let outcome = pass
-                    .with_semantic_query(|query| query.is_assignable(check.own_ty, check.base_ty));
+                let outcome = pass.is_assignable(check.own_ty, check.base_ty);
                 match outcome {
                     RelationOutcome::Yes => {}
                     RelationOutcome::No(chain) => {
@@ -8202,6 +8197,88 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
             &mut self.next_type_param,
         );
         run(&mut coordinator)
+    }
+
+    /// Relate two types after publishing the exact native surfaces the relation can observe.
+    pub(in crate::check::checker) fn is_assignable(
+        &mut self,
+        source: TypeId,
+        target: TypeId,
+    ) -> RelationOutcome {
+        match self.retry_native_identity_demands(|pass| {
+            pass.with_semantic_query(|query| query.is_assignable_attempt(source, target))
+        }) {
+            Ok(outcome) => outcome,
+            Err(()) => RelationOutcome::Exhausted(Exhaustion::EvaluationInvalidNode { ty: source }),
+        }
+    }
+
+    pub(in crate::check::checker) fn overload_implementation_compatible(
+        &mut self,
+        overload: TypeId,
+        implementation: TypeId,
+    ) -> RelationOutcome {
+        match self.retry_native_identity_demands(|pass| {
+            pass.with_semantic_query(|query| {
+                query.overload_implementation_compatible_attempt(overload, implementation)
+            })
+        }) {
+            Ok(outcome) => outcome,
+            Err(()) => {
+                RelationOutcome::Exhausted(Exhaustion::EvaluationInvalidNode { ty: overload })
+            }
+        }
+    }
+
+    fn retry_native_identity_demands<T>(
+        &mut self,
+        mut attempt: impl FnMut(&mut Self) -> crate::check::query::SemanticQueryAttempt<T>,
+    ) -> Result<T, ()> {
+        let mut fulfilled = [false; 8];
+        loop {
+            match attempt(self) {
+                crate::check::query::SemanticQueryAttempt::Complete(outcome) => return Ok(outcome),
+                crate::check::query::SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+                    if !self.materialize_native_identity_demands(demands, &mut fulfilled) {
+                        return Err(());
+                    }
+                }
+            }
+        }
+    }
+
+    fn materialize_native_identity_demands(
+        &mut self,
+        demands: Vec<crate::check::query::NativeIdentityDemand>,
+        fulfilled: &mut [bool; 8],
+    ) -> bool {
+        #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
+        {
+            if self.project_local_demand_gateway.is_none() {
+                return false;
+            }
+            let mut batch = [false; 8];
+            let mut progressed = false;
+            for demand in demands {
+                let Some(batch_slot) = batch.get_mut(demand.identity) else {
+                    return false;
+                };
+                if std::mem::replace(batch_slot, true) || fulfilled[demand.identity] {
+                    continue;
+                }
+                if !self.demand_project_local_library_identity(demand.identity) {
+                    return false;
+                }
+                fulfilled[demand.identity] = true;
+                progressed = true;
+            }
+            progressed
+        }
+        #[cfg(not(any(test, feature = "test-utils", feature = "session-bench")))]
+        {
+            let _ = (demands, fulfilled);
+            false
+        }
     }
 
     /// Run one lexically owned producer and retain its effects until deferred work

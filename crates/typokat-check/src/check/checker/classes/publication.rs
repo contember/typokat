@@ -1827,7 +1827,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 .map(ReplayOwner::Class);
             let _replay_owner_scope = replay_owner
                 .and_then(|owner| self.replay_trace.as_ref().map(|trace| trace.scope(owner)));
-            let outcome = self.with_semantic_query(|query| query.is_assignable(source, target));
+            let outcome = self.is_assignable(source, target);
             let failed = match outcome {
                 RelationOutcome::Yes => false,
                 RelationOutcome::No(_) => true,

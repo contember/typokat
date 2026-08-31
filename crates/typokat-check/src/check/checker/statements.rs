@@ -3809,9 +3809,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     ) {
         for (signature_ty, span, ticket) in signatures {
             let check = |pass: &mut Self| {
-                let outcome = pass.with_semantic_query(|query| {
-                    query.overload_implementation_compatible(*signature_ty, implementation_ty)
-                });
+                let outcome =
+                    pass.overload_implementation_compatible(*signature_ty, implementation_ty);
                 match outcome {
                     RelationOutcome::Yes => Some(true),
                     RelationOutcome::No(_) => Some(false),

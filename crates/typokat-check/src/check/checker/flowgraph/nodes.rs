@@ -173,17 +173,19 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 } => {
                     if let Some(base) = self.scratch_or_cached(&scratch, antecedent, symbol) {
                         let t = if guard_symbol == symbol {
-                            match narrow_query(
-                                self.interner,
-                                self.type_environment.published(),
-                                &mut self.semantic_queries,
-                                &mut self.next_type_param,
-                                base,
-                                &op,
-                                positive,
-                            ) {
-                                DemandOutcome::Ready(narrowed) => narrowed,
-                                DemandOutcome::Exhausted(_) => base,
+                            match self.retry_native_identity_demands(|pass| {
+                                narrow_query(
+                                    pass.interner,
+                                    pass.type_environment.published(),
+                                    &mut pass.semantic_queries,
+                                    &mut pass.next_type_param,
+                                    base,
+                                    &op,
+                                    positive,
+                                )
+                            }) {
+                                Ok(DemandOutcome::Ready(narrowed)) => narrowed,
+                                Ok(DemandOutcome::Exhausted(_)) | Err(()) => base,
                             }
                         } else {
                             base

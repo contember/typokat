@@ -1166,7 +1166,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         if is_undecided_operand_shape(self.interner.store(), apparent, UNDECIDED_SHAPE_DEPTH) {
             return OperandVerdict::Deferred;
         }
-        match self.with_semantic_query(|query| query.is_assignable(ty, target)) {
+        match self.is_assignable(ty, target) {
             RelationOutcome::Yes => OperandVerdict::Satisfied,
             RelationOutcome::No(_) => OperandVerdict::Rejected,
             RelationOutcome::Exhausted(_) => OperandVerdict::Deferred,

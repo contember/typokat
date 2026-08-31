@@ -120,6 +120,26 @@ pub(crate) enum NativeSourceSurface {
     Function,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(in crate::check) struct NativeIdentityDemand {
+    pub(in crate::check) identity: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::check) enum SemanticQueryAttempt<T> {
+    Complete(T),
+    NeedsNativeIdentities(Vec<NativeIdentityDemand>),
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct NativeIdentityAvailability([bool; 8]);
+
+impl NativeIdentityAvailability {
+    fn contains(self, identity: usize) -> bool {
+        self.0.get(identity).copied().unwrap_or(false)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NativeSourceSurfaceClass {
     Array { readonly: bool, native: TypeId },
@@ -564,6 +584,10 @@ fn commit_query_cache_entries(
 #[cfg(test)]
 mod cache_write_calibration_tests {
     use super::*;
+    use crate::class_semantics::{ClassConstructionState, PublishedClassSurface};
+    use crate::relate::cache::RelationKey;
+    use crate::relate::RelationKind;
+    use crate::types::repr::{ObjectType, PropertyType};
 
     #[test]
     fn calibration_exercises_projection_and_evaluator_commit_hooks() {
@@ -574,6 +598,109 @@ mod cache_write_calibration_tests {
                 evaluator: 1,
             }
         );
+    }
+
+    #[test]
+    fn same_class_native_demand_is_transitive_and_transactionally_inert() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let class = ClassId(79_001);
+        let first = TypeParamId(79_001);
+        let second = TypeParamId(79_002);
+        let first_ty = interner.intern_type_param(first, "First");
+        let second_ty = interner.intern_type_param(second, "Second");
+        let template = interner.intern_object(ObjectType {
+            properties: vec![
+                PropertyType::public("first", first_ty),
+                PropertyType::public("second", second_ty),
+            ],
+            ..ObjectType::default()
+        });
+        let boolean_wrapper = interner.intern_object(ObjectType {
+            properties: vec![PropertyType::public("flag", wk.boolean)],
+            ..ObjectType::default()
+        });
+        let one = interner.intern_literal(LiteralValue::Number(1.0));
+        let source = interner.intern_class_instance(class, vec![one, wk.boolean]);
+        let target = interner.intern_class_instance(class, vec![wk.number, boolean_wrapper]);
+        let published = PublishedClasses::from_publication(
+            FxHashMap::from_iter([(class, ClassConstructionState::Published)]),
+            FxHashMap::from_iter([(
+                class,
+                PublishedClassSurface::new(class, vec![first, second], template, wk.error, None),
+            )]),
+            FxHashMap::default(),
+        )
+        .expect("test publication is complete");
+
+        let mut state = SemanticQueryState::default();
+        let mut availability = [false; 8];
+        availability[4] = true;
+        availability[6] = true;
+        state.set_native_identity_availability(availability);
+        let mut next_type_param = 0;
+        assert!(matches!(
+            SemanticQueryCoordinator::new(
+                &mut interner,
+                &published,
+                &mut state,
+                &mut next_type_param,
+            )
+            .is_assignable(wk.number, wk.string),
+            RelationOutcome::No(_)
+        ));
+        let baseline_key = RelationKey::new(wk.number, wk.string, RelationKind::Assignable);
+        assert_eq!(state.relation_cache.get(baseline_key), Some(false));
+        let before = state.durable_lengths();
+
+        let measure = start_query_source_cold_measure();
+        let attempt = SemanticQueryCoordinator::new(
+            &mut interner,
+            &published,
+            &mut state,
+            &mut next_type_param,
+        )
+        .is_assignable_attempt(source, target);
+
+        let SemanticQueryAttempt::NeedsNativeIdentities(demands) = attempt else {
+            panic!("same-class native relation completed without demanding identities");
+        };
+        assert_eq!(
+            demands,
+            vec![
+                NativeIdentityDemand { identity: 6 },
+                NativeIdentityDemand { identity: 4 },
+            ]
+        );
+        assert_eq!(state.durable_lengths(), before);
+        assert_eq!(state.relation_cache.get(baseline_key), Some(false));
+        assert_eq!(
+            query_source_cold_measure()
+                .expect("measurement scope is active")
+                .semantic_state_forks,
+            1
+        );
+        drop(measure);
+
+        state.set_native_identity_availability([false; 8]);
+        let measure = start_query_source_cold_measure();
+        assert!(matches!(
+            SemanticQueryCoordinator::new(
+                &mut interner,
+                &published,
+                &mut state,
+                &mut next_type_param,
+            )
+            .is_assignable(source, target),
+            RelationOutcome::No(_)
+        ));
+        assert_eq!(
+            query_source_cold_measure()
+                .expect("measurement scope is active")
+                .semantic_state_forks,
+            0
+        );
+        drop(measure);
     }
 }
 
@@ -801,6 +928,7 @@ struct ResetSemanticContext {
     publication_store_identity: Option<Arc<()>>,
     publication_snapshot_identity: Option<Arc<()>>,
     library_object_context: Option<LibraryObjectRelationContext>,
+    native_identity_availability: NativeIdentityAvailability,
 }
 
 /// Pass-local durable semantic-query state. A tainted query changes none of it.
@@ -818,11 +946,39 @@ pub struct SemanticQueryState {
     publication_snapshot_identity: Option<Arc<()>>,
     array_definitely_lacks_then: bool,
     library_object_context: Option<LibraryObjectRelationContext>,
+    native_identity_availability: NativeIdentityAvailability,
     journal: Vec<SemanticQueryUndo>,
     savepoints: Vec<usize>,
 }
 
 impl SemanticQueryState {
+    pub(in crate::check) fn native_identity_demands_enabled(&self) -> bool {
+        self.native_identity_availability
+            .0
+            .iter()
+            .any(|mapped| *mapped)
+    }
+
+    pub(in crate::check) fn is_native_primitive_surface(&self, ty: TypeId) -> bool {
+        self.library_object_context.is_some_and(|context| {
+            [context.string, context.number, context.boolean]
+                .into_iter()
+                .flatten()
+                .any(|surface| surface == ty)
+        })
+    }
+
+    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
+    pub(in crate::check) fn set_native_identity_availability(&mut self, mapped: [bool; 8]) {
+        let value = NativeIdentityAvailability(mapped);
+        if self.native_identity_availability == value {
+            return;
+        }
+        let reset = self.take_semantic_context_reset();
+        self.record(SemanticQueryUndo::ContextReset(Box::new(reset)));
+        self.native_identity_availability = value;
+    }
+
     pub(crate) fn set_array_definitely_lacks_then(&mut self, value: bool) {
         if self.array_definitely_lacks_then == value || !self.savepoints.is_empty() {
             return;
@@ -933,6 +1089,7 @@ impl SemanticQueryState {
                     publication_store_identity,
                     publication_snapshot_identity,
                     library_object_context,
+                    native_identity_availability,
                 } = *reset;
                 self.projection_memo = projection_memo;
                 self.evaluation_memo = evaluation_memo;
@@ -952,6 +1109,7 @@ impl SemanticQueryState {
                 self.publication_store_identity = publication_store_identity;
                 self.publication_snapshot_identity = publication_snapshot_identity;
                 self.library_object_context = library_object_context;
+                self.native_identity_availability = native_identity_availability;
             }
         }
     }
@@ -1068,6 +1226,7 @@ impl SemanticQueryState {
             publication_store_identity: self.publication_store_identity.take(),
             publication_snapshot_identity: self.publication_snapshot_identity.take(),
             library_object_context: self.library_object_context,
+            native_identity_availability: self.native_identity_availability,
         }
     }
 
@@ -1272,7 +1431,9 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             );
             match attempt {
                 IdentityAttempt::Decided(outcome) => break outcome,
-                IdentityAttempt::Needs(demand) => planner.expand_relation_demand(demand),
+                IdentityAttempt::Needs(demand) => {
+                    planner.expand_relation_demand(demand);
+                }
             }
         };
         let transaction = planner.finish();
@@ -2082,12 +2243,25 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
 
     /// Plan, normalize, and relate one top-level assignability operation.
     pub fn is_assignable(&mut self, src: TypeId, tgt: TypeId) -> RelationOutcome {
+        match self.is_assignable_attempt(src, tgt) {
+            SemanticQueryAttempt::Complete(outcome) => outcome,
+            SemanticQueryAttempt::NeedsNativeIdentities(_) => {
+                unreachable!("native identity demands require the project-local Pass boundary")
+            }
+        }
+    }
+
+    pub(in crate::check) fn is_assignable_attempt(
+        &mut self,
+        src: TypeId,
+        tgt: TypeId,
+    ) -> SemanticQueryAttempt<RelationOutcome> {
         self.observe_outer_class(src);
         self.observe_outer_class(tgt);
         if let Some(reason) =
             publication_exhaustion(self.interner, &[src, tgt], self.published, self.state)
         {
-            return RelationOutcome::Exhausted(reason);
+            return SemanticQueryAttempt::Complete(RelationOutcome::Exhausted(reason));
         }
         let completed_key = CompletedRelationKey::assignable(src, tgt);
         if let Some(completed) = self.state.completed_relations.get(&completed_key).cloned() {
@@ -2096,30 +2270,65 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                 CompletedRelationOutcome::Yes => measure.completed_relation_yes_hits += 1,
                 CompletedRelationOutcome::No(_) => measure.completed_relation_no_hits += 1,
             });
-            return completed.outcome();
+            return SemanticQueryAttempt::Complete(completed.outcome());
         }
         if src == tgt {
-            return RelationOutcome::Yes;
+            return SemanticQueryAttempt::Complete(RelationOutcome::Yes);
         }
-        if let Some(outcome) = self.same_class_covariant_argument_mismatch(src, tgt) {
-            self.remember_completed_relation(completed_key, &outcome);
-            return outcome;
+        let same_class = self
+            .interner
+            .store()
+            .class_instance_type(src)
+            .zip(self.interner.store().class_instance_type(tgt))
+            .is_some_and(|(source, target)| {
+                source.class == target.class && source.args.len() == target.args.len()
+            });
+        if same_class {
+            let atomic = self.state.native_identity_demands_enabled();
+            if atomic {
+                // A later argument may demand after earlier checks wrote caches.
+                self.state.savepoint();
+            }
+            let attempt = match self.same_class_covariant_argument_mismatch_attempt(src, tgt) {
+                Some(SemanticQueryAttempt::Complete(outcome)) => {
+                    self.remember_completed_relation(completed_key, &outcome);
+                    SemanticQueryAttempt::Complete(outcome)
+                }
+                Some(SemanticQueryAttempt::NeedsNativeIdentities(demands)) => {
+                    SemanticQueryAttempt::NeedsNativeIdentities(demands)
+                }
+                None => self.run_relation_transaction(RelationOperation::Assignable { src, tgt }),
+            };
+            if atomic {
+                match &attempt {
+                    SemanticQueryAttempt::Complete(_) => self.state.commit(),
+                    SemanticQueryAttempt::NeedsNativeIdentities(_) => self.state.rollback(),
+                }
+            }
+            return attempt;
         }
         self.run_relation_transaction(RelationOperation::Assignable { src, tgt })
     }
 
-    fn run_relation_transaction(&mut self, operation: RelationOperation) -> RelationOutcome {
-        let mut planner = ProjectionPlanner::new(
+    fn run_relation_transaction(
+        &mut self,
+        operation: RelationOperation,
+    ) -> SemanticQueryAttempt<RelationOutcome> {
+        let mut planner = ProjectionPlanner::new_with_native_identity_availability(
             self.interner,
             self.published,
             &self.state.projection_memo,
             &self.state.evaluation_memo,
             *self.next_type_param,
             self.state.array_definitely_lacks_then,
-            self.state.library_object_context,
+            (
+                self.state.library_object_context,
+                self.state.native_identity_availability,
+            ),
         );
         planner.prepare_relation_roots(&operation.roots());
         let mut relation_cache = std::mem::take(&mut self.state.relation_cache);
+        let mut native_demands = Vec::new();
         let mut outcome = loop {
             let well_known = planner.interner.well_known();
             let (attempt, returned_cache) = {
@@ -2143,16 +2352,32 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             record_relation_driver_attempt(&attempt);
             match attempt {
                 RelationAttempt::Decided(outcome) => break outcome,
-                RelationAttempt::Needs(demand) => planner.expand_relation_demand(demand),
+                RelationAttempt::Needs(demand) => {
+                    native_demands.extend(planner.expand_relation_demand_attempt(demand));
+                    if !native_demands.is_empty() {
+                        break RelationOutcome::Yes;
+                    }
+                }
                 RelationAttempt::NeedsBatch(demands) => {
                     for demand in demands {
-                        planner.expand_relation_demand(demand);
+                        native_demands.extend(planner.expand_relation_demand_attempt(demand));
+                    }
+                    if !native_demands.is_empty() {
+                        break RelationOutcome::Yes;
                     }
                 }
             }
         };
         let transaction = planner.finish();
         *self.next_type_param = transaction.next_type_param;
+        if !native_demands.is_empty() {
+            native_demands.sort_by_key(|demand| (demand.identity != 6, demand.identity));
+            native_demands.dedup();
+            // `finish_planned(false)` returns the durable input cache unchanged;
+            // every attempt that observed a demand keeps its writes pending.
+            self.state.relation_cache = relation_cache;
+            return SemanticQueryAttempt::NeedsNativeIdentities(native_demands);
+        }
         if matches!(outcome, RelationOutcome::Yes) && transaction.planning_tainted {
             outcome = RelationOutcome::Exhausted(
                 transaction
@@ -2173,17 +2398,17 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                 }
             }
         }
-        outcome
+        SemanticQueryAttempt::Complete(outcome)
     }
 
     /// A directly published public `value: T` is a finite structural witness for
     /// `C<S> -> C<T>`. Checking it before an unrelated recursive sibling avoids
     /// spending the projection budget on a mismatch already present at this layer.
-    fn same_class_covariant_argument_mismatch(
+    fn same_class_covariant_argument_mismatch_attempt(
         &mut self,
         src: TypeId,
         tgt: TypeId,
-    ) -> Option<RelationOutcome> {
+    ) -> Option<SemanticQueryAttempt<RelationOutcome>> {
         let source = self.interner.store().class_instance_type(src)?.clone();
         let target = self.interner.store().class_instance_type(tgt)?.clone();
         if source.class != target.class || source.args.len() != target.args.len() {
@@ -2192,7 +2417,9 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         let surface = match self.published.published_class(source.class) {
             DemandOutcome::Ready(surface) => surface,
             DemandOutcome::Exhausted(exhaustion) => {
-                return Some(RelationOutcome::Exhausted(exhaustion))
+                return Some(SemanticQueryAttempt::Complete(RelationOutcome::Exhausted(
+                    exhaustion,
+                )))
             }
         };
         let witnessed: FxHashSet<_> = self
@@ -2216,13 +2443,20 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             if !witnessed.contains(&parameter) || source == target {
                 continue;
             }
-            match self.is_assignable(source, target) {
-                RelationOutcome::Yes => {}
-                RelationOutcome::No(_) => {
-                    return Some(RelationOutcome::No(Arc::new(ReasonChain::leaf(src, tgt))))
+            match self.is_assignable_attempt(source, target) {
+                SemanticQueryAttempt::Complete(RelationOutcome::Yes) => {}
+                SemanticQueryAttempt::Complete(RelationOutcome::No(_)) => {
+                    return Some(SemanticQueryAttempt::Complete(RelationOutcome::No(
+                        Arc::new(ReasonChain::leaf(src, tgt)),
+                    )))
                 }
-                RelationOutcome::Exhausted(exhaustion) => {
-                    return Some(RelationOutcome::Exhausted(exhaustion))
+                SemanticQueryAttempt::Complete(RelationOutcome::Exhausted(exhaustion)) => {
+                    return Some(SemanticQueryAttempt::Complete(RelationOutcome::Exhausted(
+                        exhaustion,
+                    )))
+                }
+                SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+                    return Some(SemanticQueryAttempt::NeedsNativeIdentities(demands))
                 }
             }
         }
@@ -2231,15 +2465,31 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
 
     /// Structurally collect inference candidates through the same overlays.
     /// Exhaustion discards the attempt's local candidates and every pending write.
+    #[cfg(test)]
     pub fn infer_types(
         &mut self,
         source: TypeId,
         target: TypeId,
         candidates: &mut Candidates,
     ) -> DemandOutcome<()> {
-        self.infer_types_with_params(source, target, candidates, None)
+        match self.infer_types_attempt(source, target, candidates) {
+            SemanticQueryAttempt::Complete(outcome) => outcome,
+            SemanticQueryAttempt::NeedsNativeIdentities(_) => {
+                unreachable!("native identity demands require the project-local Pass boundary")
+            }
+        }
     }
 
+    pub(in crate::check) fn infer_types_attempt(
+        &mut self,
+        source: TypeId,
+        target: TypeId,
+        candidates: &mut Candidates,
+    ) -> SemanticQueryAttempt<DemandOutcome<()>> {
+        self.infer_types_with_params_attempt(source, target, candidates, None)
+    }
+
+    #[cfg(test)]
     pub(crate) fn infer_types_for_params(
         &mut self,
         source: TypeId,
@@ -2247,24 +2497,48 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         candidates: &mut Candidates,
         active_params: &FxHashSet<TypeParamId>,
     ) -> DemandOutcome<()> {
-        self.infer_types_with_params(source, target, candidates, Some(active_params))
+        match self.infer_types_for_params_attempt(source, target, candidates, active_params) {
+            SemanticQueryAttempt::Complete(outcome) => outcome,
+            SemanticQueryAttempt::NeedsNativeIdentities(_) => {
+                unreachable!("native identity demands require the project-local Pass boundary")
+            }
+        }
     }
 
-    fn infer_types_with_params(
+    pub(in crate::check) fn infer_types_for_params_attempt(
+        &mut self,
+        source: TypeId,
+        target: TypeId,
+        candidates: &mut Candidates,
+        active_params: &FxHashSet<TypeParamId>,
+    ) -> SemanticQueryAttempt<DemandOutcome<()>> {
+        self.infer_types_with_params_attempt(source, target, candidates, Some(active_params))
+    }
+
+    fn infer_types_with_params_attempt(
         &mut self,
         source: TypeId,
         target: TypeId,
         candidates: &mut Candidates,
         active_params: Option<&FxHashSet<TypeParamId>>,
-    ) -> DemandOutcome<()> {
-        let mut planner = ProjectionPlanner::new(
+    ) -> SemanticQueryAttempt<DemandOutcome<()>> {
+        enum PlannedInferenceAttempt<T> {
+            Complete(T),
+            Exhausted(Exhaustion),
+            NeedsNativeIdentities(Vec<NativeIdentityDemand>),
+        }
+
+        let mut planner = ProjectionPlanner::new_with_native_identity_availability(
             self.interner,
             self.published,
             &self.state.projection_memo,
             &self.state.evaluation_memo,
             *self.next_type_param,
             self.state.array_definitely_lacks_then,
-            self.state.library_object_context,
+            (
+                self.state.library_object_context,
+                self.state.native_identity_availability,
+            ),
         );
         let mut retry = InferenceRetryState::default();
         let source_root = DerivedType::plain(source);
@@ -2278,17 +2552,30 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                 active_params,
             );
             match retry.observe(attempt) {
-                InferenceAttempt::Needs(demand) => planner.expand_relation_demand(demand),
-                InferenceAttempt::NeedsBatch(demands) => {
-                    for demand in demands {
-                        planner.expand_relation_demand(demand);
+                InferenceAttempt::Needs(demand) => {
+                    let native_demands = planner.expand_relation_demand_attempt(demand);
+                    if !native_demands.is_empty() {
+                        break PlannedInferenceAttempt::NeedsNativeIdentities(native_demands);
                     }
                 }
-                InferenceAttempt::Complete(local) => break Ok(local),
-                InferenceAttempt::Exhausted(exhaustion) => break Err(exhaustion),
+                InferenceAttempt::NeedsBatch(demands) => {
+                    let mut native_demands = Vec::new();
+                    for demand in demands {
+                        native_demands.extend(planner.expand_relation_demand_attempt(demand));
+                    }
+                    if !native_demands.is_empty() {
+                        break PlannedInferenceAttempt::NeedsNativeIdentities(native_demands);
+                    }
+                }
+                InferenceAttempt::Complete(local) => {
+                    break PlannedInferenceAttempt::Complete(local);
+                }
+                InferenceAttempt::Exhausted(exhaustion) => {
+                    break PlannedInferenceAttempt::Exhausted(exhaustion);
+                }
             }
         };
-        if attempt.is_ok() {
+        if matches!(&attempt, PlannedInferenceAttempt::Complete(_)) {
             for root in [source, target] {
                 if planner.interner.store().tag(root) == TypeTag::Union {
                     planner.visit(root);
@@ -2297,16 +2584,25 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         }
         let transaction = planner.finish();
         *self.next_type_param = transaction.next_type_param;
+        let attempt = match attempt {
+            PlannedInferenceAttempt::Complete(local) => Ok(local),
+            PlannedInferenceAttempt::Exhausted(exhaustion) => Err(exhaustion),
+            PlannedInferenceAttempt::NeedsNativeIdentities(mut demands) => {
+                demands.sort_by_key(|demand| (demand.identity != 6, demand.identity));
+                demands.dedup();
+                return SemanticQueryAttempt::NeedsNativeIdentities(demands);
+            }
+        };
         if let Some(exhaustion) = transaction.cycle_taint_reason.clone() {
-            return DemandOutcome::Exhausted(exhaustion);
+            return SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(exhaustion));
         }
         if transaction.planning_tainted {
-            return DemandOutcome::Exhausted(
+            return SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(
                 transaction
                     .first_exhaustion
                     .clone()
                     .unwrap_or(Exhaustion::ClassProjectionBudget),
-            );
+            ));
         }
         match attempt {
             Ok(local) => {
@@ -2314,9 +2610,9 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                 for (parameter, inferred) in local {
                     candidates.entry(parameter).or_default().extend(inferred);
                 }
-                DemandOutcome::Ready(())
+                SemanticQueryAttempt::Complete(DemandOutcome::Ready(()))
             }
-            Err(exhaustion) => DemandOutcome::Exhausted(exhaustion),
+            Err(exhaustion) => SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(exhaustion)),
         }
     }
 
@@ -2327,6 +2623,19 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         overload: TypeId,
         implementation: TypeId,
     ) -> RelationOutcome {
+        match self.overload_implementation_compatible_attempt(overload, implementation) {
+            SemanticQueryAttempt::Complete(outcome) => outcome,
+            SemanticQueryAttempt::NeedsNativeIdentities(_) => {
+                unreachable!("native identity demands require the project-local Pass boundary")
+            }
+        }
+    }
+
+    pub(in crate::check) fn overload_implementation_compatible_attempt(
+        &mut self,
+        overload: TypeId,
+        implementation: TypeId,
+    ) -> SemanticQueryAttempt<RelationOutcome> {
         self.observe_outer_class(implementation);
         self.observe_outer_class(overload);
         if let Some(reason) = publication_exhaustion(
@@ -2335,7 +2644,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             self.published,
             self.state,
         ) {
-            return RelationOutcome::Exhausted(reason);
+            return SemanticQueryAttempt::Complete(RelationOutcome::Exhausted(reason));
         }
         self.run_relation_transaction(RelationOperation::OverloadCompatibility {
             overload,
@@ -2401,6 +2710,7 @@ pub struct ProjectionPlan<'a> {
     durable_evaluation_memo: Option<&'a FxHashMap<TypeId, TypeId>>,
     array_definitely_lacks_then: bool,
     library_object_context: Option<LibraryObjectRelationContext>,
+    native_identity_availability: NativeIdentityAvailability,
     apparent_surface_overlay: FxHashMap<TypeId, TypeId>,
     apparent_surface_unavailable: FxHashSet<TypeId>,
 }
@@ -2509,28 +2819,51 @@ impl RelationNormalization for ProjectionPlan<'_> {
         let Some(class) = classify_native_source_surface_class(store, ty) else {
             return ApparentSurface::NotApplicable;
         };
-        let Some(context) = self.library_object_context else {
-            return ApparentSurface::Unavailable;
+        let context = self.library_object_context;
+        let static_surface = |surface: Option<TypeId>, identity: usize| {
+            surface.map_or_else(
+                || {
+                    if self.native_identity_availability.contains(identity) {
+                        ApparentSurface::Needs(RelationDemand::ApparentSurface(ty))
+                    } else {
+                        ApparentSurface::Unavailable
+                    }
+                },
+                ApparentSurface::Ready,
+            )
         };
         match class {
-            NativeSourceSurfaceClass::Array { .. } => {
-                ApparentSurface::Needs(RelationDemand::ApparentSurface(ty))
+            NativeSourceSurfaceClass::Array { readonly, .. } => {
+                let identity = usize::from(readonly);
+                if context.is_some_and(|context| {
+                    if readonly {
+                        context.readonly_array.is_some()
+                    } else {
+                        context.array.is_some()
+                    }
+                }) || self.native_identity_availability.contains(identity)
+                {
+                    ApparentSurface::Needs(RelationDemand::ApparentSurface(ty))
+                } else {
+                    ApparentSurface::Unavailable
+                }
             }
-            NativeSourceSurfaceClass::Static(NativeStaticSurface::String) => context
-                .string
-                .map_or(ApparentSurface::Unavailable, ApparentSurface::Ready),
-            NativeSourceSurfaceClass::Static(NativeStaticSurface::Number) => context
-                .number
-                .map_or(ApparentSurface::Unavailable, ApparentSurface::Ready),
-            NativeSourceSurfaceClass::Static(NativeStaticSurface::Boolean) => context
-                .boolean
-                .map_or(ApparentSurface::Unavailable, ApparentSurface::Ready),
-            NativeSourceSurfaceClass::Static(NativeStaticSurface::Object) => {
-                ApparentSurface::Ready(context.object)
+            NativeSourceSurfaceClass::Static(NativeStaticSurface::String) => {
+                static_surface(context.and_then(|context| context.string), 2)
             }
-            NativeSourceSurfaceClass::Static(NativeStaticSurface::Function) => context
-                .callable_function
-                .map_or(ApparentSurface::Unavailable, ApparentSurface::Ready),
+            NativeSourceSurfaceClass::Static(NativeStaticSurface::Number) => {
+                static_surface(context.and_then(|context| context.number), 3)
+            }
+            NativeSourceSurfaceClass::Static(NativeStaticSurface::Boolean) => {
+                static_surface(context.and_then(|context| context.boolean), 4)
+            }
+            NativeSourceSurfaceClass::Static(NativeStaticSurface::Object) => context.map_or_else(
+                || static_surface(None, 6),
+                |context| ApparentSurface::Ready(context.object),
+            ),
+            NativeSourceSurfaceClass::Static(NativeStaticSurface::Function) => {
+                static_surface(context.and_then(|context| context.callable_function), 7)
+            }
         }
     }
 
@@ -2665,6 +2998,33 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
         array_definitely_lacks_then: bool,
         library_object_context: Option<LibraryObjectRelationContext>,
     ) -> Self {
+        Self::new_with_native_identity_availability(
+            interner,
+            published,
+            durable_projection_memo,
+            durable_evaluation_memo,
+            next_type_param,
+            array_definitely_lacks_then,
+            (
+                library_object_context,
+                NativeIdentityAvailability::default(),
+            ),
+        )
+    }
+
+    fn new_with_native_identity_availability(
+        interner: &'work mut Interner,
+        published: &'work L,
+        durable_projection_memo: &'work FxHashMap<TypeId, TypeId>,
+        durable_evaluation_memo: &'memo FxHashMap<TypeId, TypeId>,
+        next_type_param: u32,
+        array_definitely_lacks_then: bool,
+        native_context: (
+            Option<LibraryObjectRelationContext>,
+            NativeIdentityAvailability,
+        ),
+    ) -> Self {
+        let (library_object_context, native_identity_availability) = native_context;
         #[cfg(any(test, feature = "test-utils"))]
         measure_query_source_cold(|measure| {
             measure.planner_transactions += 1;
@@ -2680,6 +3040,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
                 durable_evaluation_memo: Some(durable_evaluation_memo),
                 array_definitely_lacks_then,
                 library_object_context,
+                native_identity_availability,
                 ..ProjectionPlan::default()
             },
             pending_projection_writes: FxHashMap::default(),
@@ -2793,6 +3154,13 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
     }
 
     fn expand_relation_demand(&mut self, demand: RelationDemand) {
+        let _ = self.expand_relation_demand_attempt(demand);
+    }
+
+    fn expand_relation_demand_attempt(
+        &mut self,
+        demand: RelationDemand,
+    ) -> Vec<NativeIdentityDemand> {
         #[cfg(test)]
         record_relation_driver_expand(demand);
         if !self.expanded_relation_demands.insert(demand) {
@@ -2804,7 +3172,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
                 | RelationDemand::DerivedEvaluation(derived) => derived.ty,
             };
             self.mark_frontier(ty, Exhaustion::EvaluationCycle { ty });
-            return;
+            return Vec::new();
         }
         self.start_root();
         match demand {
@@ -2837,25 +3205,67 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
                 }
             }
             RelationDemand::ApparentSurface(ty) => {
-                self.project_apparent_surface(ty);
+                return self.project_apparent_surface(ty);
             }
         }
+        Vec::new()
     }
 
-    fn project_apparent_surface(&mut self, source: TypeId) {
+    fn project_apparent_surface(&mut self, source: TypeId) -> Vec<NativeIdentityDemand> {
         if self.plan.apparent_surface_overlay.contains_key(&source)
             || self.plan.apparent_surface_unavailable.contains(&source)
         {
-            return;
+            return Vec::new();
         }
-        let Some(context) = self.plan.library_object_context else {
-            self.plan.apparent_surface_unavailable.insert(source);
-            return;
-        };
         let Some(native) = classify_native_source_surface(self.interner, source) else {
             self.plan.apparent_surface_unavailable.insert(source);
-            return;
+            return Vec::new();
         };
+        let identity = match native {
+            NativeSourceSurface::Array {
+                readonly: false, ..
+            } => 0,
+            NativeSourceSurface::Array { readonly: true, .. } => 1,
+            NativeSourceSurface::String => 2,
+            NativeSourceSurface::Number => 3,
+            NativeSourceSurface::Boolean => 4,
+            NativeSourceSurface::Object => 6,
+            NativeSourceSurface::Function => 7,
+        };
+        let context = self.plan.library_object_context;
+        let source_ready = context.is_some_and(|context| match identity {
+            0 => context.array.is_some(),
+            1 => context.readonly_array.is_some(),
+            2 => context.string.is_some(),
+            3 => context.number.is_some(),
+            4 => context.boolean.is_some(),
+            6 => true,
+            7 => context.callable_function.is_some(),
+            _ => false,
+        });
+        if context.is_none() || !source_ready {
+            let mut demands = Vec::new();
+            if context.is_none() {
+                if self.plan.native_identity_availability.contains(6) {
+                    demands.push(NativeIdentityDemand { identity: 6 });
+                } else {
+                    self.plan.apparent_surface_unavailable.insert(source);
+                    return Vec::new();
+                }
+            }
+            if !source_ready && identity != 6 {
+                if self.plan.native_identity_availability.contains(identity) {
+                    demands.push(NativeIdentityDemand { identity });
+                } else {
+                    self.plan.apparent_surface_unavailable.insert(source);
+                    return Vec::new();
+                }
+            }
+            if !demands.is_empty() {
+                return demands;
+            }
+        }
+        let context = context.expect("ready native apparent surface has Object context");
         let surface = match native {
             NativeSourceSurface::Array {
                 readonly,
@@ -2869,7 +3279,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
                 };
                 let Some(generic) = generic else {
                     self.plan.apparent_surface_unavailable.insert(source);
-                    return;
+                    return Vec::new();
                 };
                 let substitutions = FxHashMap::from_iter([(generic.parameter, argument)]);
                 let surface = match substitute_with_outcome(
@@ -2899,6 +3309,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
                 self.plan.apparent_surface_unavailable.insert(source);
             }
         }
+        Vec::new()
     }
 
     fn override_native_length(&mut self, surface: TypeId, length: TypeId) -> Option<TypeId> {

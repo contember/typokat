@@ -3,7 +3,9 @@
 //! types under guard facts; the checker decides symbol and branch polarity.
 
 use crate::binder::symbol::SymbolId;
-use crate::check::query::{PublishedClassLookup, SemanticQueryCoordinator, SemanticQueryState};
+use crate::check::query::{
+    PublishedClassLookup, SemanticQueryAttempt, SemanticQueryCoordinator, SemanticQueryState,
+};
 use crate::class_semantics::DemandOutcome;
 use crate::relate::RelationOutcome;
 use crate::types::repr::{IntrinsicKind, LiteralValue, TypeTag};
@@ -154,9 +156,8 @@ pub fn narrow(interner: &mut Interner, ty: TypeId, op: &NarrowOp, positive: bool
 }
 
 /// Production narrowing boundary for class-reachable guards. The whole guard
-/// runs on a child query state; an exhausted constituent promotes no memo/cache
-/// writes and lets the caller retain the pre-guard type conservatively.
-pub(crate) fn narrow_query<L: PublishedClassLookup + ?Sized>(
+/// runs on a child query state; exhaustion or native demand promotes no writes.
+pub(in crate::check) fn narrow_query<L: PublishedClassLookup + ?Sized>(
     interner: &mut Interner,
     published: &L,
     state: &mut SemanticQueryState,
@@ -164,7 +165,7 @@ pub(crate) fn narrow_query<L: PublishedClassLookup + ?Sized>(
     ty: TypeId,
     op: &NarrowOp,
     positive: bool,
-) -> DemandOutcome<TypeId> {
+) -> SemanticQueryAttempt<DemandOutcome<TypeId>> {
     state.savepoint();
     let outcome = match op {
         NarrowOp::Discriminant { property, literal } => narrow_by_discriminant_query(
@@ -179,7 +180,7 @@ pub(crate) fn narrow_query<L: PublishedClassLookup + ?Sized>(
                 positive,
             },
         ),
-        NarrowOp::In { property } => narrow_by_in_operator_query(
+        NarrowOp::In { property } => SemanticQueryAttempt::Complete(narrow_by_in_operator_query(
             interner,
             published,
             state,
@@ -187,10 +188,15 @@ pub(crate) fn narrow_query<L: PublishedClassLookup + ?Sized>(
             ty,
             property,
             positive,
-        ),
-        _ => DemandOutcome::Ready(narrow(interner, ty, op, positive)),
+        )),
+        _ => {
+            SemanticQueryAttempt::Complete(DemandOutcome::Ready(narrow(interner, ty, op, positive)))
+        }
     };
-    if matches!(outcome, DemandOutcome::Ready(_)) {
+    if matches!(
+        outcome,
+        SemanticQueryAttempt::Complete(DemandOutcome::Ready(_))
+    ) {
         state.commit();
     } else {
         state.rollback();
@@ -497,21 +503,20 @@ fn literal_could_equal_property(
 }
 
 /// Query-aware discriminant decision for class-reachable property types.
-/// Exhaustion remains typed so the caller can abandon the whole narrowing
-/// attempt instead of dropping a union member on an invented mismatch.
-pub(crate) fn discriminant_keeps_query<L: PublishedClassLookup + ?Sized>(
+/// Incomplete attempts remain typed so the caller can abandon the whole narrowing.
+pub(in crate::check) fn discriminant_keeps_query<L: PublishedClassLookup + ?Sized>(
     coordinator: &mut SemanticQueryCoordinator<'_, L>,
     member: TypeId,
     prop_ty: Option<TypeId>,
     literal: TypeId,
     wk: crate::types::WellKnown,
     positive: bool,
-) -> DemandOutcome<bool> {
+) -> SemanticQueryAttempt<DemandOutcome<bool>> {
     if member == wk.any || member == wk.error {
-        return DemandOutcome::Ready(true);
+        return SemanticQueryAttempt::Complete(DemandOutcome::Ready(true));
     }
     let Some(prop_ty) = prop_ty else {
-        return DemandOutcome::Ready(true);
+        return SemanticQueryAttempt::Complete(DemandOutcome::Ready(true));
     };
     if matches!(
         coordinator.store().tag(prop_ty),
@@ -521,19 +526,28 @@ pub(crate) fn discriminant_keeps_query<L: PublishedClassLookup + ?Sized>(
         TypeTag::Enum | TypeTag::EnumMember
     ) {
         let overlap = enum_equality_overlap(coordinator.store(), prop_ty, literal);
-        return DemandOutcome::Ready(if positive {
+        return SemanticQueryAttempt::Complete(DemandOutcome::Ready(if positive {
             overlap != EqualityOverlap::Never
         } else {
             overlap != EqualityOverlap::Always
-        });
+        }));
     }
     if !positive {
-        return DemandOutcome::Ready(prop_ty != literal);
+        return SemanticQueryAttempt::Complete(DemandOutcome::Ready(prop_ty != literal));
     }
-    match coordinator.is_assignable(literal, prop_ty) {
-        RelationOutcome::Yes => DemandOutcome::Ready(true),
-        RelationOutcome::No(_) => DemandOutcome::Ready(false),
-        RelationOutcome::Exhausted(reason) => DemandOutcome::Exhausted(reason),
+    match coordinator.is_assignable_attempt(literal, prop_ty) {
+        SemanticQueryAttempt::Complete(RelationOutcome::Yes) => {
+            SemanticQueryAttempt::Complete(DemandOutcome::Ready(true))
+        }
+        SemanticQueryAttempt::Complete(RelationOutcome::No(_)) => {
+            SemanticQueryAttempt::Complete(DemandOutcome::Ready(false))
+        }
+        SemanticQueryAttempt::Complete(RelationOutcome::Exhausted(reason)) => {
+            SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(reason))
+        }
+        SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+            SemanticQueryAttempt::NeedsNativeIdentities(demands)
+        }
     }
 }
 
@@ -543,7 +557,7 @@ fn narrow_by_discriminant_query<L: PublishedClassLookup + ?Sized>(
     state: &mut SemanticQueryState,
     next_type_param: &mut u32,
     request: DiscriminantQueryRequest<'_>,
-) -> DemandOutcome<TypeId> {
+) -> SemanticQueryAttempt<DemandOutcome<TypeId>> {
     let DiscriminantQueryRequest {
         ty,
         property,
@@ -552,12 +566,12 @@ fn narrow_by_discriminant_query<L: PublishedClassLookup + ?Sized>(
     } = request;
     let wk = interner.well_known();
     if ty == wk.any || ty == wk.error {
-        return DemandOutcome::Ready(ty);
+        return SemanticQueryAttempt::Complete(DemandOutcome::Ready(ty));
     }
     let ty = match demand_flow_union_root(interner, published, state, next_type_param, ty) {
         DemandOutcome::Ready(ty) => ty,
         DemandOutcome::Exhausted(exhaustion) => {
-            return DemandOutcome::Exhausted(exhaustion);
+            return SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(exhaustion));
         }
     };
     let members = interner
@@ -573,7 +587,7 @@ fn narrow_by_discriminant_query<L: PublishedClassLookup + ?Sized>(
             {
                 DemandOutcome::Ready(demanded) => demanded,
                 DemandOutcome::Exhausted(exhaustion) => {
-                    return DemandOutcome::Exhausted(exhaustion);
+                    return SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(exhaustion));
                 }
             };
         let prop_ty = interner
@@ -590,14 +604,17 @@ fn narrow_by_discriminant_query<L: PublishedClassLookup + ?Sized>(
             positive,
         );
         match decision {
-            DemandOutcome::Ready(true) => kept.push(member),
-            DemandOutcome::Ready(false) => {}
-            DemandOutcome::Exhausted(exhaustion) => {
-                return DemandOutcome::Exhausted(exhaustion);
+            SemanticQueryAttempt::Complete(DemandOutcome::Ready(true)) => kept.push(member),
+            SemanticQueryAttempt::Complete(DemandOutcome::Ready(false)) => {}
+            SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(exhaustion)) => {
+                return SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(exhaustion));
+            }
+            SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+                return SemanticQueryAttempt::NeedsNativeIdentities(demands);
             }
         }
     }
-    DemandOutcome::Ready(interner.union(kept))
+    SemanticQueryAttempt::Complete(DemandOutcome::Ready(interner.union(kept)))
 }
 
 fn demand_flow_union_root<L: PublishedClassLookup + ?Sized>(

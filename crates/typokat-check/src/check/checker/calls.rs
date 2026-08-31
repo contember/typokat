@@ -561,6 +561,65 @@ pub(in crate::check::checker) enum FunctionReservation<
 }
 
 impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
+    fn infer_signature_type_arguments_with_native_demands(
+        &mut self,
+        request: infer::SignatureInferenceRequest<'_>,
+        return_context: Option<(TypeId, TypeId)>,
+    ) -> DemandOutcome<infer::SignatureInferenceResult<FxHashMap<TypeParamId, TypeId>>> {
+        match self.retry_native_identity_demands(|pass| match return_context {
+            Some(return_context) => {
+                infer::infer_signature_type_arguments_with_return_context_attempt(
+                    pass.interner,
+                    &mut pass.next_type_param,
+                    pass.type_environment.published().classes(),
+                    &mut pass.semantic_queries,
+                    request,
+                    return_context,
+                )
+            }
+            None => infer::infer_signature_type_arguments_from_params_attempt(
+                pass.interner,
+                &mut pass.next_type_param,
+                pass.type_environment.published().classes(),
+                &mut pass.semantic_queries,
+                request,
+            ),
+        }) {
+            Ok(outcome) => outcome,
+            Err(()) => DemandOutcome::Exhausted(Exhaustion::EvaluationInvalidNode {
+                ty: request
+                    .args
+                    .first()
+                    .copied()
+                    .unwrap_or(self.interner.well_known().error),
+            }),
+        }
+    }
+
+    fn infer_partial_signature_type_arguments_with_native_demands(
+        &mut self,
+        request: infer::SignatureInferenceRequest<'_>,
+    ) -> DemandOutcome<infer::SignatureInferenceResult<Vec<(TypeParamId, TypeId)>>> {
+        match self.retry_native_identity_demands(|pass| {
+            infer::infer_partial_signature_type_arguments_from_params_attempt(
+                pass.interner,
+                &mut pass.next_type_param,
+                pass.type_environment.published().classes(),
+                &mut pass.semantic_queries,
+                request,
+            )
+        }) {
+            Ok(outcome) => outcome,
+            Err(()) => DemandOutcome::Exhausted(Exhaustion::EvaluationInvalidNode {
+                ty: request
+                    .args
+                    .first()
+                    .copied()
+                    .unwrap_or(self.interner.well_known().error),
+            }),
+        }
+    }
+
     /// Check already-lowered type arguments against constraint sources. Signature
     /// default validation shares this with call-site explicit arguments.
     pub(in crate::check::checker) fn check_constraint_arguments(
@@ -630,7 +689,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         // Render relation failures before mutating the effect stack.
         let mut failures: Vec<(String, String, Span, Vec<String>)> = Vec::new();
         for (evaluated_arg, written_arg, constraint, span) in checks {
-            match self.with_semantic_query(|query| query.is_assignable(evaluated_arg, constraint)) {
+            match self.is_assignable(evaluated_arg, constraint) {
                 RelationOutcome::Yes => {}
                 RelationOutcome::No(chain) => {
                     let store = self.interner.store();
@@ -1551,7 +1610,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         } else {
             (source, target)
         };
-        match self.with_semantic_query(|query| query.is_assignable(source, target)) {
+        match self.is_assignable(source, target) {
             RelationOutcome::Yes => DemandOutcome::Ready(true),
             RelationOutcome::No(_) => DemandOutcome::Ready(false),
             RelationOutcome::Exhausted(exhaustion) => DemandOutcome::Exhausted(exhaustion),
@@ -2257,11 +2316,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                             }));
                             raw_args.push(source);
                         }
-                        let preliminary = infer::infer_signature_type_arguments_from_params(
-                            self.interner,
-                            &mut self.next_type_param,
-                            self.type_environment.published().classes(),
-                            &mut self.semantic_queries,
+                        let preliminary = self.infer_signature_type_arguments_with_native_demands(
                             infer::SignatureInferenceRequest {
                                 type_params: &generic_params,
                                 params: &params,
@@ -2275,6 +2330,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                                         .and_then(|function| function.receiver),
                                 ),
                             },
+                            None,
                         );
                         let preliminary = match preliminary {
                             DemandOutcome::Ready(result) => {
@@ -2334,30 +2390,16 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                                 .and_then(|function| function.receiver),
                         ),
                     };
-                    let inferred = match contextual_return.zip(
+                    let return_context = contextual_return.zip(
                         self.interner
                             .store()
                             .function_type(signature_ty)
                             .map(|function| function.ret),
-                    ) {
-                        Some((source, target)) => {
-                            infer::infer_signature_type_arguments_with_return_context(
-                                self.interner,
-                                &mut self.next_type_param,
-                                self.type_environment.published().classes(),
-                                &mut self.semantic_queries,
-                                request,
-                                (source, target),
-                            )
-                        }
-                        None => infer::infer_signature_type_arguments_from_params(
-                            self.interner,
-                            &mut self.next_type_param,
-                            self.type_environment.published().classes(),
-                            &mut self.semantic_queries,
-                            request,
-                        ),
-                    };
+                    );
+                    let inferred = self.infer_signature_type_arguments_with_native_demands(
+                        request,
+                        return_context,
+                    );
                     match inferred {
                         DemandOutcome::Ready(result) => {
                             if inference_exhaustion.is_none() {
@@ -2535,7 +2577,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 return CandidateTrial::Mismatch(Some(*arg_span));
             }
             let relation_target = self.call_argument_relation_target(target, src);
-            match self.with_semantic_query(|query| query.is_assignable(src, relation_target)) {
+            match self.is_assignable(src, relation_target) {
                 RelationOutcome::Yes => {}
                 RelationOutcome::No(_) => {
                     #[cfg(test)]
@@ -2815,7 +2857,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     break;
                 }
                 let relation_target = self.call_argument_relation_target(target, src);
-                match self.with_semantic_query(|query| query.is_assignable(src, relation_target)) {
+                match self.is_assignable(src, relation_target) {
                     RelationOutcome::Yes => {}
                     RelationOutcome::No(_) => {
                         compatible = false;
@@ -2848,9 +2890,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         measure_call(|measure| measure.selected_receiver_relation_queries += 1);
         let (source_receiver, span) =
             call_receiver.unwrap_or((self.interner.well_known().undefined, call_span));
-        match self
-            .with_semantic_query(|query| query.is_assignable(source_receiver, target_receiver))
-        {
+        match self.is_assignable(source_receiver, target_receiver) {
             RelationOutcome::Yes => DemandOutcome::Ready(()),
             RelationOutcome::No(_) => {
                 let store = self.interner.store();
@@ -2876,7 +2916,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         #[cfg(test)]
         measure_call(|measure| measure.trial_receiver_relation_queries += 1);
         let source_receiver = call_receiver.unwrap_or(self.interner.well_known().undefined);
-        self.with_semantic_query(|query| query.is_assignable(source_receiver, target_receiver))
+        self.is_assignable(source_receiver, target_receiver)
     }
 
     fn evaluate_parameters(
@@ -3816,11 +3856,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     arg_exprs,
                     ContextualMeasurePhase::ClassCtor
                 );
-                match infer::infer_partial_signature_type_arguments_from_params(
-                    self.interner,
-                    &mut self.next_type_param,
-                    self.type_environment.published().classes(),
-                    &mut self.semantic_queries,
+                match self.infer_partial_signature_type_arguments_with_native_demands(
                     infer::SignatureInferenceRequest {
                         type_params: &generic_params,
                         params: &params,

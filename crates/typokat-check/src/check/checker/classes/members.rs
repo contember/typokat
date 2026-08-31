@@ -428,9 +428,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     else {
                         continue;
                     };
-                    let outcome = self.with_semantic_query(|query| {
-                        query.overload_implementation_compatible(signature_ty, implementation)
-                    });
+                    let outcome =
+                        self.overload_implementation_compatible(signature_ty, implementation);
                     if matches!(outcome, RelationOutcome::No(_)) {
                         self.with_lexical_effects(
                             signature.span.start,

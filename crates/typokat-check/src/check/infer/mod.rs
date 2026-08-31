@@ -16,7 +16,9 @@ mod tests;
 use context::InferenceContext;
 use helpers::widen;
 
-use crate::check::query::{PublishedClassLookup, SemanticQueryCoordinator, SemanticQueryState};
+use crate::check::query::{
+    PublishedClassLookup, SemanticQueryAttempt, SemanticQueryCoordinator, SemanticQueryState,
+};
 use crate::class_semantics::{DemandOutcome, Exhaustion, PublishedClasses};
 use crate::relate::{RelationDemand, RelationNormalization, RelationOutcome};
 use crate::types::repr::{
@@ -97,6 +99,7 @@ impl InferenceRetryState {
 
 type CallSiteCandidates = FxHashMap<crate::types::repr::TypeParamId, Vec<CallSiteCandidate>>;
 
+#[derive(Clone, Copy)]
 pub(crate) struct SignatureInferenceRequest<'a> {
     pub(crate) type_params: &'a [GenericTypeParam],
     pub(crate) params: &'a [ParameterType],
@@ -130,6 +133,9 @@ pub(crate) struct SignatureInferenceResult<T> {
     pub(crate) exhaustion: Option<Exhaustion>,
     pub(crate) constraint_violations: FxHashSet<TypeParamId>,
 }
+
+type PartialSignatureInferenceAttempt =
+    SemanticQueryAttempt<DemandOutcome<SignatureInferenceResult<Vec<(TypeParamId, TypeId)>>>>;
 
 struct FixedSignatureParams {
     arguments: FxHashMap<TypeParamId, TypeId>,
@@ -282,6 +288,7 @@ pub(crate) fn infer_from_types_for_query_with_params(
 /// Function binders own their constraints/defaults, so this intentionally reads
 /// the persistent descriptors rather than the store's declaration-side column.
 /// That keeps an outer-substituted member signature sound at its later call site.
+#[cfg(test)]
 pub(crate) fn infer_signature_type_arguments_from_params(
     interner: &mut Interner,
     next_type_param: &mut u32,
@@ -289,12 +296,34 @@ pub(crate) fn infer_signature_type_arguments_from_params(
     queries: &mut SemanticQueryState,
     request: SignatureInferenceRequest<'_>,
 ) -> DemandOutcome<SignatureInferenceResult<FxHashMap<TypeParamId, TypeId>>> {
+    match infer_signature_type_arguments_from_params_attempt(
+        interner,
+        next_type_param,
+        published,
+        queries,
+        request,
+    ) {
+        SemanticQueryAttempt::Complete(outcome) => outcome,
+        SemanticQueryAttempt::NeedsNativeIdentities(_) => {
+            unreachable!("native identity demands require the project-local Pass boundary")
+        }
+    }
+}
+
+pub(in crate::check) fn infer_signature_type_arguments_from_params_attempt(
+    interner: &mut Interner,
+    next_type_param: &mut u32,
+    published: &PublishedClasses,
+    queries: &mut SemanticQueryState,
+    request: SignatureInferenceRequest<'_>,
+) -> SemanticQueryAttempt<DemandOutcome<SignatureInferenceResult<FxHashMap<TypeParamId, TypeId>>>> {
     infer_signature_type_arguments(interner, next_type_param, published, queries, request, None)
 }
 
 /// Infer a generic signature from its ordinary call inputs plus the call
 /// expression's contextual result type. Argument and receiver candidates have
 /// higher priority and replace contextual-return candidates for the same binder.
+#[cfg(test)]
 pub(crate) fn infer_signature_type_arguments_with_return_context(
     interner: &mut Interner,
     next_type_param: &mut u32,
@@ -303,6 +332,29 @@ pub(crate) fn infer_signature_type_arguments_with_return_context(
     request: SignatureInferenceRequest<'_>,
     return_context: (TypeId, TypeId),
 ) -> DemandOutcome<SignatureInferenceResult<FxHashMap<TypeParamId, TypeId>>> {
+    match infer_signature_type_arguments_with_return_context_attempt(
+        interner,
+        next_type_param,
+        published,
+        queries,
+        request,
+        return_context,
+    ) {
+        SemanticQueryAttempt::Complete(outcome) => outcome,
+        SemanticQueryAttempt::NeedsNativeIdentities(_) => {
+            unreachable!("native identity demands require the project-local Pass boundary")
+        }
+    }
+}
+
+pub(in crate::check) fn infer_signature_type_arguments_with_return_context_attempt(
+    interner: &mut Interner,
+    next_type_param: &mut u32,
+    published: &PublishedClasses,
+    queries: &mut SemanticQueryState,
+    request: SignatureInferenceRequest<'_>,
+    return_context: (TypeId, TypeId),
+) -> SemanticQueryAttempt<DemandOutcome<SignatureInferenceResult<FxHashMap<TypeParamId, TypeId>>>> {
     infer_signature_type_arguments(
         interner,
         next_type_param,
@@ -320,7 +372,7 @@ fn infer_signature_type_arguments(
     queries: &mut SemanticQueryState,
     request: SignatureInferenceRequest<'_>,
     return_context: Option<(TypeId, TypeId)>,
-) -> DemandOutcome<SignatureInferenceResult<FxHashMap<TypeParamId, TypeId>>> {
+) -> SemanticQueryAttempt<DemandOutcome<SignatureInferenceResult<FxHashMap<TypeParamId, TypeId>>>> {
     let SignatureInferenceRequest {
         type_params,
         params,
@@ -331,7 +383,7 @@ fn infer_signature_type_arguments(
     } = request;
     let active_params: FxHashSet<_> = type_params.iter().map(|param| param.id).collect();
     queries.savepoint();
-    let collection = collect_call_site_candidates_query(
+    let collection = match collect_call_site_candidates_query_attempt(
         interner,
         next_type_param,
         published,
@@ -344,7 +396,13 @@ fn infer_signature_type_arguments(
             optional_undefined_fallback,
             receiver,
         },
-    );
+    ) {
+        SemanticQueryAttempt::Complete(collection) => collection,
+        SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+            queries.rollback();
+            return SemanticQueryAttempt::NeedsNativeIdentities(demands);
+        }
+    };
     let mut candidates = collection.candidates;
     let preserve_unwidened = prune_optional_undefined_fallbacks(&mut candidates);
     let exempt = fresh_exempt_params(&candidates);
@@ -353,7 +411,7 @@ fn infer_signature_type_arguments(
         .iter()
         .map(|param| (param.id, param.constraint))
         .collect();
-    let fixed = match fix_call_site_candidates(
+    let fixed = match fix_call_site_candidates_attempt(
         interner,
         next_type_param,
         published,
@@ -362,13 +420,17 @@ fn infer_signature_type_arguments(
         &constraints,
         &preserve_unwidened,
     ) {
-        DemandOutcome::Ready(fixed) => fixed,
-        DemandOutcome::Exhausted(exhaustion) => {
+        SemanticQueryAttempt::Complete(DemandOutcome::Ready(fixed)) => fixed,
+        SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(exhaustion)) => {
             queries.rollback();
-            return DemandOutcome::Exhausted(exhaustion);
+            return SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(exhaustion));
+        }
+        SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+            queries.rollback();
+            return SemanticQueryAttempt::NeedsNativeIdentities(demands);
         }
     };
-    let outcome = fix_signature_params(
+    let outcome = match fix_signature_params_attempt(
         interner,
         next_type_param,
         published,
@@ -376,11 +438,17 @@ fn infer_signature_type_arguments(
         type_params,
         fixed,
         &exempt,
-    );
+    ) {
+        SemanticQueryAttempt::Complete(outcome) => outcome,
+        SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+            queries.rollback();
+            return SemanticQueryAttempt::NeedsNativeIdentities(demands);
+        }
+    };
     let ordinary_complete = collection.exhaustion.is_none();
     let outcome = match (outcome, return_context, ordinary_complete) {
         (DemandOutcome::Ready(fixed), Some((source, target)), true) => {
-            DemandOutcome::Ready(apply_return_context_candidates(
+            let fixed = match apply_return_context_candidates_attempt(
                 interner,
                 next_type_param,
                 published,
@@ -394,7 +462,14 @@ fn infer_signature_type_arguments(
                     source,
                     target,
                 },
-            ))
+            ) {
+                SemanticQueryAttempt::Complete(fixed) => fixed,
+                SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+                    queries.rollback();
+                    return SemanticQueryAttempt::NeedsNativeIdentities(demands);
+                }
+            };
+            DemandOutcome::Ready(fixed)
         }
         (outcome, _, _) => outcome,
     };
@@ -403,36 +478,36 @@ fn infer_signature_type_arguments(
     } else {
         queries.rollback();
     }
-    match outcome {
+    SemanticQueryAttempt::Complete(match outcome {
         DemandOutcome::Ready(fixed) => DemandOutcome::Ready(SignatureInferenceResult {
             arguments: fixed.arguments,
             exhaustion: collection.exhaustion,
             constraint_violations: fixed.constraint_violations,
         }),
         DemandOutcome::Exhausted(exhaustion) => DemandOutcome::Exhausted(exhaustion),
-    }
+    })
 }
 
-fn apply_return_context_candidates(
+fn apply_return_context_candidates_attempt(
     interner: &mut Interner,
     next_type_param: &mut u32,
     published: &PublishedClasses,
     queries: &mut SemanticQueryState,
     request: ReturnContextInferenceRequest<'_>,
-) -> FixedSignatureParams {
+) -> SemanticQueryAttempt<FixedSignatureParams> {
     let contextual_active: FxHashSet<_> = request
         .active_params
         .difference(request.ordinary_bound)
         .copied()
         .collect();
     if contextual_active.is_empty() {
-        return request.baseline;
+        return SemanticQueryAttempt::Complete(request.baseline);
     }
 
     // Contextual-result evidence is optional and atomic. No collection, fixing,
     // evaluation, or relation failure may affect overload applicability.
     queries.savepoint();
-    let contextual = collect_return_context_candidates_query(
+    let contextual = match collect_return_context_candidates_query_attempt(
         interner,
         next_type_param,
         published,
@@ -440,12 +515,18 @@ fn apply_return_context_candidates(
         &contextual_active,
         request.source,
         request.target,
-    );
+    ) {
+        SemanticQueryAttempt::Complete(contextual) => contextual,
+        SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+            queries.rollback();
+            return SemanticQueryAttempt::NeedsNativeIdentities(demands);
+        }
+    };
     if contextual.exhaustion.is_some() || contextual.candidates.is_empty() {
         queries.rollback();
-        return request.baseline;
+        return SemanticQueryAttempt::Complete(request.baseline);
     }
-    let contextual = match fix_call_site_candidates(
+    let contextual = match fix_call_site_candidates_attempt(
         interner,
         next_type_param,
         published,
@@ -454,10 +535,18 @@ fn apply_return_context_candidates(
         request.constraints,
         &FxHashSet::default(),
     ) {
-        DemandOutcome::Ready(contextual) if !contextual.is_empty() => contextual,
-        DemandOutcome::Ready(_) | DemandOutcome::Exhausted(_) => {
+        SemanticQueryAttempt::Complete(DemandOutcome::Ready(contextual))
+            if !contextual.is_empty() =>
+        {
+            contextual
+        }
+        SemanticQueryAttempt::Complete(DemandOutcome::Ready(_) | DemandOutcome::Exhausted(_)) => {
             queries.rollback();
-            return request.baseline;
+            return SemanticQueryAttempt::Complete(request.baseline);
+        }
+        SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+            queries.rollback();
+            return SemanticQueryAttempt::NeedsNativeIdentities(demands);
         }
     };
 
@@ -485,13 +574,13 @@ fn apply_return_context_candidates(
                 let Some(baseline_default) = substitute_to_fixed_point(interner, default, baseline)
                 else {
                     queries.rollback();
-                    return request.baseline;
+                    return SemanticQueryAttempt::Complete(request.baseline);
                 };
                 let Some(proposed_default) =
                     substitute_to_fixed_point(interner, default, &proposal)
                 else {
                     queries.rollback();
-                    return request.baseline;
+                    return SemanticQueryAttempt::Complete(request.baseline);
                 };
                 if proposed_default == baseline_default {
                     baseline.get(&param).copied()
@@ -503,13 +592,13 @@ fn apply_return_context_candidates(
                     substitute_to_fixed_point(interner, constraint, baseline)
                 else {
                     queries.rollback();
-                    return request.baseline;
+                    return SemanticQueryAttempt::Complete(request.baseline);
                 };
                 let Some(proposed_constraint) =
                     substitute_to_fixed_point(interner, constraint, &proposal)
                 else {
                     queries.rollback();
-                    return request.baseline;
+                    return SemanticQueryAttempt::Complete(request.baseline);
                 };
                 if proposed_constraint == baseline_constraint {
                     baseline.get(&param).copied()
@@ -524,7 +613,7 @@ fn apply_return_context_candidates(
                         Some(evaluated) => Some(evaluated),
                         None => {
                             queries.rollback();
-                            return request.baseline;
+                            return SemanticQueryAttempt::Complete(request.baseline);
                         }
                     }
                 }
@@ -533,7 +622,7 @@ fn apply_return_context_candidates(
             };
             let Some(value) = value else {
                 queries.rollback();
-                return request.baseline;
+                return SemanticQueryAttempt::Complete(request.baseline);
             };
             next.insert(param, value);
         }
@@ -545,7 +634,7 @@ fn apply_return_context_candidates(
     }
     if !stabilized {
         queries.rollback();
-        return request.baseline;
+        return SemanticQueryAttempt::Complete(request.baseline);
     }
 
     // Validate every constraint whose binder or substituted boundary changed.
@@ -559,13 +648,13 @@ fn apply_return_context_candidates(
             substitute_to_fixed_point(interner, raw_constraint, baseline)
         else {
             queries.rollback();
-            return request.baseline;
+            return SemanticQueryAttempt::Complete(request.baseline);
         };
         let Some(proposed_constraint) =
             substitute_to_fixed_point(interner, raw_constraint, &proposal)
         else {
             queries.rollback();
-            return request.baseline;
+            return SemanticQueryAttempt::Complete(request.baseline);
         };
         let baseline_value = baseline.get(&type_param.id).copied();
         let proposed_value = proposal.get(&type_param.id).copied();
@@ -577,7 +666,7 @@ fn apply_return_context_candidates(
         }
         let Some(candidate) = proposed_value else {
             queries.rollback();
-            return request.baseline;
+            return SemanticQueryAttempt::Complete(request.baseline);
         };
         let Some(evaluated) = evaluate_return_context_constraint(
             interner,
@@ -587,26 +676,54 @@ fn apply_return_context_candidates(
             proposed_constraint,
         ) else {
             queries.rollback();
-            return request.baseline;
+            return SemanticQueryAttempt::Complete(request.baseline);
         };
         let relation = {
             let mut coordinator =
                 SemanticQueryCoordinator::new(interner, published, queries, next_type_param);
-            coordinator.is_assignable(candidate, evaluated)
+            coordinator.is_assignable_attempt(candidate, evaluated)
         };
         match relation {
-            RelationOutcome::Yes => {}
-            RelationOutcome::No(_) | RelationOutcome::Exhausted(_) => {
+            SemanticQueryAttempt::Complete(RelationOutcome::Yes) => {}
+            SemanticQueryAttempt::Complete(
+                RelationOutcome::No(_) | RelationOutcome::Exhausted(_),
+            ) => {
                 queries.rollback();
-                return request.baseline;
+                return SemanticQueryAttempt::Complete(request.baseline);
+            }
+            SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+                queries.rollback();
+                return SemanticQueryAttempt::NeedsNativeIdentities(demands);
             }
         }
     }
 
     queries.commit();
-    FixedSignatureParams {
+    SemanticQueryAttempt::Complete(FixedSignatureParams {
         arguments: proposal,
         constraint_violations: request.baseline.constraint_violations,
+    })
+}
+
+#[cfg(test)]
+fn apply_return_context_candidates(
+    interner: &mut Interner,
+    next_type_param: &mut u32,
+    published: &PublishedClasses,
+    queries: &mut SemanticQueryState,
+    request: ReturnContextInferenceRequest<'_>,
+) -> FixedSignatureParams {
+    match apply_return_context_candidates_attempt(
+        interner,
+        next_type_param,
+        published,
+        queries,
+        request,
+    ) {
+        SemanticQueryAttempt::Complete(fixed) => fixed,
+        SemanticQueryAttempt::NeedsNativeIdentities(_) => {
+            unreachable!("native identity demands require the project-local Pass boundary")
+        }
     }
 }
 
@@ -645,7 +762,7 @@ fn substitute_to_fixed_point(
     (substitute(interner, current, map) == current).then_some(current)
 }
 
-fn collect_return_context_candidates_query(
+fn collect_return_context_candidates_query_attempt(
     interner: &mut Interner,
     next_type_param: &mut u32,
     published: &PublishedClasses,
@@ -653,16 +770,21 @@ fn collect_return_context_candidates_query(
     active_params: &FxHashSet<TypeParamId>,
     source: TypeId,
     target: TypeId,
-) -> CandidateCollectionResult {
+) -> SemanticQueryAttempt<CandidateCollectionResult> {
     let source = contextual_return_inference_source(interner.store(), source, target);
     let mut local = Candidates::default();
-    let outcome = infer_types_for_active_params(
+    let outcome = match infer_types_for_active_params_attempt(
         SemanticQueryCoordinator::new(interner, published, queries, next_type_param),
         source,
         target,
         &mut local,
         Some(active_params),
-    );
+    ) {
+        SemanticQueryAttempt::Complete(outcome) => outcome,
+        SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+            return SemanticQueryAttempt::NeedsNativeIdentities(demands);
+        }
+    };
     let mut candidates = CallSiteCandidates::default();
     if matches!(outcome, DemandOutcome::Ready(())) {
         record_call_site_candidates(
@@ -673,13 +795,13 @@ fn collect_return_context_candidates_query(
             false,
         );
     }
-    CandidateCollectionResult {
+    SemanticQueryAttempt::Complete(CandidateCollectionResult {
         candidates,
         exhaustion: match outcome {
             DemandOutcome::Ready(()) => None,
             DemandOutcome::Exhausted(exhaustion) => Some(exhaustion),
         },
-    }
+    })
 }
 
 fn contextual_return_inference_source(store: &Store, source: TypeId, target: TypeId) -> TypeId {
@@ -699,6 +821,7 @@ fn contextual_return_inference_source(store: &Store, source: TypeId, target: Typ
 
 /// Infer only binders that received a real call-site candidate, in declaration order.
 /// Defaults and missing-binder fallbacks belong to the caller's application layer.
+#[cfg(test)]
 pub(crate) fn infer_partial_signature_type_arguments_from_params(
     interner: &mut Interner,
     next_type_param: &mut u32,
@@ -706,6 +829,27 @@ pub(crate) fn infer_partial_signature_type_arguments_from_params(
     queries: &mut SemanticQueryState,
     request: SignatureInferenceRequest<'_>,
 ) -> DemandOutcome<SignatureInferenceResult<Vec<(TypeParamId, TypeId)>>> {
+    match infer_partial_signature_type_arguments_from_params_attempt(
+        interner,
+        next_type_param,
+        published,
+        queries,
+        request,
+    ) {
+        SemanticQueryAttempt::Complete(outcome) => outcome,
+        SemanticQueryAttempt::NeedsNativeIdentities(_) => {
+            unreachable!("native identity demands require the project-local Pass boundary")
+        }
+    }
+}
+
+pub(in crate::check) fn infer_partial_signature_type_arguments_from_params_attempt(
+    interner: &mut Interner,
+    next_type_param: &mut u32,
+    published: &PublishedClasses,
+    queries: &mut SemanticQueryState,
+    request: SignatureInferenceRequest<'_>,
+) -> PartialSignatureInferenceAttempt {
     let SignatureInferenceRequest {
         type_params,
         params,
@@ -716,7 +860,7 @@ pub(crate) fn infer_partial_signature_type_arguments_from_params(
     } = request;
     let active_params: FxHashSet<_> = type_params.iter().map(|param| param.id).collect();
     queries.savepoint();
-    let collection = collect_call_site_candidates_query(
+    let collection = match collect_call_site_candidates_query_attempt(
         interner,
         next_type_param,
         published,
@@ -729,7 +873,13 @@ pub(crate) fn infer_partial_signature_type_arguments_from_params(
             optional_undefined_fallback,
             receiver,
         },
-    );
+    ) {
+        SemanticQueryAttempt::Complete(collection) => collection,
+        SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+            queries.rollback();
+            return SemanticQueryAttempt::NeedsNativeIdentities(demands);
+        }
+    };
     let mut candidates = collection.candidates;
     let preserve_unwidened = prune_optional_undefined_fallbacks(&mut candidates);
     let exempt = fresh_exempt_params(&candidates);
@@ -737,7 +887,7 @@ pub(crate) fn infer_partial_signature_type_arguments_from_params(
         .iter()
         .map(|param| (param.id, param.constraint))
         .collect();
-    let fixed = match fix_call_site_candidates(
+    let fixed = match fix_call_site_candidates_attempt(
         interner,
         next_type_param,
         published,
@@ -746,13 +896,17 @@ pub(crate) fn infer_partial_signature_type_arguments_from_params(
         &constraints,
         &preserve_unwidened,
     ) {
-        DemandOutcome::Ready(fixed) => fixed,
-        DemandOutcome::Exhausted(exhaustion) => {
+        SemanticQueryAttempt::Complete(DemandOutcome::Ready(fixed)) => fixed,
+        SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(exhaustion)) => {
             queries.rollback();
-            return DemandOutcome::Exhausted(exhaustion);
+            return SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(exhaustion));
+        }
+        SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+            queries.rollback();
+            return SemanticQueryAttempt::NeedsNativeIdentities(demands);
         }
     };
-    let outcome = fix_present_signature_params(
+    let outcome = match fix_present_signature_params_attempt(
         interner,
         next_type_param,
         published,
@@ -760,29 +914,35 @@ pub(crate) fn infer_partial_signature_type_arguments_from_params(
         type_params,
         fixed,
         &exempt,
-    );
+    ) {
+        SemanticQueryAttempt::Complete(outcome) => outcome,
+        SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+            queries.rollback();
+            return SemanticQueryAttempt::NeedsNativeIdentities(demands);
+        }
+    };
     if matches!(outcome, DemandOutcome::Ready(_)) && collection.exhaustion.is_none() {
         queries.commit();
     } else {
         queries.rollback();
     }
-    match outcome {
+    SemanticQueryAttempt::Complete(match outcome {
         DemandOutcome::Ready(arguments) => DemandOutcome::Ready(SignatureInferenceResult {
             arguments,
             exhaustion: collection.exhaustion,
             constraint_violations: FxHashSet::default(),
         }),
         DemandOutcome::Exhausted(exhaustion) => DemandOutcome::Exhausted(exhaustion),
-    }
+    })
 }
 
-fn collect_call_site_candidates_query(
+fn collect_call_site_candidates_query_attempt(
     interner: &mut Interner,
     next_type_param: &mut u32,
     published: &PublishedClasses,
     queries: &mut SemanticQueryState,
     request: CandidateCollectionRequest<'_>,
-) -> CandidateCollectionResult {
+) -> SemanticQueryAttempt<CandidateCollectionResult> {
     let CandidateCollectionRequest {
         active_params,
         params,
@@ -806,13 +966,18 @@ fn collect_call_site_candidates_query(
         let mut local: Candidates = FxHashMap::default();
         // Keep candidates raw here; primitive-constrained parameters decide literal
         // preservation at fix time.
-        let outcome = infer_types_for_active_params(
+        let outcome = match infer_types_for_active_params_attempt(
             SemanticQueryCoordinator::new(interner, published, queries, next_type_param),
             arg,
             param,
             &mut local,
             active_params,
-        );
+        ) {
+            SemanticQueryAttempt::Complete(outcome) => outcome,
+            SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+                return SemanticQueryAttempt::NeedsNativeIdentities(demands);
+            }
+        };
         if let DemandOutcome::Exhausted(exhaustion) = outcome {
             first_exhaustion.get_or_insert(exhaustion);
             continue;
@@ -830,13 +995,18 @@ fn collect_call_site_candidates_query(
         if rest_start <= args.len() {
             let tuple = interner.intern_tuple(args[rest_start..].to_vec());
             let mut local: Candidates = FxHashMap::default();
-            let outcome = infer_types_for_active_params(
+            let outcome = match infer_types_for_active_params_attempt(
                 SemanticQueryCoordinator::new(interner, published, queries, next_type_param),
                 tuple,
                 rest_ty,
                 &mut local,
                 active_params,
-            );
+            ) {
+                SemanticQueryAttempt::Complete(outcome) => outcome,
+                SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+                    return SemanticQueryAttempt::NeedsNativeIdentities(demands);
+                }
+            };
             if let DemandOutcome::Exhausted(exhaustion) = outcome {
                 first_exhaustion.get_or_insert(exhaustion);
             } else {
@@ -857,13 +1027,18 @@ fn collect_call_site_candidates_query(
     }
     if let Some((source, target)) = receiver {
         let mut local: Candidates = FxHashMap::default();
-        let outcome = infer_types_for_active_params(
+        let outcome = match infer_types_for_active_params_attempt(
             SemanticQueryCoordinator::new(interner, published, queries, next_type_param),
             source,
             target,
             &mut local,
             active_params,
-        );
+        ) {
+            SemanticQueryAttempt::Complete(outcome) => outcome,
+            SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+                return SemanticQueryAttempt::NeedsNativeIdentities(demands);
+            }
+        };
         if let DemandOutcome::Exhausted(exhaustion) = outcome {
             first_exhaustion.get_or_insert(exhaustion);
         } else {
@@ -876,24 +1051,46 @@ fn collect_call_site_candidates_query(
             );
         }
     }
-    CandidateCollectionResult {
+    SemanticQueryAttempt::Complete(CandidateCollectionResult {
         candidates,
         exhaustion: first_exhaustion,
-    }
+    })
 }
 
-fn infer_types_for_active_params<L: PublishedClassLookup + ?Sized>(
+fn infer_types_for_active_params_attempt<L: PublishedClassLookup + ?Sized>(
     mut coordinator: SemanticQueryCoordinator<'_, L>,
     source: TypeId,
     target: TypeId,
     candidates: &mut Candidates,
     active_params: Option<&FxHashSet<TypeParamId>>,
-) -> DemandOutcome<()> {
+) -> SemanticQueryAttempt<DemandOutcome<()>> {
     match active_params {
         Some(active_params) => {
-            coordinator.infer_types_for_params(source, target, candidates, active_params)
+            coordinator.infer_types_for_params_attempt(source, target, candidates, active_params)
         }
-        None => coordinator.infer_types(source, target, candidates),
+        None => coordinator.infer_types_attempt(source, target, candidates),
+    }
+}
+
+#[cfg(test)]
+fn collect_call_site_candidates_query(
+    interner: &mut Interner,
+    next_type_param: &mut u32,
+    published: &PublishedClasses,
+    queries: &mut SemanticQueryState,
+    request: CandidateCollectionRequest<'_>,
+) -> CandidateCollectionResult {
+    match collect_call_site_candidates_query_attempt(
+        interner,
+        next_type_param,
+        published,
+        queries,
+        request,
+    ) {
+        SemanticQueryAttempt::Complete(result) => result,
+        SemanticQueryAttempt::NeedsNativeIdentities(_) => {
+            unreachable!("native identity demands require the project-local Pass boundary")
+        }
     }
 }
 
@@ -1074,7 +1271,7 @@ fn tuple_inference_target(
 /// Fix call-site candidate contributions to one type per parameter. A single
 /// source keeps the old M10 widening behavior; multiple sources fix to a candidate
 /// that can expose incompatible later arguments to the ordinary relation replay.
-fn fix_call_site_candidates(
+fn fix_call_site_candidates_attempt(
     interner: &mut Interner,
     next_type_param: &mut u32,
     published: &PublishedClasses,
@@ -1082,11 +1279,11 @@ fn fix_call_site_candidates(
     candidates: CallSiteCandidates,
     constraints: &FxHashMap<TypeParamId, Option<TypeId>>,
     preserve_unwidened: &FxHashSet<TypeParamId>,
-) -> DemandOutcome<FxHashMap<crate::types::repr::TypeParamId, TypeId>> {
+) -> SemanticQueryAttempt<DemandOutcome<FxHashMap<crate::types::repr::TypeParamId, TypeId>>> {
     let mut map = FxHashMap::default();
     for (param, cands) in candidates {
         let constraint = constraints.get(&param).copied().flatten();
-        let fixed = match fix_call_site_candidates_for_param(
+        let fixed = match fix_call_site_candidates_for_param_attempt(
             interner,
             next_type_param,
             published,
@@ -1095,19 +1292,22 @@ fn fix_call_site_candidates(
             &cands,
             preserve_unwidened.contains(&param),
         ) {
-            DemandOutcome::Ready(fixed) => fixed,
-            DemandOutcome::Exhausted(exhaustion) => {
-                return DemandOutcome::Exhausted(exhaustion);
+            SemanticQueryAttempt::Complete(DemandOutcome::Ready(fixed)) => fixed,
+            SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(exhaustion)) => {
+                return SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(exhaustion));
+            }
+            SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+                return SemanticQueryAttempt::NeedsNativeIdentities(demands);
             }
         };
         if let Some(fixed) = fixed {
             map.insert(param, fixed);
         }
     }
-    DemandOutcome::Ready(map)
+    SemanticQueryAttempt::Complete(DemandOutcome::Ready(map))
 }
 
-fn fix_call_site_candidates_for_param(
+fn fix_call_site_candidates_for_param_attempt(
     interner: &mut Interner,
     next_type_param: &mut u32,
     published: &PublishedClasses,
@@ -1115,30 +1315,37 @@ fn fix_call_site_candidates_for_param(
     constraint: Option<TypeId>,
     cands: &[CallSiteCandidate],
     preserve_unwidened: bool,
-) -> DemandOutcome<Option<TypeId>> {
+) -> SemanticQueryAttempt<DemandOutcome<Option<TypeId>>> {
     let contributions = candidate_contributions(cands);
     let mut iter = contributions.iter();
     let Some(first) = iter.next() else {
-        return DemandOutcome::Ready(None);
+        return SemanticQueryAttempt::Complete(DemandOutcome::Ready(None));
     };
-    let primitive_constraint = constraint.is_some_and(|ty| is_primitive_ish(interner.store(), ty));
+    let primitive_constraint = constraint.is_some_and(|ty| {
+        is_primitive_ish(interner.store(), ty) || queries.is_native_primitive_surface(ty)
+    });
     if contributions.len() == 1 {
         if preserve_unwidened && cands.len() == 1 && !cands[0].fresh {
-            return DemandOutcome::Ready(Some(raw_candidate_set(
+            return SemanticQueryAttempt::Complete(DemandOutcome::Ready(Some(raw_candidate_set(
                 interner,
                 first.candidates.iter().copied(),
-            )));
+            ))));
         }
-        return DemandOutcome::Ready(Some(fix_candidate_set(
+        return SemanticQueryAttempt::Complete(DemandOutcome::Ready(Some(fix_candidate_set(
             interner,
+            queries,
             constraint,
             first.candidates.iter().copied(),
-        )));
+        ))));
     }
 
     let mut current = raw_candidate_set(interner, first.candidates.iter().copied());
-    let mut current_prepared =
-        fix_candidate_set(interner, constraint, first.candidates.iter().copied());
+    let mut current_prepared = fix_candidate_set(
+        interner,
+        queries,
+        constraint,
+        first.candidates.iter().copied(),
+    );
     let mut preserve_current = primitive_constraint || first.candidates.len() > 1;
     let mut current_fresh = first.fresh;
 
@@ -1146,11 +1353,12 @@ fn fix_call_site_candidates_for_param(
         let next = raw_candidate_set(interner, contribution.candidates.iter().copied());
         let next_prepared = fix_candidate_set(
             interner,
+            queries,
             constraint,
             contribution.candidates.iter().copied(),
         );
 
-        let next_to_current = match is_assignable_type(
+        let next_to_current = match is_assignable_type_attempt(
             interner,
             next_type_param,
             published,
@@ -1158,9 +1366,12 @@ fn fix_call_site_candidates_for_param(
             next,
             current,
         ) {
-            DemandOutcome::Ready(assignable) => assignable,
-            DemandOutcome::Exhausted(exhaustion) => {
-                return DemandOutcome::Exhausted(exhaustion);
+            SemanticQueryAttempt::Complete(DemandOutcome::Ready(assignable)) => assignable,
+            SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(exhaustion)) => {
+                return SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(exhaustion));
+            }
+            SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+                return SemanticQueryAttempt::NeedsNativeIdentities(demands);
             }
         };
         if next_to_current {
@@ -1175,7 +1386,7 @@ fn fix_call_site_candidates_for_param(
             }
             continue;
         }
-        let current_to_next = match is_assignable_type(
+        let current_to_next = match is_assignable_type_attempt(
             interner,
             next_type_param,
             published,
@@ -1183,9 +1394,12 @@ fn fix_call_site_candidates_for_param(
             current,
             next,
         ) {
-            DemandOutcome::Ready(assignable) => assignable,
-            DemandOutcome::Exhausted(exhaustion) => {
-                return DemandOutcome::Exhausted(exhaustion);
+            SemanticQueryAttempt::Complete(DemandOutcome::Ready(assignable)) => assignable,
+            SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(exhaustion)) => {
+                return SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(exhaustion));
+            }
+            SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+                return SemanticQueryAttempt::NeedsNativeIdentities(demands);
             }
         };
         if current_to_next {
@@ -1233,14 +1447,14 @@ fn fix_call_site_candidates_for_param(
             continue;
         }
 
-        return DemandOutcome::Ready(Some(if preserve_current {
+        return SemanticQueryAttempt::Complete(DemandOutcome::Ready(Some(if preserve_current {
             current
         } else {
             current_prepared
-        }));
+        })));
     }
 
-    DemandOutcome::Ready(Some(current))
+    SemanticQueryAttempt::Complete(DemandOutcome::Ready(Some(current)))
 }
 
 fn candidate_contributions(cands: &[CallSiteCandidate]) -> Vec<CandidateContribution> {
@@ -1266,11 +1480,14 @@ fn raw_candidate_set(interner: &mut Interner, cands: impl Iterator<Item = TypeId
 
 fn fix_candidate_set(
     interner: &mut Interner,
+    queries: &SemanticQueryState,
     constraint: Option<TypeId>,
     cands: impl Iterator<Item = TypeId>,
 ) -> TypeId {
     let prepared: Vec<TypeId> = if constraint.is_some_and(|ty| {
-        is_primitive_ish(interner.store(), ty) || interner.store().tag(ty) == TypeTag::Keyof
+        is_primitive_ish(interner.store(), ty)
+            || queries.is_native_primitive_surface(ty)
+            || interner.store().tag(ty) == TypeTag::Keyof
     }) {
         cands.collect()
     } else {
@@ -1279,20 +1496,29 @@ fn fix_candidate_set(
     interner.union(prepared)
 }
 
-fn is_assignable_type(
+fn is_assignable_type_attempt(
     interner: &mut Interner,
     next_type_param: &mut u32,
     published: &PublishedClasses,
     queries: &mut SemanticQueryState,
     source: TypeId,
     target: TypeId,
-) -> DemandOutcome<bool> {
+) -> SemanticQueryAttempt<DemandOutcome<bool>> {
     match SemanticQueryCoordinator::new(interner, published, queries, next_type_param)
-        .is_assignable(source, target)
+        .is_assignable_attempt(source, target)
     {
-        RelationOutcome::Yes => DemandOutcome::Ready(true),
-        RelationOutcome::No(_) => DemandOutcome::Ready(false),
-        RelationOutcome::Exhausted(exhaustion) => DemandOutcome::Exhausted(exhaustion),
+        SemanticQueryAttempt::Complete(RelationOutcome::Yes) => {
+            SemanticQueryAttempt::Complete(DemandOutcome::Ready(true))
+        }
+        SemanticQueryAttempt::Complete(RelationOutcome::No(_)) => {
+            SemanticQueryAttempt::Complete(DemandOutcome::Ready(false))
+        }
+        SemanticQueryAttempt::Complete(RelationOutcome::Exhausted(exhaustion)) => {
+            SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(exhaustion))
+        }
+        SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+            SemanticQueryAttempt::NeedsNativeIdentities(demands)
+        }
     }
 }
 
@@ -1566,7 +1792,7 @@ fn is_primitive_ish(store: &Store, ty: TypeId) -> bool {
 ///
 /// An **unconstrained** parameter is unchanged from the M10 behaviour (candidate as-is,
 /// or `unknown`), so existing generic inference is untouched.
-fn fix_signature_params(
+fn fix_signature_params_attempt(
     interner: &mut Interner,
     next_type_param: &mut u32,
     published: &PublishedClasses,
@@ -1574,7 +1800,7 @@ fn fix_signature_params(
     type_params: &[GenericTypeParam],
     fixed: FxHashMap<TypeParamId, TypeId>,
     fresh_exempt: &FxHashSet<TypeParamId>,
-) -> DemandOutcome<FixedSignatureParams> {
+) -> SemanticQueryAttempt<DemandOutcome<FixedSignatureParams>> {
     let wk = interner.well_known();
     // Start from **all** collected candidates — this preserves bindings for parameters
     // NOT in `type_params` (e.g. a derived generic class inheriting its base's
@@ -1596,7 +1822,9 @@ fn fix_signature_params(
                 {
                     DemandOutcome::Ready(evaluated) => Some(evaluated),
                     DemandOutcome::Exhausted(exhaustion) => {
-                        return DemandOutcome::Exhausted(exhaustion);
+                        return SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(
+                            exhaustion,
+                        ));
                     }
                 }
             }
@@ -1617,15 +1845,20 @@ fn fix_signature_params(
                         queries,
                         next_type_param,
                     )
-                    .is_assignable(candidate, c)
+                    .is_assignable_attempt(candidate, c)
                     {
-                        RelationOutcome::Yes => true,
-                        RelationOutcome::No(_) => {
+                        SemanticQueryAttempt::Complete(RelationOutcome::Yes) => true,
+                        SemanticQueryAttempt::Complete(RelationOutcome::No(_)) => {
                             constraint_violations.insert(param);
                             false
                         }
-                        RelationOutcome::Exhausted(exhaustion) => {
-                            return DemandOutcome::Exhausted(exhaustion);
+                        SemanticQueryAttempt::Complete(RelationOutcome::Exhausted(exhaustion)) => {
+                            return SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(
+                                exhaustion,
+                            ));
+                        }
+                        SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+                            return SemanticQueryAttempt::NeedsNativeIdentities(demands);
                         }
                     };
                     // A violating candidate clamps to the constraint — unless EVERY
@@ -1653,13 +1886,39 @@ fn fix_signature_params(
         map.insert(param, value);
     }
 
-    DemandOutcome::Ready(FixedSignatureParams {
+    SemanticQueryAttempt::Complete(DemandOutcome::Ready(FixedSignatureParams {
         arguments: map,
         constraint_violations,
-    })
+    }))
 }
 
-fn fix_present_signature_params(
+#[cfg(test)]
+fn fix_signature_params(
+    interner: &mut Interner,
+    next_type_param: &mut u32,
+    published: &PublishedClasses,
+    queries: &mut SemanticQueryState,
+    type_params: &[GenericTypeParam],
+    fixed: FxHashMap<TypeParamId, TypeId>,
+    fresh_exempt: &FxHashSet<TypeParamId>,
+) -> DemandOutcome<FixedSignatureParams> {
+    match fix_signature_params_attempt(
+        interner,
+        next_type_param,
+        published,
+        queries,
+        type_params,
+        fixed,
+        fresh_exempt,
+    ) {
+        SemanticQueryAttempt::Complete(outcome) => outcome,
+        SemanticQueryAttempt::NeedsNativeIdentities(_) => {
+            unreachable!("native identity demands require the project-local Pass boundary")
+        }
+    }
+}
+
+fn fix_present_signature_params_attempt(
     interner: &mut Interner,
     next_type_param: &mut u32,
     published: &PublishedClasses,
@@ -1667,7 +1926,7 @@ fn fix_present_signature_params(
     type_params: &[GenericTypeParam],
     mut fixed: FxHashMap<TypeParamId, TypeId>,
     fresh_exempt: &FxHashSet<TypeParamId>,
-) -> DemandOutcome<Vec<(TypeParamId, TypeId)>> {
+) -> SemanticQueryAttempt<DemandOutcome<Vec<(TypeParamId, TypeId)>>> {
     let mut ordered = Vec::new();
     for type_param in type_params {
         let Some(candidate) = fixed.get(&type_param.id).copied() else {
@@ -1686,7 +1945,9 @@ fn fix_present_signature_params(
                 {
                     DemandOutcome::Ready(evaluated) => evaluated,
                     DemandOutcome::Exhausted(exhaustion) => {
-                        return DemandOutcome::Exhausted(exhaustion);
+                        return SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(
+                            exhaustion,
+                        ));
                     }
                 };
                 (!crate::check::checker::eval::contains_deferred_keyof(interner, evaluated))
@@ -1697,12 +1958,17 @@ fn fix_present_signature_params(
         let selected = match constraint {
             Some(constraint) if !fresh_exempt.contains(&type_param.id) => {
                 match SemanticQueryCoordinator::new(interner, published, queries, next_type_param)
-                    .is_assignable(candidate, constraint)
+                    .is_assignable_attempt(candidate, constraint)
                 {
-                    RelationOutcome::Yes => candidate,
-                    RelationOutcome::No(_) => constraint,
-                    RelationOutcome::Exhausted(exhaustion) => {
-                        return DemandOutcome::Exhausted(exhaustion);
+                    SemanticQueryAttempt::Complete(RelationOutcome::Yes) => candidate,
+                    SemanticQueryAttempt::Complete(RelationOutcome::No(_)) => constraint,
+                    SemanticQueryAttempt::Complete(RelationOutcome::Exhausted(exhaustion)) => {
+                        return SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(
+                            exhaustion,
+                        ));
+                    }
+                    SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+                        return SemanticQueryAttempt::NeedsNativeIdentities(demands);
                     }
                 }
             }
@@ -1711,7 +1977,276 @@ fn fix_present_signature_params(
         fixed.insert(type_param.id, selected);
         ordered.push((type_param.id, selected));
     }
-    DemandOutcome::Ready(ordered)
+    SemanticQueryAttempt::Complete(DemandOutcome::Ready(ordered))
+}
+
+#[cfg(test)]
+mod native_identity_attempt_tests {
+    use super::*;
+    use crate::check::query::{query_source_cold_measure, start_query_source_cold_measure};
+    use crate::class_semantics::ClassConstructionState;
+    use crate::types::repr::{ClassId, ObjectType, PropertyType};
+
+    fn demand_state() -> SemanticQueryState {
+        let mut queries = SemanticQueryState::default();
+        let mut available = [false; 8];
+        available[4] = true;
+        available[6] = true;
+        queries.set_native_identity_availability(available);
+        queries
+    }
+
+    fn object_with_value(interner: &mut Interner, value: TypeId) -> TypeId {
+        interner.intern_object(ObjectType {
+            properties: vec![PropertyType::public("value", value)],
+            ..ObjectType::default()
+        })
+    }
+
+    fn assert_native_demand<T>(attempt: SemanticQueryAttempt<T>) {
+        assert!(matches!(
+            attempt,
+            SemanticQueryAttempt::NeedsNativeIdentities(demands) if !demands.is_empty()
+        ));
+    }
+
+    #[test]
+    fn candidate_fixing_propagates_native_identity_demand_atomically() {
+        let mut interner = Interner::with_intrinsics();
+        let parameter = TypeParamId(99_100);
+        let parameter_ty = interner.intern_type_param(parameter, "T");
+        let boolean = interner.well_known().boolean;
+        let object = object_with_value(&mut interner, boolean);
+        let type_params = [GenericTypeParam {
+            id: parameter,
+            constraint: None,
+            default: None,
+        }];
+        let params = [
+            ParameterType::required("first", parameter_ty),
+            ParameterType::required("second", parameter_ty),
+        ];
+        let args = [boolean, object];
+        let fresh = [false; 2];
+        let fallbacks = [false; 2];
+        let published = PublishedClasses::empty();
+        let mut queries = demand_state();
+        let before = queries.durable_lengths();
+        let mut next_type_param = 99_101;
+
+        let attempt = infer_signature_type_arguments_from_params_attempt(
+            &mut interner,
+            &mut next_type_param,
+            &published,
+            &mut queries,
+            SignatureInferenceRequest {
+                type_params: &type_params,
+                params: &params,
+                args: &args,
+                fresh_args: &fresh,
+                optional_undefined_fallback: &fallbacks,
+                receiver: None,
+            },
+        );
+
+        assert_native_demand(attempt);
+        assert_eq!(queries.durable_lengths(), before);
+    }
+
+    #[test]
+    fn contextual_return_inference_propagates_native_identity_demand_atomically() {
+        let mut interner = Interner::with_intrinsics();
+        let parameter = TypeParamId(99_110);
+        let parameter_ty = interner.intern_type_param(parameter, "T");
+        let boolean = interner.well_known().boolean;
+        let constraint = object_with_value(&mut interner, boolean);
+        let type_params = [GenericTypeParam {
+            id: parameter,
+            constraint: Some(constraint),
+            default: None,
+        }];
+        let published = PublishedClasses::empty();
+        let mut queries = demand_state();
+        let before = queries.durable_lengths();
+        let mut next_type_param = 99_111;
+        let request = SignatureInferenceRequest {
+            type_params: &type_params,
+            params: &[],
+            args: &[],
+            fresh_args: &[],
+            optional_undefined_fallback: &[],
+            receiver: None,
+        };
+
+        let attempt = infer_signature_type_arguments_with_return_context_attempt(
+            &mut interner,
+            &mut next_type_param,
+            &published,
+            &mut queries,
+            request,
+            (boolean, parameter_ty),
+        );
+
+        assert_native_demand(attempt);
+        assert_eq!(queries.durable_lengths(), before);
+        queries.set_native_identity_availability([false; 8]);
+        let _ = infer_signature_type_arguments_with_return_context(
+            &mut interner,
+            &mut next_type_param,
+            &published,
+            &mut queries,
+            request,
+            (boolean, parameter_ty),
+        );
+    }
+
+    #[test]
+    fn partial_constraint_fixing_propagates_native_identity_demand_atomically() {
+        let mut interner = Interner::with_intrinsics();
+        let parameter = TypeParamId(99_120);
+        let parameter_ty = interner.intern_type_param(parameter, "T");
+        let boolean = interner.well_known().boolean;
+        let constraint = object_with_value(&mut interner, boolean);
+        let type_params = [GenericTypeParam {
+            id: parameter,
+            constraint: Some(constraint),
+            default: None,
+        }];
+        let params = [ParameterType::required("value", parameter_ty)];
+        let args = [boolean];
+        let published = PublishedClasses::empty();
+        let mut queries = demand_state();
+        let before = queries.durable_lengths();
+        let mut next_type_param = 99_121;
+        let fresh = [false];
+        let fallbacks = [false];
+        let request = SignatureInferenceRequest {
+            type_params: &type_params,
+            params: &params,
+            args: &args,
+            fresh_args: &fresh,
+            optional_undefined_fallback: &fallbacks,
+            receiver: None,
+        };
+
+        let attempt = infer_partial_signature_type_arguments_from_params_attempt(
+            &mut interner,
+            &mut next_type_param,
+            &published,
+            &mut queries,
+            request,
+        );
+
+        assert_native_demand(attempt);
+        assert_eq!(queries.durable_lengths(), before);
+        queries.set_native_identity_availability([false; 8]);
+        let _ = infer_partial_signature_type_arguments_from_params(
+            &mut interner,
+            &mut next_type_param,
+            &published,
+            &mut queries,
+            request,
+        );
+    }
+
+    #[test]
+    fn disabled_native_demands_preserve_legacy_inference_transactions() {
+        let mut interner = Interner::with_intrinsics();
+        let parameter = TypeParamId(99_130);
+        let parameter_ty = interner.intern_type_param(parameter, "T");
+        let boolean = interner.well_known().boolean;
+        let type_params = [GenericTypeParam {
+            id: parameter,
+            constraint: None,
+            default: None,
+        }];
+        let published = PublishedClasses::empty();
+        let mut queries = SemanticQueryState::default();
+        let mut next_type_param = 99_131;
+        let guard = start_query_source_cold_measure();
+
+        let full = infer_signature_type_arguments_with_return_context_attempt(
+            &mut interner,
+            &mut next_type_param,
+            &published,
+            &mut queries,
+            SignatureInferenceRequest {
+                type_params: &type_params,
+                params: &[],
+                args: &[],
+                fresh_args: &[],
+                optional_undefined_fallback: &[],
+                receiver: None,
+            },
+            (boolean, parameter_ty),
+        );
+        assert!(matches!(
+            full,
+            SemanticQueryAttempt::Complete(DemandOutcome::Ready(_))
+        ));
+
+        let params = [ParameterType::required("value", parameter_ty)];
+        let args = [boolean];
+        let flags = [false];
+        let partial = infer_partial_signature_type_arguments_from_params_attempt(
+            &mut interner,
+            &mut next_type_param,
+            &published,
+            &mut queries,
+            SignatureInferenceRequest {
+                type_params: &type_params,
+                params: &params,
+                args: &args,
+                fresh_args: &flags,
+                optional_undefined_fallback: &flags,
+                receiver: None,
+            },
+        );
+        assert!(matches!(
+            partial,
+            SemanticQueryAttempt::Complete(DemandOutcome::Ready(_))
+        ));
+
+        let before_exhaustion = queries.durable_lengths();
+        let poisoned_class = ClassId(99_130);
+        let poisoned_constraint = interner.intern_class_instance(poisoned_class, Vec::new());
+        let poisoned_published =
+            PublishedClasses::forged(poisoned_class, ClassConstructionState::Poisoned);
+        let constrained_type_params = [GenericTypeParam {
+            id: parameter,
+            constraint: Some(poisoned_constraint),
+            default: None,
+        }];
+        let params = [
+            ParameterType::required("first", parameter_ty),
+            ParameterType::required("second", parameter_ty),
+        ];
+        let args = [boolean, interner.well_known().number];
+        let flags = [false; 2];
+        let exhausted = infer_signature_type_arguments_from_params_attempt(
+            &mut interner,
+            &mut next_type_param,
+            &poisoned_published,
+            &mut queries,
+            SignatureInferenceRequest {
+                type_params: &constrained_type_params,
+                params: &params,
+                args: &args,
+                fresh_args: &flags,
+                optional_undefined_fallback: &flags,
+                receiver: None,
+            },
+        );
+        assert!(matches!(
+            exhausted,
+            SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(_))
+        ));
+        assert_eq!(queries.durable_lengths(), before_exhaustion);
+
+        let measure = query_source_cold_measure().expect("measurement remains active");
+        drop(guard);
+        assert_eq!(measure.semantic_state_forks, 4);
+    }
 }
 
 #[cfg(test)]
