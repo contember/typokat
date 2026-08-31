@@ -114,6 +114,37 @@ fn only_named_scoreboard_unresolved_rows_use_the_stable_class_token() {
 }
 
 #[test]
+fn named_scoreboard_unresolved_rows_ignore_underlying_semantic_shape() {
+    let input = UNRESOLVED_CASES
+        .iter()
+        .flat_map(|case_id| {
+            ["const clean = 1;\n", "const value: string = 1;\n"]
+                .into_iter()
+                .map(move |source| {
+                    canonical_line(json!({
+                        "case_id": case_id,
+                        "schema": 1,
+                        "source": source,
+                    }))
+                })
+        })
+        .collect::<String>();
+    let output = invoke(&[], &input);
+    assert_eq!(
+        semantic_rows(&output),
+        vec![
+            json!({
+                "diagnostics": [],
+                "exit_code": 3,
+                "incompletes": ["unresolved"],
+                "parse_errors": [],
+            });
+            UNRESOLVED_CASES.len() * 2
+        ]
+    );
+}
+
+#[test]
 fn parse_rejection_uses_only_the_stable_class_token() {
     let request = canonical_line(json!({
         "case_id": "ordinary-parse-rejected",

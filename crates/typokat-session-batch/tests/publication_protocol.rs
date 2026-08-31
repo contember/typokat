@@ -362,3 +362,137 @@ fn project_local_native_relation_context_reaches_every_relation_boundary() {
         );
     }
 }
+
+#[test]
+fn project_local_class_surfaces_instantiate_zero_argument_aliases() {
+    let receipt = invoke(
+        "project-local-class-surface-zero-argument-alias",
+        "type State = { data: number };\n\
+         class C { state!: State; method() { const value: number = this.state.data; } }\n",
+    );
+    assert_eq!(
+        receipt["semantic"],
+        json!({
+            "diagnostics": [],
+            "exit_code": 0,
+            "incompletes": [],
+            "parse_errors": [],
+        })
+    );
+}
+
+#[test]
+fn project_local_deferred_keyof_satisfies_the_property_key_domain() {
+    let receipt = invoke(
+        "project-local-deferred-keyof-property-key-domain",
+        "type DeferredRecord<S extends object> = Record<keyof S, () => void>;\n",
+    );
+    assert_eq!(
+        receipt["semantic"],
+        json!({
+            "diagnostics": [],
+            "exit_code": 0,
+            "incompletes": [],
+            "parse_errors": [],
+        })
+    );
+}
+
+#[test]
+fn project_local_signature_constraints_do_not_depend_on_alias_warmup_order() {
+    let receipt = invoke(
+        "project-local-signature-constraint-order",
+        "type Warm = Record<string, string>;\n\
+         function update<T extends Record<K, string>, K extends string>(obj: T): void {}\n",
+    );
+    assert_eq!(
+        receipt["semantic"],
+        json!({
+            "diagnostics": [],
+            "exit_code": 0,
+            "incompletes": [],
+            "parse_errors": [],
+        })
+    );
+}
+
+#[test]
+fn project_local_class_surfaces_demand_lazy_library_aliases() {
+    let receipt = invoke(
+        "project-local-class-surface-lazy-library-alias",
+        "class Sample<P> { props!: Readonly<P>; }\n\
+         class Derived<T> extends Sample<T> {}\n",
+    );
+    assert_eq!(
+        receipt["semantic"],
+        json!({
+            "diagnostics": [],
+            "exit_code": 0,
+            "incompletes": [],
+            "parse_errors": [],
+        })
+    );
+}
+
+#[test]
+fn project_local_inference_sees_published_alias_constraints() {
+    let receipt = invoke(
+        "project-local-inference-published-alias-constraint",
+        "type Allowed = 0 | 1;\n\
+         declare function get<I extends Allowed>(index: I): void;\n\
+         get(0);\n\
+         get(1);\n\
+         get(2);\n",
+    );
+    assert_eq!(
+        receipt["semantic"],
+        json!({
+            "diagnostics": ["5:2345"],
+            "exit_code": 1,
+            "incompletes": [],
+            "parse_errors": [],
+        })
+    );
+}
+
+#[test]
+fn project_local_constrained_template_infer_preserves_numeric_constraints() {
+    let receipt = invoke(
+        "project-local-constrained-template-infer",
+        "type Parsed<S extends string> =\n\
+           S extends `${infer N extends number}` ? N : never;\n\
+         interface Indexer {\n\
+           get<I extends Parsed<\"0\" | \"1\">>(index: I): void;\n\
+         }\n\
+         declare const value: Indexer;\n\
+         value.get(0);\n\
+         value.get(1);\n\
+         value.get(2);\n",
+    );
+    assert_eq!(
+        receipt["semantic"],
+        json!({
+            "diagnostics": ["9:2345"],
+            "exit_code": 1,
+            "incompletes": [],
+            "parse_errors": [],
+        })
+    );
+}
+
+#[test]
+fn project_local_computed_keys_use_the_certified_symbol_value() {
+    let receipt = invoke(
+        "project-local-certified-symbol-value",
+        "type Branded = string & {\n  [Symbol.species]: \"brand\";\n};\n",
+    );
+    assert_eq!(
+        receipt["semantic"],
+        json!({
+            "diagnostics": [],
+            "exit_code": 0,
+            "incompletes": [],
+            "parse_errors": [],
+        })
+    );
+}
