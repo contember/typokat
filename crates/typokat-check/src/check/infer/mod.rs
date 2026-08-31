@@ -8,6 +8,7 @@
 
 mod context;
 #[cfg(test)]
+#[path = "spec/derivation_identity_spec.rs"]
 mod derivation_identity_spec;
 mod helpers;
 #[cfg(test)]

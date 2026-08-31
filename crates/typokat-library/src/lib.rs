@@ -108,46 +108,61 @@ pub fn packaged_library_source_inputs(
 }
 
 #[cfg(test)]
+#[path = "spec/user_delta_spec.rs"]
 mod user_delta_spec;
 
 #[cfg(test)]
+#[path = "spec/user_delta_project_scale_spec.rs"]
 mod user_delta_project_scale_spec;
 
 #[cfg(test)]
+#[path = "spec/collision_preflight_spec.rs"]
 mod collision_preflight_spec;
 
 #[cfg(test)]
+#[path = "spec/private_route_receipt_spec.rs"]
 mod private_route_receipt_spec;
 
 #[cfg(test)]
+#[path = "spec/private_combined_universe_spec.rs"]
 mod private_combined_universe_spec;
 
 #[cfg(test)]
+#[path = "spec/collision_replay_index_spec.rs"]
 mod collision_replay_index_spec;
 
 #[cfg(test)]
+#[path = "spec/collision_epoch_scheduler_spec.rs"]
 mod collision_epoch_scheduler_spec;
 
 #[cfg(test)]
+#[path = "spec/compiler_profile_spec.rs"]
 mod compiler_profile_spec;
 
 #[cfg(test)]
+#[path = "spec/library_declaration_product_spec.rs"]
 mod library_declaration_product_spec;
 
 #[cfg(test)]
+#[path = "spec/library_declaration_product_integration_spec.rs"]
 mod library_declaration_product_integration_spec;
 
 #[cfg(test)]
+#[path = "spec/project_local_declaration_universe_spec.rs"]
 mod project_local_declaration_universe_spec;
 
 #[cfg(test)]
+#[path = "spec/project_local_semantic_universe_spec.rs"]
 mod project_local_semantic_universe_spec;
 
 #[cfg(test)]
+#[path = "spec/type_group_ordering_spec.rs"]
 mod type_group_ordering_spec;
 
 #[cfg(test)]
+#[path = "spec/private_replay_scale_spec.rs"]
 mod private_replay_scale_spec;
 
 #[cfg(test)]
+#[path = "spec/source_compiled_collision_plan_spec.rs"]
 mod source_compiled_collision_plan_spec;

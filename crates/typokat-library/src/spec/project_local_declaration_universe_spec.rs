@@ -112,8 +112,8 @@ fn declaration_product_retains_exact_library_lexical_scope_inputs() {
         "25fcd4c7e7e521032582e145aa4b379246fd5f166f6362cf58a01d208ec6f04a"
     );
 
-    let schema = include_str!("../../typokat-library-product/src/schema.rs");
-    let keys = include_str!("../../typokat-library-product/src/keys.rs");
+    let schema = include_str!("../../../typokat-library-product/src/schema.rs");
+    let keys = include_str!("../../../typokat-library-product/src/keys.rs");
     for required in [
         "pub struct CallableScopeRecipe {\n    pub site: SourceSite,\n    pub parent: LexicalScopeParent,\n}",
         "pub enum LexicalScopeParent {\n    Region(RegionKey),\n    Callable(CallableScopeKey),\n}",
@@ -174,7 +174,7 @@ fn declaration_product_retains_exact_library_lexical_scope_inputs() {
         );
     }
 
-    let projector = include_str!("../../typokat-binder/src/binder/product.rs");
+    let projector = include_str!("../../../typokat-binder/src/binder/product.rs");
     let callable_start = projector
         .find("let mut callable_facts")
         .expect("callable projection exists");
@@ -479,7 +479,7 @@ fn declaration_product_lexical_scope_corruption_controls_are_live() {
         (0, 0, 0, 0)
     );
 
-    let validation = include_str!("../../typokat-library-product/src/validate.rs");
+    let validation = include_str!("../../../typokat-library-product/src/validate.rs");
     let start = validation
         .find("pub fn lexical_scope_corruption_receipt_for_test")
         .expect("product-owned corruption helper exists");
@@ -797,7 +797,7 @@ fn oracle_does_not_initialize_the_product_or_the_frozen_semantic_base() {
     );
     assert!(!provider.declaration_product_initialized_for_test());
 
-    let source = include_str!("provider.rs");
+    let source = include_str!("../provider.rs");
     let start = source
         .find("pub(super) fn complete_source_declaration_oracle_for_test")
         .expect("oracle entry exists");
@@ -855,7 +855,7 @@ fn complete_source_oracle_uses_one_fresh_project_root() {
             && !row.contains("scope:unanchored:ScriptNamespaceRoot")
     }));
 
-    let source = include_str!("provider.rs");
+    let source = include_str!("../provider.rs");
     let start = source
         .find("pub(super) fn complete_source_declaration_oracle_for_test")
         .expect("oracle entry exists");
@@ -1180,7 +1180,7 @@ fn assert_projection_eq(actual: &DeclarationProjection, expected: &DeclarationPr
 }
 
 fn assert_candidate_implementation_boundary() {
-    let source = include_str!("provider.rs");
+    let source = include_str!("../provider.rs");
     let start = source
         .find("pub(super) fn prepare_project_declaration_universe_for_test")
         .expect("candidate provider entry exists");
@@ -1245,58 +1245,58 @@ fn project_cases() -> Vec<Vec<UserDeltaProjectInputForTest<'static>>> {
     vec![
         vec![input(
             "/candidate/reflect_packaged.ts",
-            include_str!("../../../tests/cases/sr_project_local_library_candidate/reflect_packaged.ts"),
+            include_str!("../../../../tests/cases/sr_project_local_library_candidate/reflect_packaged.ts"),
         )],
         vec![input(
             "/candidate/array_library_scc.ts",
-            include_str!("../../../tests/cases/sr_project_local_library_candidate/array_library_scc.ts"),
+            include_str!("../../../../tests/cases/sr_project_local_library_candidate/array_library_scc.ts"),
         )],
         vec![
             input(
                 "/candidate/isolation_a/00_augment.ts",
-                include_str!("../../../tests/cases/sr_project_local_library_candidate/isolation_a/00_augment.ts"),
+                include_str!("../../../../tests/cases/sr_project_local_library_candidate/isolation_a/00_augment.ts"),
             ),
             input(
                 "/candidate/isolation_a/99_consume.ts",
-                include_str!("../../../tests/cases/sr_project_local_library_candidate/isolation_a/99_consume.ts"),
+                include_str!("../../../../tests/cases/sr_project_local_library_candidate/isolation_a/99_consume.ts"),
             ),
         ],
         vec![
             input(
                 "/candidate/isolation_b/00_augment.ts",
-                include_str!("../../../tests/cases/sr_project_local_library_candidate/isolation_b/00_augment.ts"),
+                include_str!("../../../../tests/cases/sr_project_local_library_candidate/isolation_b/00_augment.ts"),
             ),
             input(
                 "/candidate/isolation_b/99_consume.ts",
-                include_str!("../../../tests/cases/sr_project_local_library_candidate/isolation_b/99_consume.ts"),
+                include_str!("../../../../tests/cases/sr_project_local_library_candidate/isolation_b/99_consume.ts"),
             ),
         ],
         vec![
             input(
                 "/candidate/mixed_group_forward/00_script.ts",
-                include_str!("../../../tests/cases/sr_project_local_library_candidate/mixed_group_forward/00_script.ts"),
+                include_str!("../../../../tests/cases/sr_project_local_library_candidate/mixed_group_forward/00_script.ts"),
             ),
             input(
                 "/candidate/mixed_group_forward/50_module.ts",
-                include_str!("../../../tests/cases/sr_project_local_library_candidate/mixed_group_forward/50_module.ts"),
+                include_str!("../../../../tests/cases/sr_project_local_library_candidate/mixed_group_forward/50_module.ts"),
             ),
             input(
                 "/candidate/mixed_group_forward/99_consume.ts",
-                include_str!("../../../tests/cases/sr_project_local_library_candidate/mixed_group_forward/99_consume.ts"),
+                include_str!("../../../../tests/cases/sr_project_local_library_candidate/mixed_group_forward/99_consume.ts"),
             ),
         ],
         vec![
             input(
                 "/candidate/mixed_group_reverse/00_consume.ts",
-                include_str!("../../../tests/cases/sr_project_local_library_candidate/mixed_group_reverse/00_consume.ts"),
+                include_str!("../../../../tests/cases/sr_project_local_library_candidate/mixed_group_reverse/00_consume.ts"),
             ),
             input(
                 "/candidate/mixed_group_reverse/50_module.ts",
-                include_str!("../../../tests/cases/sr_project_local_library_candidate/mixed_group_reverse/50_module.ts"),
+                include_str!("../../../../tests/cases/sr_project_local_library_candidate/mixed_group_reverse/50_module.ts"),
             ),
             input(
                 "/candidate/mixed_group_reverse/99_script.ts",
-                include_str!("../../../tests/cases/sr_project_local_library_candidate/mixed_group_reverse/99_script.ts"),
+                include_str!("../../../../tests/cases/sr_project_local_library_candidate/mixed_group_reverse/99_script.ts"),
             ),
         ],
         vec![
@@ -1315,20 +1315,20 @@ fn project_cases() -> Vec<Vec<UserDeltaProjectInputForTest<'static>>> {
         ],
         vec![input(
             "/candidate/b14/global_this_undefined.ts",
-            include_str!("../../../tests/cases/b14_full_lib_loading/global_this_undefined.ts"),
+            include_str!("../../../../tests/cases/b14_full_lib_loading/global_this_undefined.ts"),
         )],
         vec![input(
             "/candidate/b43/class_interface_namespace_orders.ts",
-            include_str!("../../../tests/cases/b43_namespaces_declaration_merging/class_interface_namespace_orders.ts"),
+            include_str!("../../../../tests/cases/b43_namespaces_declaration_merging/class_interface_namespace_orders.ts"),
         )],
         vec![
             input(
                 "/candidate/b103/global_this_contributor/00_global.ts",
-                include_str!("../../../tests/cases/b103_library_merge_correctness_project/global_this_contributor/00_global.ts"),
+                include_str!("../../../../tests/cases/b103_library_merge_correctness_project/global_this_contributor/00_global.ts"),
             ),
             input(
                 "/candidate/b103/global_this_contributor/99_consume.ts",
-                include_str!("../../../tests/cases/b103_library_merge_correctness_project/global_this_contributor/99_consume.ts"),
+                include_str!("../../../../tests/cases/b103_library_merge_correctness_project/global_this_contributor/99_consume.ts"),
             ),
         ],
     ]

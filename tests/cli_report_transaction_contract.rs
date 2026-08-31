@@ -16,7 +16,9 @@ const WRAPPERS: [&str; 3] = [
 
 fn production_source(source: &str) -> &str {
     source
-        .split_once("\n#[cfg(test)]\nmod wu7_cli_fault_spec;")
+        .split_once(
+            "\n#[cfg(test)]\n#[path = \"spec/wu7_cli_fault_spec.rs\"]\nmod wu7_cli_fault_spec;",
+        )
         .map_or(source, |(production, _tests)| production)
 }
 

@@ -10,7 +10,7 @@ use crate::types::repr::ClassId;
 
 #[test]
 fn class_attachment_consumes_inventory_identity_without_a_second_source_lookup() {
-    let checker_root = include_str!("mod.rs");
+    let checker_root = include_str!("../mod.rs");
     let attach_class_bindings = checker_root
         .split_once("fn attach_class_bindings_from_inventory<")
         .and_then(|(_, rest)| rest.split_once("\nfn declaration_owner_namespace"))
@@ -50,7 +50,7 @@ fn class_attachment_consumes_inventory_identity_without_a_second_source_lookup()
     assert_eq!(owner_range.matches("partition_point").count(), 2);
     assert!(!owner_range.contains(".iter()"));
 
-    let inventory_source = include_str!("decls/inventory.rs");
+    let inventory_source = include_str!("../decls/inventory.rs");
     let exact_join = inventory_source
         .split_once("fn build_with_exact_lookup<'binder>(")
         .and_then(|(_, rest)| rest.split_once("\n    pub fn module("))
@@ -80,7 +80,7 @@ fn class_attachment_consumes_inventory_identity_without_a_second_source_lookup()
         );
     }
 
-    let lexical_source = include_str!("lexical_events.rs");
+    let lexical_source = include_str!("../lexical_events.rs");
     let reservation = lexical_source
         .split_once("fn reserve_program_with_context<")
         .and_then(|(_, rest)| {

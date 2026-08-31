@@ -21,6 +21,7 @@ use crate::types::{substitute, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 #[cfg(test)]
+#[path = "spec/deferred_keyof_cache_spec.rs"]
 mod deferred_keyof_cache_spec;
 pub(in crate::check) mod demand;
 mod extends;

@@ -1478,15 +1478,19 @@ mod test_support {
 }
 
 #[cfg(test)]
+#[path = "driver/spec/project_report_coverage_spec.rs"]
 mod project_report_coverage_spec;
 
 #[cfg(test)]
+#[path = "driver/spec/wu6_benchmark_route_spec.rs"]
 mod wu6_benchmark_route_spec;
 
 #[cfg(test)]
+#[path = "driver/spec/wu5_project_local_shadow_spec.rs"]
 mod wu5_project_local_shadow_spec;
 
 #[cfg(test)]
+#[path = "driver/spec/wu7_provider_lifecycle_spec.rs"]
 mod wu7_provider_lifecycle_spec;
 
 #[cfg(test)]

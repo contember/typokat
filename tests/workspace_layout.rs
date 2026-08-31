@@ -264,10 +264,19 @@ fn workspace_has_the_accepted_members_defaults_and_source_owners() {
                 .into_owned()
         })
         .collect::<BTreeSet<_>>();
-    assert_eq!(
-        root_sources,
-        names(&["lib.rs", "main.rs", "wu7_cli_fault_spec.rs"])
-    );
+    assert_eq!(root_sources, names(&["lib.rs", "main.rs", "spec"]));
+
+    let root_spec_sources = std::fs::read_dir(root.join("src/spec"))
+        .expect("root src/spec directory")
+        .map(|entry| {
+            entry
+                .expect("root spec source entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(root_spec_sources, names(&["wu7_cli_fault_spec.rs"]));
 
     assert!(root.join("crates/typokat-core/src/source.rs").is_file());
     assert!(root.join("crates/typokat-core/src/span.rs").is_file());

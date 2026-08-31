@@ -409,7 +409,7 @@ fn pass_and_universe_isolation_hold_even_when_numeric_ids_collide() {
 
 #[test]
 fn source_shape_keeps_semantic_boundaries_and_clean_lookup_first() {
-    let resolve = include_str!("resolve.rs");
+    let resolve = include_str!("../resolve.rs");
     let caller = compact(section(
         resolve,
         "fn instantiate_type_group_arguments(",

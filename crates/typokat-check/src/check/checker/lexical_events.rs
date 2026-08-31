@@ -2088,11 +2088,11 @@ fn statement_variable_declaration<'ast>(
 }
 
 #[cfg(test)]
-#[path = "lexical_events/completion_slot_spec.rs"]
+#[path = "lexical_events/spec/completion_slot_spec.rs"]
 mod completion_slot_spec;
 
 #[cfg(test)]
-#[path = "lexical_events/owner_lookup_spec.rs"]
+#[path = "lexical_events/spec/owner_lookup_spec.rs"]
 mod owner_lookup_spec;
 
 #[cfg(test)]

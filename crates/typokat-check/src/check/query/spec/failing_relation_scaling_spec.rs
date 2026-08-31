@@ -1,6 +1,6 @@
 //! A *failing* relation must be memoized, not re-derived per probe.
 //!
-//! Until [ADR-0016](../../../docs/decisions/0016-reason-free-relation-probes.md),
+//! Until [ADR-0016](../../../../../../docs/decisions/0016-reason-free-relation-probes.md),
 //! [`Relater::relate`] short-circuited a cached `true` but let a cached `false` fall
 //! through to a full `relate_uncached` recompute, solely to rebuild the [`ReasonChain`]
 //! the three-word cache does not store. Every rule that kept probing after a failure

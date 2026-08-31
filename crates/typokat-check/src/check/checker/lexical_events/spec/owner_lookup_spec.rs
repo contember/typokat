@@ -469,7 +469,7 @@ fn declaration_reservation_lookup_is_direct_exact_and_table_independent() {
 
 #[test]
 fn owner_and_declaration_lookup_hot_paths_have_no_scan_fallback() {
-    let source = include_str!("../lexical_events.rs");
+    let source = include_str!("../../lexical_events.rs");
     let owner_start = source.find("    pub fn owner_at(").unwrap();
     let owner_end = source[owner_start..]
         .find("    pub fn attach_class_binding(")

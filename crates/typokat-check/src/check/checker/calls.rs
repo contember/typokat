@@ -49,8 +49,10 @@ enum ArrowReturnPolicy {
 }
 
 #[cfg(test)]
+#[path = "calls/spec/contextual_duplicate_diagnostics_spec.rs"]
 mod contextual_duplicate_diagnostics_spec;
 #[cfg(test)]
+#[path = "calls/spec/contextual_rewalk_scaling_spec.rs"]
 mod contextual_rewalk_scaling_spec;
 
 /// How many declaration slots a memoized walk may depend on or republish, and how

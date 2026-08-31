@@ -213,17 +213,23 @@ fn record_substitution_run_visit(collector: &SubstitutionRunVisitMeasureCollecto
 
 mod apply;
 #[cfg(test)]
+#[path = "spec/completed_memo_spec.rs"]
 mod completed_memo_spec;
 #[cfg(test)]
+#[path = "spec/cycle_scoped_memo_spec.rs"]
 mod cycle_scoped_memo_spec;
 mod derivation;
 #[cfg(test)]
+#[path = "spec/durable_application_result_spec.rs"]
 mod durable_application_result_spec;
 #[cfg(test)]
+#[path = "spec/durable_free_param_summary_spec.rs"]
 mod durable_free_param_summary_spec;
 #[cfg(test)]
+#[path = "spec/measurement_scope_spec.rs"]
 mod measurement_scope_spec;
 #[cfg(test)]
+#[path = "spec/param_relevant_prefilter_spec.rs"]
 mod param_relevant_prefilter_spec;
 #[cfg(test)]
 mod tests;

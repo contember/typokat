@@ -89,13 +89,17 @@ fn interface_scc_construction_work_for_test() -> Vec<InterfaceSccConstructionWor
 }
 
 #[cfg(test)]
+#[path = "spec/cycle_tainted_application_cache_spec.rs"]
 mod cycle_tainted_application_cache_spec;
 #[cfg(test)]
+#[path = "spec/eager_application_cache_spec.rs"]
 mod eager_application_cache_spec;
 #[cfg(test)]
+#[path = "spec/heritage_base_merge_scan_spec.rs"]
 mod heritage_base_merge_scan_spec;
 pub(in crate::check::checker) mod interface;
 #[cfg(test)]
+#[path = "spec/interface_scc_pending_spec.rs"]
 mod interface_scc_pending_spec;
 mod params;
 mod resolve;

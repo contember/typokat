@@ -982,12 +982,12 @@ fn inherited_explicit_ready_terminal_hits_and_unavailable_terminal_stays_silent(
 #[test]
 fn inherited_ready_terminal_is_eager_eligible_while_non_ready_returns_early() {
     let application = without_whitespace(source_section(
-        include_str!("resolve.rs"),
+        include_str!("../resolve.rs"),
         "fn instantiate_type_group_arguments(",
         "fn type_decl_defaults(",
     ));
     let type_groups = without_whitespace(source_section(
-        include_str!("../type_groups.rs"),
+        include_str!("../../type_groups.rs"),
         "fn resolution_environment(&self)",
         "fn is_published(&self)",
     ));
@@ -1064,9 +1064,9 @@ memberSecond.missing;
 
 #[test]
 fn activation_shape_keeps_cache_at_the_ready_final_arm_and_telemetry_test_only() {
-    let resolve = include_str!("resolve.rs");
-    let context = include_str!("../context.rs");
-    let type_groups = include_str!("../type_groups.rs");
+    let resolve = include_str!("../resolve.rs");
+    let context = include_str!("../../context.rs");
+    let type_groups = include_str!("../../type_groups.rs");
     let types_module = type_source("mod.rs");
     let substitute_module = type_source("substitute/mod.rs");
     let substitute_apply = type_source("substitute/apply.rs");

@@ -26,7 +26,7 @@ use std::process::Command;
 
 const PROFILE_SHA256: &str = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
 const RAW_CONCAT_SHA256: &str = "0c68516cfe1dff30ce17425b2566813cf6d00c7f589dd24f31f4ba879b69a267";
-const EXPECTED_CENSUS: &str = include_str!("library-declaration-product-census.txt");
+const EXPECTED_CENSUS: &str = include_str!("../library-declaration-product-census.txt");
 const FORBIDDEN_PRODUCT_TOKENS: &[&str] = &[
     "oxc_ast",
     "Allocator",
@@ -481,7 +481,7 @@ fn full_profile_source_and_binding_census_is_frozen() {
 
 #[test]
 fn ownership_source_audit_rejects_the_known_broken_control() {
-    let broken = include_str!("library-declaration-product-forbidden-control.txt");
+    let broken = include_str!("../library-declaration-product-forbidden-control.txt");
     assert_eq!(forbidden_product_tokens(broken), FORBIDDEN_PRODUCT_TOKENS);
 }
 
@@ -562,10 +562,11 @@ fn candidate_product_crate_has_the_closed_dependency_free_boundary() {
     }
     assert_eq!(forbidden_product_tokens(&source), Vec::<&str>::new());
 
-    let product_tests = fs::read_to_string(
-        root.join("crates/typokat-library/src/library_declaration_product_integration_spec.rs"),
-    )
-    .expect("library-owned candidate full-profile tests");
+    let product_tests =
+        fs::read_to_string(root.join(
+            "crates/typokat-library/src/spec/library_declaration_product_integration_spec.rs",
+        ))
+        .expect("library-owned candidate full-profile tests");
     for required_test in [
         "product_receipt_matches_authenticated_edge_and_attachment_oracles",
         "product_builds_one_manifest_per_source",

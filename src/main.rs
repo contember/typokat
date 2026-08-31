@@ -815,4 +815,5 @@ where
 }
 
 #[cfg(test)]
+#[path = "spec/wu7_cli_fault_spec.rs"]
 mod wu7_cli_fault_spec;

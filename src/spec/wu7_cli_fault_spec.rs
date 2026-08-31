@@ -148,7 +148,7 @@ fn library_info_with_an_unwritable_stdout_reports_exit_two_without_panicking() {
 
 #[test]
 fn production_main_uses_the_same_io_core_as_the_unit_contract() {
-    let main_source = include_str!("main.rs");
+    let main_source = include_str!("../main.rs");
     assert!(
         main_source.contains("fn run_cli_core_with_io"),
         "the writer-injected core must be ordinary production code"

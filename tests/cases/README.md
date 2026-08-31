@@ -712,7 +712,7 @@ same `2^depth`. The two cheap-to-walk shapes are the ones that hang in the wild,
 are pinned independently rather than treated as covered by the generic ones.
 `tsc 6.0.3 --strict --noEmit` reports exactly one `TS2304` on every line of all four
 fixtures, at every depth. The full 1–12 depth sweep lives in
-`crates/typokat-check/src/check/checker/calls/contextual_duplicate_diagnostics_spec.rs`, which reports the
+`crates/typokat-check/src/check/checker/calls/spec/contextual_duplicate_diagnostics_spec.rs`, which reports the
 observed count in its failure text; the fixtures stop at 8 to keep corpus runtime bounded.
 
 `retained_raw_walks.ts` is the other half of the contract and the reason the fix is not

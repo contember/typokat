@@ -39,7 +39,7 @@ use typokat_library_product::{
 };
 
 const ORACLE_BYTES: &[u8] = include_bytes!(
-    "../../../tests/cases/sr_project_local_library_candidate/semantic-demand-oracle.json"
+    "../../../../tests/cases/sr_project_local_library_candidate/semantic-demand-oracle.json"
 );
 const ORACLE_SHA256: &str = "53473e09525e3c28051cb3af615edcdefb4d8d8eea01b06d4d223fe5147dd492";
 const PROFILE_IDENTITY: &str = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
@@ -1243,20 +1243,20 @@ enum CandidateValidationError {
 #[test]
 fn official_semantic_demand_frame_is_exact_and_admitted() {
     let frame = include_bytes!(
-        "../../../tests/cases/sr_project_local_library_candidate/official_assignment_compat_between_tuple_and_array.ts"
+        "../../../../tests/cases/sr_project_local_library_candidate/official_assignment_compat_between_tuple_and_array.ts"
     );
     assert_eq!(
         format!("{:x}", Sha256::digest(frame)),
         OFFICIAL_FRAME_SHA256
     );
     let manifest: Value = serde_json::from_str(include_str!(
-        "../../../tooling/official-suite/corpus/manifest.json"
+        "../../../../tooling/official-suite/corpus/manifest.json"
     ))
     .expect("valid official-suite manifest");
     assert_eq!(manifest["sha"], TYPESCRIPT_REVISION);
     assert_eq!(manifest["transport"]["revision"], TYPESCRIPT_REVISION);
     assert!(
-        include_str!("../../../tooling/official-suite/scoreboard.txt")
+        include_str!("../../../../tooling/official-suite/scoreboard.txt")
             .lines()
             .any(|row| row.starts_with("IN\t") && row.ends_with(OFFICIAL_FRAME_PATH))
     );
@@ -2479,7 +2479,8 @@ fn request_product_roots_do_not_change_source_driven_output_or_passive_work() {
 
 #[test]
 fn project_local_production_force_all_census_emits_named_attributed_diff() {
-    const PRODUCTION_PIN: &str = include_str!("../../../tests/fixtures/library-owned-records.txt");
+    const PRODUCTION_PIN: &str =
+        include_str!("../../../../tests/fixtures/library-owned-records.txt");
 
     let provider = LibraryBaseProvider::new();
     let product = provider.declaration_product().expect("declaration product");
@@ -3617,7 +3618,7 @@ fn expected_unavailable_terminals() -> Vec<ProjectLocalUnavailableTerminalForTes
     };
     const PATH: &str = "/candidate/unavailable.ts";
     const SOURCE: &str = include_str!(
-        "../../../tests/cases/b43_namespaces_declaration_merging/wu6a_unavailable_ledger.ts"
+        "../../../../tests/cases/b43_namespaces_declaration_merging/wu6a_unavailable_ledger.ts"
     );
     let rows = [
         ("Wu6aClassStaticUnavailable", CyclicUserDeclaration),
@@ -5690,32 +5691,32 @@ fn case_inputs(id: &str) -> Vec<UserDeltaProjectInputForTest<'static>> {
 
 fn oracle_inputs() -> Vec<(&'static str, Vec<UserDeltaProjectInputForTest<'static>>)> {
     vec![
-        ("reflect", vec![input("/candidate/reflect_packaged.ts", include_str!("../../../tests/cases/sr_project_local_library_candidate/reflect_packaged.ts"))]),
-        ("array", vec![input("/candidate/array_library_scc.ts", include_str!("../../../tests/cases/sr_project_local_library_candidate/array_library_scc.ts"))]),
+        ("reflect", vec![input("/candidate/reflect_packaged.ts", include_str!("../../../../tests/cases/sr_project_local_library_candidate/reflect_packaged.ts"))]),
+        ("array", vec![input("/candidate/array_library_scc.ts", include_str!("../../../../tests/cases/sr_project_local_library_candidate/array_library_scc.ts"))]),
         ("global-this", vec![
-            input("/candidate/global-this/00_global.ts", include_str!("../../../tests/cases/b103_library_merge_correctness_project/global_this_contributor/00_global.ts")),
-            input("/candidate/global-this/99_consume.ts", include_str!("../../../tests/cases/b103_library_merge_correctness_project/global_this_contributor/99_consume.ts")),
+            input("/candidate/global-this/00_global.ts", include_str!("../../../../tests/cases/b103_library_merge_correctness_project/global_this_contributor/00_global.ts")),
+            input("/candidate/global-this/99_consume.ts", include_str!("../../../../tests/cases/b103_library_merge_correctness_project/global_this_contributor/99_consume.ts")),
         ]),
-        ("unavailable", vec![input("/candidate/unavailable.ts", include_str!("../../../tests/cases/b43_namespaces_declaration_merging/wu6a_unavailable_ledger.ts"))]),
+        ("unavailable", vec![input("/candidate/unavailable.ts", include_str!("../../../../tests/cases/b43_namespaces_declaration_merging/wu6a_unavailable_ledger.ts"))]),
         ("mixed-forward", mixed_inputs(false)), ("mixed-reverse", mixed_inputs(true)),
         ("isolation-a", vec![
-            input("/candidate/isolation/00_augment.ts", include_str!("../../../tests/cases/sr_project_local_library_candidate/isolation_a/00_augment.ts")),
-            input("/candidate/isolation/99_consume.ts", include_str!("../../../tests/cases/sr_project_local_library_candidate/isolation_a/99_consume.ts")),
+            input("/candidate/isolation/00_augment.ts", include_str!("../../../../tests/cases/sr_project_local_library_candidate/isolation_a/00_augment.ts")),
+            input("/candidate/isolation/99_consume.ts", include_str!("../../../../tests/cases/sr_project_local_library_candidate/isolation_a/99_consume.ts")),
         ]),
         ("isolation-b", vec![
-            input("/candidate/isolation/00_augment.ts", include_str!("../../../tests/cases/sr_project_local_library_candidate/isolation_b/00_augment.ts")),
-            input("/candidate/isolation/99_consume.ts", include_str!("../../../tests/cases/sr_project_local_library_candidate/isolation_b/99_consume.ts")),
+            input("/candidate/isolation/00_augment.ts", include_str!("../../../../tests/cases/sr_project_local_library_candidate/isolation_b/00_augment.ts")),
+            input("/candidate/isolation/99_consume.ts", include_str!("../../../../tests/cases/sr_project_local_library_candidate/isolation_b/99_consume.ts")),
         ]),
         ("official-assignment-compat-between-tuple-and-array", vec![input(
             "/candidate/official/types/typeRelationships/assignmentCompatibility/assignmentCompatBetweenTupleAndArray.ts",
-            include_str!("../../../tests/cases/sr_project_local_library_candidate/official_assignment_compat_between_tuple_and_array.ts"),
+            include_str!("../../../../tests/cases/sr_project_local_library_candidate/official_assignment_compat_between_tuple_and_array.ts"),
         )]),
     ]
 }
 fn mixed_inputs(reverse: bool) -> Vec<UserDeltaProjectInputForTest<'static>> {
-    let script = input("/candidate/mixed/00_script.ts", include_str!("../../../tests/cases/sr_project_local_library_candidate/mixed_group_forward/00_script.ts"));
-    let module = input("/candidate/mixed/50_module.ts", include_str!("../../../tests/cases/sr_project_local_library_candidate/mixed_group_forward/50_module.ts"));
-    let consume = input("/candidate/mixed/99_consume.ts", include_str!("../../../tests/cases/sr_project_local_library_candidate/mixed_group_forward/99_consume.ts"));
+    let script = input("/candidate/mixed/00_script.ts", include_str!("../../../../tests/cases/sr_project_local_library_candidate/mixed_group_forward/00_script.ts"));
+    let module = input("/candidate/mixed/50_module.ts", include_str!("../../../../tests/cases/sr_project_local_library_candidate/mixed_group_forward/50_module.ts"));
+    let consume = input("/candidate/mixed/99_consume.ts", include_str!("../../../../tests/cases/sr_project_local_library_candidate/mixed_group_forward/99_consume.ts"));
     if reverse {
         vec![consume, module, script]
     } else {

@@ -76,8 +76,8 @@ fn compilation_origin_variants_preserve_exact_ordinal_domains() {
 #[test]
 fn namespace_provenance_has_no_zero_reconstruction_across_the_crate_boundary() {
     let source = concat!(
-        include_str!("namespace/models_ids.rs"),
-        include_str!("namespace/layered.rs"),
+        include_str!("../namespace/models_ids.rs"),
+        include_str!("../namespace/layered.rs"),
         "#[cfg(test)]\nmod tests",
     );
     let production = source.split_once("#[cfg(test)]\nmod tests");

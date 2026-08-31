@@ -62,8 +62,10 @@ mod calls;
 mod classes;
 mod context;
 #[cfg(test)]
+#[path = "spec/declaration_owner_scaling_spec.rs"]
 mod declaration_owner_scaling_spec;
 #[cfg(test)]
+#[path = "spec/declaration_surface_lazy_spec.rs"]
 mod declaration_surface_lazy_spec;
 #[cfg(test)]
 pub(crate) mod declaration_surface_measure;
@@ -74,6 +76,7 @@ pub(in crate::check) mod eval;
 pub mod events;
 pub mod events_library;
 #[cfg(test)]
+#[path = "spec/exact_declaration_site_cutover_spec.rs"]
 mod exact_declaration_site_cutover_spec;
 mod expr;
 mod flowgraph;
@@ -95,6 +98,7 @@ pub mod replay_index;
 pub mod reporting_record;
 mod statements;
 #[cfg(test)]
+#[path = "spec/surface_lowering_copy_spec.rs"]
 mod surface_lowering_copy_spec;
 mod type_groups;
 

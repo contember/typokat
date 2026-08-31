@@ -108,7 +108,7 @@ fn group_of(declaration: &LexicalDeclaration) -> TypeGroupId {
 
 #[test]
 fn production_cutover_keeps_binder_shape_and_owns_one_table_index() {
-    let binder_source = include_str!("bind.rs");
+    let binder_source = include_str!("../bind.rs");
     let binder_production = binder_source
         .split_once("#[cfg(test)]\nmod tests")
         .map(|(production, _)| production)
@@ -194,7 +194,7 @@ fn production_cutover_keeps_binder_shape_and_owns_one_table_index() {
     assert!(!bind_state_fields.contains("declarations_by_site"));
     assert!(!binder_production.contains("declarations_by_site"));
 
-    let declaration_source = include_str!("declaration.rs");
+    let declaration_source = include_str!("../declaration.rs");
     let declaration_production = declaration_source
         .split_once("#[cfg(test)]\nmod tests")
         .map(|(production, _)| production)

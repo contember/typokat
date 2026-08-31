@@ -17,13 +17,17 @@ pub mod roots;
 pub use bind::{bind_module_with_prelude, Binder};
 
 #[cfg(test)]
+#[path = "spec/attach_declaration_scaling_spec.rs"]
 mod attach_declaration_scaling_spec;
 
 #[cfg(test)]
+#[path = "spec/type_group_attach_scaling_spec.rs"]
 mod type_group_attach_scaling_spec;
 
 #[cfg(test)]
+#[path = "spec/exact_declaration_site_spec.rs"]
 mod exact_declaration_site_spec;
 
 #[cfg(test)]
+#[path = "spec/compilation_origin_spec.rs"]
 mod compilation_origin_spec;

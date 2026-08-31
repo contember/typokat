@@ -4301,30 +4301,39 @@ fn query_children(store: &Store, ty: TypeId) -> Vec<TypeId> {
 }
 
 #[cfg(test)]
+#[path = "spec/dom_source_cold_spec.rs"]
 mod dom_source_cold_spec;
 
 #[cfg(test)]
+#[path = "spec/event_listener_union_scaling_spec.rs"]
 mod event_listener_union_scaling_spec;
 
 #[cfg(test)]
+#[path = "spec/failing_relation_scaling_spec.rs"]
 mod failing_relation_scaling_spec;
 
 #[cfg(test)]
+#[path = "spec/deferred_indexed_lazy_spec.rs"]
 mod deferred_indexed_lazy_spec;
 
 #[cfg(test)]
+#[path = "spec/demand_identity_spec.rs"]
 mod demand_identity_spec;
 
 #[cfg(test)]
+#[path = "spec/identity_memo_spec.rs"]
 mod identity_memo_spec;
 
 #[cfg(test)]
+#[path = "spec/instantiation_root_lazy_spec.rs"]
 mod instantiation_root_lazy_spec;
 
 #[cfg(test)]
+#[path = "spec/relation_root_lazy_spec.rs"]
 mod relation_root_lazy_spec;
 
 #[cfg(test)]
+#[path = "spec/transaction_fork_scaling_spec.rs"]
 mod transaction_fork_scaling_spec;
 
 #[cfg(test)]
