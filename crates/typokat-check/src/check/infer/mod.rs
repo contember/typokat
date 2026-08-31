@@ -20,7 +20,9 @@ use helpers::widen;
 use crate::check::query::{
     PublishedClassLookup, SemanticQueryAttempt, SemanticQueryCoordinator, SemanticQueryState,
 };
-use crate::class_semantics::{DemandOutcome, Exhaustion, PublishedClasses};
+#[cfg(test)]
+use crate::class_semantics::PublishedClasses;
+use crate::class_semantics::{DemandOutcome, Exhaustion};
 use crate::relate::{RelationDemand, RelationNormalization, RelationOutcome};
 use crate::types::repr::{
     EnumId, GenericTypeParam, IntrinsicKind, ParameterType, PropertyKey, TypeParamId, TypeTag,
@@ -311,10 +313,12 @@ pub(crate) fn infer_signature_type_arguments_from_params(
     }
 }
 
-pub(in crate::check) fn infer_signature_type_arguments_from_params_attempt(
+pub(in crate::check) fn infer_signature_type_arguments_from_params_attempt<
+    L: PublishedClassLookup + ?Sized,
+>(
     interner: &mut Interner,
     next_type_param: &mut u32,
-    published: &PublishedClasses,
+    published: &L,
     queries: &mut SemanticQueryState,
     request: SignatureInferenceRequest<'_>,
 ) -> SemanticQueryAttempt<DemandOutcome<SignatureInferenceResult<FxHashMap<TypeParamId, TypeId>>>> {
@@ -348,10 +352,12 @@ pub(crate) fn infer_signature_type_arguments_with_return_context(
     }
 }
 
-pub(in crate::check) fn infer_signature_type_arguments_with_return_context_attempt(
+pub(in crate::check) fn infer_signature_type_arguments_with_return_context_attempt<
+    L: PublishedClassLookup + ?Sized,
+>(
     interner: &mut Interner,
     next_type_param: &mut u32,
-    published: &PublishedClasses,
+    published: &L,
     queries: &mut SemanticQueryState,
     request: SignatureInferenceRequest<'_>,
     return_context: (TypeId, TypeId),
@@ -366,10 +372,10 @@ pub(in crate::check) fn infer_signature_type_arguments_with_return_context_attem
     )
 }
 
-fn infer_signature_type_arguments(
+fn infer_signature_type_arguments<L: PublishedClassLookup + ?Sized>(
     interner: &mut Interner,
     next_type_param: &mut u32,
-    published: &PublishedClasses,
+    published: &L,
     queries: &mut SemanticQueryState,
     request: SignatureInferenceRequest<'_>,
     return_context: Option<(TypeId, TypeId)>,
@@ -489,10 +495,10 @@ fn infer_signature_type_arguments(
     })
 }
 
-fn apply_return_context_candidates_attempt(
+fn apply_return_context_candidates_attempt<L: PublishedClassLookup + ?Sized>(
     interner: &mut Interner,
     next_type_param: &mut u32,
-    published: &PublishedClasses,
+    published: &L,
     queries: &mut SemanticQueryState,
     request: ReturnContextInferenceRequest<'_>,
 ) -> SemanticQueryAttempt<FixedSignatureParams> {
@@ -728,10 +734,10 @@ fn apply_return_context_candidates(
     }
 }
 
-fn evaluate_return_context_constraint(
+fn evaluate_return_context_constraint<L: PublishedClassLookup + ?Sized>(
     interner: &mut Interner,
     next_type_param: &mut u32,
-    published: &PublishedClasses,
+    published: &L,
     queries: &mut SemanticQueryState,
     constraint: TypeId,
 ) -> Option<TypeId> {
@@ -763,10 +769,10 @@ fn substitute_to_fixed_point(
     (substitute(interner, current, map) == current).then_some(current)
 }
 
-fn collect_return_context_candidates_query_attempt(
+fn collect_return_context_candidates_query_attempt<L: PublishedClassLookup + ?Sized>(
     interner: &mut Interner,
     next_type_param: &mut u32,
-    published: &PublishedClasses,
+    published: &L,
     queries: &mut SemanticQueryState,
     active_params: &FxHashSet<TypeParamId>,
     source: TypeId,
@@ -844,10 +850,12 @@ pub(crate) fn infer_partial_signature_type_arguments_from_params(
     }
 }
 
-pub(in crate::check) fn infer_partial_signature_type_arguments_from_params_attempt(
+pub(in crate::check) fn infer_partial_signature_type_arguments_from_params_attempt<
+    L: PublishedClassLookup + ?Sized,
+>(
     interner: &mut Interner,
     next_type_param: &mut u32,
-    published: &PublishedClasses,
+    published: &L,
     queries: &mut SemanticQueryState,
     request: SignatureInferenceRequest<'_>,
 ) -> PartialSignatureInferenceAttempt {
@@ -937,10 +945,10 @@ pub(in crate::check) fn infer_partial_signature_type_arguments_from_params_attem
     })
 }
 
-fn collect_call_site_candidates_query_attempt(
+fn collect_call_site_candidates_query_attempt<L: PublishedClassLookup + ?Sized>(
     interner: &mut Interner,
     next_type_param: &mut u32,
-    published: &PublishedClasses,
+    published: &L,
     queries: &mut SemanticQueryState,
     request: CandidateCollectionRequest<'_>,
 ) -> SemanticQueryAttempt<CandidateCollectionResult> {
@@ -1272,10 +1280,10 @@ fn tuple_inference_target(
 /// Fix call-site candidate contributions to one type per parameter. A single
 /// source keeps the old M10 widening behavior; multiple sources fix to a candidate
 /// that can expose incompatible later arguments to the ordinary relation replay.
-fn fix_call_site_candidates_attempt(
+fn fix_call_site_candidates_attempt<L: PublishedClassLookup + ?Sized>(
     interner: &mut Interner,
     next_type_param: &mut u32,
-    published: &PublishedClasses,
+    published: &L,
     queries: &mut SemanticQueryState,
     candidates: CallSiteCandidates,
     constraints: &FxHashMap<TypeParamId, Option<TypeId>>,
@@ -1308,10 +1316,10 @@ fn fix_call_site_candidates_attempt(
     SemanticQueryAttempt::Complete(DemandOutcome::Ready(map))
 }
 
-fn fix_call_site_candidates_for_param_attempt(
+fn fix_call_site_candidates_for_param_attempt<L: PublishedClassLookup + ?Sized>(
     interner: &mut Interner,
     next_type_param: &mut u32,
-    published: &PublishedClasses,
+    published: &L,
     queries: &mut SemanticQueryState,
     constraint: Option<TypeId>,
     cands: &[CallSiteCandidate],
@@ -1497,10 +1505,10 @@ fn fix_candidate_set(
     interner.union(prepared)
 }
 
-fn is_assignable_type_attempt(
+fn is_assignable_type_attempt<L: PublishedClassLookup + ?Sized>(
     interner: &mut Interner,
     next_type_param: &mut u32,
-    published: &PublishedClasses,
+    published: &L,
     queries: &mut SemanticQueryState,
     source: TypeId,
     target: TypeId,
@@ -1793,10 +1801,10 @@ fn is_primitive_ish(store: &Store, ty: TypeId) -> bool {
 ///
 /// An **unconstrained** parameter is unchanged from the M10 behaviour (candidate as-is,
 /// or `unknown`), so existing generic inference is untouched.
-fn fix_signature_params_attempt(
+fn fix_signature_params_attempt<L: PublishedClassLookup + ?Sized>(
     interner: &mut Interner,
     next_type_param: &mut u32,
-    published: &PublishedClasses,
+    published: &L,
     queries: &mut SemanticQueryState,
     type_params: &[GenericTypeParam],
     fixed: FxHashMap<TypeParamId, TypeId>,
@@ -1919,10 +1927,10 @@ fn fix_signature_params(
     }
 }
 
-fn fix_present_signature_params_attempt(
+fn fix_present_signature_params_attempt<L: PublishedClassLookup + ?Sized>(
     interner: &mut Interner,
     next_type_param: &mut u32,
-    published: &PublishedClasses,
+    published: &L,
     queries: &mut SemanticQueryState,
     type_params: &[GenericTypeParam],
     mut fixed: FxHashMap<TypeParamId, TypeId>,

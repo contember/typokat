@@ -573,7 +573,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 infer::infer_signature_type_arguments_with_return_context_attempt(
                     pass.interner,
                     &mut pass.next_type_param,
-                    pass.type_environment.published().classes(),
+                    pass.type_environment.published(),
                     &mut pass.semantic_queries,
                     request,
                     return_context,
@@ -582,7 +582,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             None => infer::infer_signature_type_arguments_from_params_attempt(
                 pass.interner,
                 &mut pass.next_type_param,
-                pass.type_environment.published().classes(),
+                pass.type_environment.published(),
                 &mut pass.semantic_queries,
                 request,
             ),
@@ -606,7 +606,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             infer::infer_partial_signature_type_arguments_from_params_attempt(
                 pass.interner,
                 &mut pass.next_type_param,
-                pass.type_environment.published().classes(),
+                pass.type_environment.published(),
                 &mut pass.semantic_queries,
                 request,
             )
@@ -629,18 +629,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         args: &[(Option<TypeId>, TypeId, Span)],
         map: &FxHashMap<TypeParamId, TypeId>,
     ) {
-        if self.building_template {
-            let owner = self.current_replay_owner();
-            self.effect_stack
-                .last_mut()
-                .expect("construction constraint check requires a lexical owner")
-                .push_constraint_check(
-                    ConstraintCheckObligation {
-                        checks: args.to_vec(),
-                        substitutions: map.clone(),
-                    },
-                    owner,
-                );
+        if self.defer_constraint_check(args, map) {
             return;
         }
         let outcome = self.check_constraint_arguments_outcome(args, map);
@@ -648,6 +637,29 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         {
             self.own_type_demand(DemandOutcome::Exhausted(exhaustion), *span);
         }
+    }
+
+    fn defer_constraint_check(
+        &mut self,
+        checks: &[(Option<TypeId>, TypeId, Span)],
+        substitutions: &FxHashMap<TypeParamId, TypeId>,
+    ) -> bool {
+        // Nested applications may depend on signature constraints still being installed.
+        if !self.building_template && self.annotation_depth == 0 {
+            return false;
+        }
+        let owner = self.current_replay_owner();
+        self.effect_stack
+            .last_mut()
+            .expect("deferred constraint check requires a lexical owner")
+            .push_constraint_check(
+                ConstraintCheckObligation {
+                    checks: checks.to_vec(),
+                    substitutions: substitutions.clone(),
+                },
+                owner,
+            );
+        true
     }
 
     fn check_constraint_arguments_outcome(
@@ -809,18 +821,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 )
             })
             .collect();
-        if self.building_template {
-            let owner = self.current_replay_owner();
-            self.effect_stack
-                .last_mut()
-                .expect("construction constraint check requires a lexical owner")
-                .push_constraint_check(
-                    ConstraintCheckObligation {
-                        checks,
-                        substitutions: map.clone(),
-                    },
-                    owner,
-                );
+        if self.defer_constraint_check(&checks, map) {
             return;
         }
         let outcome = self.check_constraint_arguments_outcome(&checks, map);
