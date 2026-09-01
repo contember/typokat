@@ -1,7 +1,7 @@
 //! RED contract: library-product namespace-region lookup scales with product rows.
 //!
-//! Every declaration already carries a region key. Resolving that key must not scan all product
-//! declarations once per declaration when the product contains many independent namespaces.
+//! Every declaration already carries a region key. Reconstructing namespace regions and instance
+//! states must not scan all product declarations once per namespace or declaration.
 
 use super::bind::ProjectBinderBuilder;
 use super::declaration::SourceDeclarationManifest;
@@ -118,14 +118,36 @@ fn namespace_region_lookup_work_scales_with_product_rows() {
     let small_product_rows = u64::try_from(DECLARATIONS_PER_REGION * SMALL).unwrap_or(u64::MAX);
     let scaled_product_rows = u64::try_from(DECLARATIONS_PER_REGION * SCALED).unwrap_or(u64::MAX);
     let step = scaled_product_rows / small_product_rows;
-    let small = measure(SMALL).index_probes;
-    let scaled = measure(SCALED).index_probes;
+    let small_work = measure(SMALL);
+    let scaled_work = measure(SCALED);
+    assert_eq!(
+        (small_work.index_probes, scaled_work.index_probes),
+        (small_product_rows, scaled_product_rows),
+        "dense namespace-region index must inspect exactly one entry per declaration"
+    );
+    assert!(
+        small_work.declaration_row_probes > 0 && scaled_work.declaration_row_probes > 0,
+        "namespace-instance scans must record productive work: {} -> {} declaration-row probes",
+        small_work.declaration_row_probes,
+        scaled_work.declaration_row_probes
+    );
+    let small = small_work
+        .index_probes
+        .saturating_add(small_work.declaration_row_probes);
+    let scaled = scaled_work
+        .index_probes
+        .saturating_add(scaled_work.declaration_row_probes);
     let small_budget = ROW_PROBES_PER_DECLARATION * small_product_rows;
     let scaled_budget = ROW_PROBES_PER_DECLARATION * scaled_product_rows;
 
     assert!(
         small <= small_budget && scaled <= scaled_budget && scaled <= 2 * step * small.max(1),
-        "namespace-region lookup exceeds linear product-row work: {small} -> {scaled} probes, \
-         budgets {small_budget} / {scaled_budget} for a {step}x product"
+        "namespace-region lookup exceeds linear product-row work: {small} -> {scaled} total probes, \
+         including {} -> {} declaration-row probes and {} -> {} dense-index probes; budgets \
+         {small_budget} / {scaled_budget} for a {step}x product",
+        small_work.declaration_row_probes,
+        scaled_work.declaration_row_probes,
+        small_work.index_probes,
+        scaled_work.index_probes
     );
 }

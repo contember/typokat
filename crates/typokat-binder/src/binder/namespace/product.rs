@@ -18,25 +18,39 @@ thread_local! {
     static NAMESPACE_REGION_INDEX_PROBES: std::cell::Cell<u64> = const {
         std::cell::Cell::new(0)
     };
+    static NAMESPACE_INSTANCE_DECLARATION_ROW_PROBES: std::cell::Cell<u64> = const {
+        std::cell::Cell::new(0)
+    };
 }
 
-/// Dense index entries inspected while resolving declaration regions to namespace fragments.
+/// Work inspected while reconstructing namespace regions and instance states.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct NamespaceRegionLookupWorkForTest {
     pub(crate) index_probes: u64,
+    pub(crate) declaration_row_probes: u64,
 }
 
 #[cfg(test)]
 fn namespace_region_lookup_work_for_test() -> NamespaceRegionLookupWorkForTest {
     NamespaceRegionLookupWorkForTest {
         index_probes: NAMESPACE_REGION_INDEX_PROBES.get(),
+        declaration_row_probes: NAMESPACE_INSTANCE_DECLARATION_ROW_PROBES.get(),
     }
 }
 
 #[cfg(test)]
 fn record_namespace_region_index_probe() {
     NAMESPACE_REGION_INDEX_PROBES.set(NAMESPACE_REGION_INDEX_PROBES.get().saturating_add(1));
+}
+
+#[cfg(test)]
+fn record_namespace_instance_declaration_row_probe() {
+    NAMESPACE_INSTANCE_DECLARATION_ROW_PROBES.set(
+        NAMESPACE_INSTANCE_DECLARATION_ROW_PROBES
+            .get()
+            .saturating_add(1),
+    );
 }
 
 #[cfg(test)]
@@ -52,6 +66,9 @@ impl NamespaceRegionLookupWorkScopeForTest {
         let end = namespace_region_lookup_work_for_test();
         NamespaceRegionLookupWorkForTest {
             index_probes: end.index_probes.saturating_sub(self.0.index_probes),
+            declaration_row_probes: end
+                .declaration_row_probes
+                .saturating_sub(self.0.declaration_row_probes),
         }
     }
 }
@@ -1378,7 +1395,11 @@ fn namespace_instance_state(
     if declaration_product
         .declarations()
         .iter()
-        .any(|declaration| declaration.region == region && declaration.spaces.value)
+        .any(|declaration| {
+            #[cfg(test)]
+            record_namespace_instance_declaration_row_probe();
+            declaration.region == region && declaration.spaces.value
+        })
     {
         NamespaceInstanceState::Instantiated
     } else {
