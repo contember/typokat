@@ -130,6 +130,7 @@ def verify_contract(path: Path = CONTRACT_PATH) -> dict[str, Any]:
             "tsgo_batch_oracle_relative_path", "tsgo_batch_oracle_sha256",
             "typescript_baseline_authority", "typescript_git_cache_relative_path",
             "typokat_accepted_diagnostic_removals",
+            "typokat_accepted_incomplete_removals",
             "typokat_batch_oracle_relative_path", "typokat_batch_oracle_sha256",
         },
         "current_typokat_baseline": {
@@ -172,33 +173,43 @@ def verify_contract(path: Path = CONTRACT_PATH) -> dict[str, Any]:
     }
     for key, keys in nested_shapes.items():
         _exact_keys(contract[key], keys, f"batch contract {key}")
-    removals = contract["oracles"]["typokat_accepted_diagnostic_removals"]
-    if not isinstance(removals, list) or not removals:
-        _fail("accepted diagnostic removals must be a nonempty list")
-    removal_keys: list[tuple[str, str]] = []
-    for removal in removals:
-        _exact_keys(
-            removal,
-            {"case_id", "diagnostic", "multiplicity"},
-            "accepted diagnostic removal",
-        )
-        case_id = removal["case_id"]
-        diagnostic = removal["diagnostic"]
-        multiplicity = removal["multiplicity"]
-        if (
-            not isinstance(case_id, str)
-            or not case_id
-            or not isinstance(diagnostic, str)
-            or re.fullmatch(r"\d+:\d+", diagnostic) is None
-            or type(multiplicity) is not int
-            or multiplicity <= 0
+    removal_specs = (
+        ("diagnostic", re.compile(r"\d+:\d+")),
+        ("incomplete", None),
+    )
+    for identity_key, identity_pattern in removal_specs:
+        label = f"accepted {identity_key} removal"
+        removals = contract["oracles"][f"typokat_accepted_{identity_key}_removals"]
+        if not isinstance(removals, list) or not removals:
+            _fail(f"{label}s must be a nonempty list")
+        removal_keys: list[tuple[str, str]] = []
+        for removal in removals:
+            _exact_keys(
+                removal,
+                {"case_id", identity_key, "multiplicity"},
+                label,
+            )
+            case_id = removal["case_id"]
+            identity = removal[identity_key]
+            multiplicity = removal["multiplicity"]
+            if (
+                not isinstance(case_id, str)
+                or not case_id
+                or not isinstance(identity, str)
+                or not identity
+                or (
+                    identity_pattern is not None
+                    and identity_pattern.fullmatch(identity) is None
+                )
+                or type(multiplicity) is not int
+                or multiplicity <= 0
+            ):
+                _fail(f"{label} types differ")
+            removal_keys.append((case_id, identity))
+        if removal_keys != sorted(removal_keys) or len(set(removal_keys)) != len(
+            removal_keys
         ):
-            _fail("accepted diagnostic removal types differ")
-        removal_keys.append((case_id, diagnostic))
-    if removal_keys != sorted(removal_keys) or len(set(removal_keys)) != len(
-        removal_keys
-    ):
-        _fail("accepted diagnostic removals are not canonical and unique")
+            _fail(f"{label}s are not canonical and unique")
     if contract["schema"] != 1:
         _fail("unsupported batch contract schema")
     fixed = {
@@ -705,6 +716,18 @@ def load_authenticated_batch_oracles(
             _fail("accepted diagnostic removal names a matched diagnostic")
         if Counter(exact["normalized_semantic"]["diagnostics"])[diagnostic]:
             _fail("accepted diagnostic removal is present in exact-flags TSGo truth")
+    accepted_incomplete_removals = oracle_contract[
+        "typokat_accepted_incomplete_removals"
+    ]
+    for removal in accepted_incomplete_removals:
+        case_id = removal["case_id"]
+        row = typokat_rows.get(case_id)
+        if row is None:
+            _fail(f"accepted incomplete removal case is not eligible: {case_id}")
+        incomplete = removal["incomplete"]
+        multiplicity = removal["multiplicity"]
+        if Counter(row["incompletes"])[incomplete] != multiplicity:
+            _fail("accepted incomplete removal is not an exact scoreboard incomplete")
     typokat: list[dict[str, Any]] = []
     typokat_ratchet: list[dict[str, Any]] = []
     tsgo_rows: list[dict[str, Any]] = []
@@ -767,6 +790,7 @@ def load_authenticated_batch_oracles(
         "typokat": typokat,
         "typokat_ratchet": typokat_ratchet,
         "typokat_accepted_diagnostic_removals": accepted_removals,
+        "typokat_accepted_incomplete_removals": accepted_incomplete_removals,
         "tsgo": tsgo_rows,
     }
 
@@ -797,6 +821,9 @@ def oracle_panel(authority: dict[str, Any], projects: int) -> dict[str, Any]:
         "ratchet_rows": authority["typokat_ratchet"][:projects],
         "accepted_diagnostic_removals": authority[
             "typokat_accepted_diagnostic_removals"
+        ],
+        "accepted_incomplete_removals": authority[
+            "typokat_accepted_incomplete_removals"
         ],
     }
     result["tsgo"] = {
@@ -1026,6 +1053,16 @@ def _typokat_ratchet_progress(
         accepted_by_case.setdefault(row["case_id"], Counter())[row["diagnostic"]] += row[
             "multiplicity"
         ]
+    accepted_incompletes = expected.get("accepted_incomplete_removals")
+    if accepted_incompletes != contract["oracles"][
+        "typokat_accepted_incomplete_removals"
+    ]:
+        _fail("typokat accepted incomplete removal authority differs")
+    accepted_incompletes_by_case: dict[str, Counter[str]] = {}
+    for row in accepted_incompletes:
+        accepted_incompletes_by_case.setdefault(row["case_id"], Counter())[
+            row["incomplete"]
+        ] += row["multiplicity"]
     progress: list[dict[str, Any]] = []
     for frame, frozen in zip(frames, ratchet_rows, strict=True):
         _exact_keys(
@@ -1101,8 +1138,12 @@ def _typokat_ratchet_progress(
 
         frozen_incompletes = Counter(frozen["incompletes"])
         observed_incompletes = Counter(incompletes)
-        if not _counter_contains(observed_incompletes, frozen_incompletes):
-            _fail("typokat dropped an incomplete identity")
+        removed_incompletes = frozen_incompletes - observed_incompletes
+        allowed_incompletes = accepted_incompletes_by_case.get(
+            frozen["case_id"], Counter()
+        )
+        if not _counter_contains(allowed_incompletes, removed_incompletes):
+            _fail("typokat removed an unauthenticated incomplete identity")
         gained_incompletes = observed_incompletes - frozen_incompletes
         expected_exit = 3 if incompletes else (1 if diagnostics else 0)
         if semantic["exit_code"] != expected_exit:
@@ -1111,12 +1152,14 @@ def _typokat_ratchet_progress(
         removed_rows = sorted(
             removed_false_positives.elements(), key=_diagnostic_order
         )
+        removed_incomplete_rows = sorted(removed_incompletes.elements())
         gained_rows = sorted(gained_incompletes.elements())
-        if removed_rows or gained_rows:
+        if removed_rows or removed_incomplete_rows or gained_rows:
             progress.append(
                 {
                     "case_id": frozen["case_id"],
                     "removed_false_positive_diagnostics": removed_rows,
+                    "removed_incomplete_identities": removed_incomplete_rows,
                     "gained_incomplete_identities": gained_rows,
                 }
             )

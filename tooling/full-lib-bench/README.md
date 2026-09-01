@@ -236,12 +236,13 @@ that their bytes equal the ordinary CLI binaries.
 The full 687-frame performance corpus is not a cross-tool equality claim. Typokat has documented
 coverage gaps on the official suite. Its ordered semantic results must satisfy a conservative
 benchmark-specific projection of the committed official-suite scoreboard's regression ratchet:
-retain the frozen diagnostic and incomplete multisets, permit only the pre-authenticated
-`indexersInClassType.ts` `15:2339` occurrence to disappear, and never bless new output from the live
-candidate. This is stricter than ordinary official-suite `--check`, which may accept newly matched
-diagnostics or a reviewed scope promotion. TypeScript-Go must reproduce its separate pinned
-exact-flags TypeScript-Go oracle. Only the four cold rows are the admitted three-way
-typokat/`tsc`/TypeScript-Go agreement set. See
+retain the frozen diagnostic and incomplete multisets except for exact occurrences named by the
+reviewed accepted-progress authority, and never bless new diagnostics from the live candidate.
+Removed false positives, removed incomplete identities, and gained precise incomplete identities
+remain explicit derived evidence with multiplicity. This is stricter than ordinary official-suite
+`--check`, which may accept newly matched diagnostics or a reviewed scope promotion. TypeScript-Go
+must reproduce its separate pinned exact-flags TypeScript-Go oracle. Only the four cold rows are the
+admitted three-way typokat/`tsc`/TypeScript-Go agreement set. See
 [ADR-0030](../../docs/decisions/0030-treat-the-wu6-typokat-oracle-as-a-regression-ratchet.md).
 
 Panels run in strict order: 1, then 32, then 687 projects. The collector must stop after the first

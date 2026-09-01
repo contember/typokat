@@ -58,6 +58,146 @@ case_id = "conformance/classes/members/classTypes/indexersInClassType.ts"
 diagnostic = "15:2339"
 multiplicity = 1
 
+[[oracles.typokat_accepted_diagnostic_removals]]
+case_id = "conformance/controlFlow/controlFlowDestructuringDeclaration.ts"
+diagnostic = "10:2304"
+multiplicity = 1
+
+[[oracles.typokat_accepted_diagnostic_removals]]
+case_id = "conformance/controlFlow/controlFlowDestructuringDeclaration.ts"
+diagnostic = "12:2304"
+multiplicity = 1
+
+[[oracles.typokat_accepted_diagnostic_removals]]
+case_id = "conformance/controlFlow/controlFlowDestructuringDeclaration.ts"
+diagnostic = "14:2304"
+multiplicity = 1
+
+[[oracles.typokat_accepted_diagnostic_removals]]
+case_id = "conformance/controlFlow/controlFlowDestructuringDeclaration.ts"
+diagnostic = "19:2304"
+multiplicity = 1
+
+[[oracles.typokat_accepted_diagnostic_removals]]
+case_id = "conformance/controlFlow/controlFlowDestructuringDeclaration.ts"
+diagnostic = "21:2304"
+multiplicity = 1
+
+[[oracles.typokat_accepted_diagnostic_removals]]
+case_id = "conformance/controlFlow/controlFlowDestructuringDeclaration.ts"
+diagnostic = "23:2304"
+multiplicity = 1
+
+[[oracles.typokat_accepted_diagnostic_removals]]
+case_id = "conformance/controlFlow/dependentDestructuredVariables.ts"
+diagnostic = "160:2345"
+multiplicity = 1
+
+[[oracles.typokat_accepted_diagnostic_removals]]
+case_id = "conformance/controlFlow/dependentDestructuredVariables.ts"
+diagnostic = "163:2345"
+multiplicity = 1
+
+[[oracles.typokat_accepted_diagnostic_removals]]
+case_id = "conformance/controlFlow/dependentDestructuredVariables.ts"
+diagnostic = "350:2304"
+multiplicity = 1
+
+[[oracles.typokat_accepted_diagnostic_removals]]
+case_id = "conformance/types/intersection/intersectionAsWeakTypeSource.ts"
+diagnostic = "18:2741"
+multiplicity = 1
+
+[[oracles.typokat_accepted_diagnostic_removals]]
+case_id = "conformance/types/intersection/recursiveIntersectionTypes.ts"
+diagnostic = "13:2339"
+multiplicity = 1
+
+[[oracles.typokat_accepted_diagnostic_removals]]
+case_id = "conformance/types/intersection/recursiveIntersectionTypes.ts"
+diagnostic = "14:2339"
+multiplicity = 1
+
+[[oracles.typokat_accepted_diagnostic_removals]]
+case_id = "conformance/types/intersection/recursiveIntersectionTypes.ts"
+diagnostic = "15:2339"
+multiplicity = 1
+
+[[oracles.typokat_accepted_diagnostic_removals]]
+case_id = "conformance/types/keyof/keyofAndIndexedAccess.ts"
+diagnostic = "108:2345"
+multiplicity = 1
+
+[[oracles.typokat_accepted_diagnostic_removals]]
+case_id = "conformance/types/keyof/keyofAndIndexedAccess.ts"
+diagnostic = "109:2345"
+multiplicity = 1
+
+[[oracles.typokat_accepted_diagnostic_removals]]
+case_id = "conformance/types/keyof/keyofAndIndexedAccess.ts"
+diagnostic = "399:2345"
+multiplicity = 1
+
+[[oracles.typokat_accepted_diagnostic_removals]]
+case_id = "conformance/types/keyof/keyofAndIndexedAccess.ts"
+diagnostic = "400:2345"
+multiplicity = 1
+
+[[oracles.typokat_accepted_diagnostic_removals]]
+case_id = "conformance/types/keyof/keyofAndIndexedAccess.ts"
+diagnostic = "479:2345"
+multiplicity = 1
+
+[[oracles.typokat_accepted_diagnostic_removals]]
+case_id = "conformance/types/literal/templateLiteralTypes6.ts"
+diagnostic = "19:2554"
+multiplicity = 1
+
+[[oracles.typokat_accepted_diagnostic_removals]]
+case_id = "conformance/types/tuple/wideningTuples6.ts"
+diagnostic = "2:2304"
+multiplicity = 1
+
+[[oracles.typokat_accepted_diagnostic_removals]]
+case_id = "conformance/types/tuple/wideningTuples6.ts"
+diagnostic = "3:2304"
+multiplicity = 1
+
+[[oracles.typokat_accepted_diagnostic_removals]]
+case_id = "conformance/types/union/discriminatedUnionTypes2.ts"
+diagnostic = "40:2339"
+multiplicity = 1
+
+[[oracles.typokat_accepted_diagnostic_removals]]
+case_id = "conformance/types/union/discriminatedUnionTypes2.ts"
+diagnostic = "43:2339"
+multiplicity = 1
+
+[[oracles.typokat_accepted_diagnostic_removals]]
+case_id = "conformance/types/union/discriminatedUnionTypes2.ts"
+diagnostic = "66:2322"
+multiplicity = 1
+
+[[oracles.typokat_accepted_diagnostic_removals]]
+case_id = "conformance/types/union/discriminatedUnionTypes2.ts"
+diagnostic = "67:2322"
+multiplicity = 1
+
+[[oracles.typokat_accepted_diagnostic_removals]]
+case_id = "conformance/types/union/discriminatedUnionTypes2.ts"
+diagnostic = "69:2322"
+multiplicity = 1
+
+[[oracles.typokat_accepted_diagnostic_removals]]
+case_id = "conformance/types/union/discriminatedUnionTypes2.ts"
+diagnostic = "70:2322"
+multiplicity = 1
+
+[[oracles.typokat_accepted_incomplete_removals]]
+case_id = "conformance/types/literal/templateLiteralTypes4.ts"
+incomplete = "annotation-lower/infer-type/constraint"
+multiplicity = 99
+
 [current_typokat_baseline]
 artifact_relative_path = "docs/archive/project-local-library-index-feasibility-2026-08-22/lifecycle-baseline.json"
 artifact_sha256 = "950d5d7b38da7e7b5a0bc87da7ed423968b151ebf731c451021216c1d1880a18"

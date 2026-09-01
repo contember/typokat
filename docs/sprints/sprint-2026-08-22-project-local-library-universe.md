@@ -817,3 +817,7 @@ numbers are invalid without `--no-smt`.
   false positive or blessing candidate output would both be invalid. The scoreboard remains the
   immutable authority and now feeds ADR-0030's conservative benchmark-specific projection. →
   [ADR-0030](../decisions/0030-treat-the-wu6-typokat-oracle-as-a-regression-ratchet.md)
+- **2026-09-01 — reviewed ADR-0030 authority widening.** The latest 687-frame session run added no
+  diagnostics and dropped no matched diagnostics. Its exact false-positive and incomplete removals
+  are now pre-authenticated against the unchanged scoreboard; gained precise incompletes remain
+  explicit progress evidence.

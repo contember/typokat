@@ -320,6 +320,64 @@ class SessionBatchContractTests(unittest.TestCase):
 
     def test_typokat_scoreboard_authority_preserves_ratchet_identities(self) -> None:
         authority = batch.load_authenticated_batch_oracles(self.contract)
+        accepted_removals = self.contract["oracles"][
+            "typokat_accepted_diagnostic_removals"
+        ]
+        removals_by_case: dict[str, list[str]] = {}
+        for removal in accepted_removals:
+            self.assertEqual(removal["multiplicity"], 1)
+            removals_by_case.setdefault(removal["case_id"], []).append(
+                removal["diagnostic"]
+            )
+        self.assertEqual(
+            removals_by_case,
+            {
+                "conformance/classes/members/classTypes/indexersInClassType.ts": [
+                    "15:2339"
+                ],
+                "conformance/controlFlow/controlFlowDestructuringDeclaration.ts": [
+                    "10:2304",
+                    "12:2304",
+                    "14:2304",
+                    "19:2304",
+                    "21:2304",
+                    "23:2304",
+                ],
+                "conformance/controlFlow/dependentDestructuredVariables.ts": [
+                    "160:2345",
+                    "163:2345",
+                    "350:2304",
+                ],
+                "conformance/types/intersection/intersectionAsWeakTypeSource.ts": [
+                    "18:2741"
+                ],
+                "conformance/types/intersection/recursiveIntersectionTypes.ts": [
+                    "13:2339",
+                    "14:2339",
+                    "15:2339",
+                ],
+                "conformance/types/keyof/keyofAndIndexedAccess.ts": [
+                    "108:2345",
+                    "109:2345",
+                    "399:2345",
+                    "400:2345",
+                    "479:2345",
+                ],
+                "conformance/types/literal/templateLiteralTypes6.ts": ["19:2554"],
+                "conformance/types/tuple/wideningTuples6.ts": [
+                    "2:2304",
+                    "3:2304",
+                ],
+                "conformance/types/union/discriminatedUnionTypes2.ts": [
+                    "40:2339",
+                    "43:2339",
+                    "66:2322",
+                    "67:2322",
+                    "69:2322",
+                    "70:2322",
+                ],
+            },
+        )
         accepted_removal = {
             "case_id": (
                 "conformance/classes/members/classTypes/"
@@ -329,8 +387,31 @@ class SessionBatchContractTests(unittest.TestCase):
             "multiplicity": 1,
         }
         self.assertEqual(
-            self.contract["oracles"]["typokat_accepted_diagnostic_removals"],
-            [accepted_removal],
+            next(
+                removal
+                for removal in accepted_removals
+                if removal["case_id"] == accepted_removal["case_id"]
+            ),
+            accepted_removal,
+        )
+        accepted_incomplete_removal = {
+            "case_id": "conformance/types/literal/templateLiteralTypes4.ts",
+            "incomplete": "annotation-lower/infer-type/constraint",
+            "multiplicity": 99,
+        }
+        self.assertEqual(
+            self.contract["oracles"]["typokat_accepted_incomplete_removals"],
+            [accepted_incomplete_removal],
+        )
+        self.assertEqual(
+            authority["typokat_accepted_incomplete_removals"],
+            [accepted_incomplete_removal],
+        )
+        self.assertEqual(
+            batch.oracle_panel(authority, 687)["typokat"][
+                "accepted_incomplete_removals"
+            ],
+            [accepted_incomplete_removal],
         )
         rows = authority["typokat_ratchet"]
         indexers = next(
@@ -450,6 +531,89 @@ class SessionBatchContractTests(unittest.TestCase):
             ):
                 authenticate_contract_removals(removals)
 
+        accepted_incomplete = {
+            "case_id": "conformance/types/literal/templateLiteralTypes4.ts",
+            "incomplete": "annotation-lower/infer-type/constraint",
+            "multiplicity": 99,
+        }
+        authenticate_contract_incomplete_removals([accepted_incomplete])
+        invalid_incompletes = {
+            "unknown-case": [
+                {**accepted_incomplete, "case_id": "conformance/not-a-real-case.ts"}
+            ],
+            "absent-token": [
+                {**accepted_incomplete, "incomplete": "annotation-lower/not-present"}
+            ],
+            "partial-multiplicity": [{**accepted_incomplete, "multiplicity": 98}],
+            "excess-multiplicity": [{**accepted_incomplete, "multiplicity": 100}],
+            "boolean-multiplicity": [{**accepted_incomplete, "multiplicity": True}],
+            "duplicate": [accepted_incomplete, accepted_incomplete],
+        }
+        for label, removals in invalid_incompletes.items():
+            with self.subTest(label=f"incomplete-{label}"), self.assertRaises(
+                batch.BatchContractError
+            ):
+                authenticate_contract_incomplete_removals(removals)
+
+    def test_typokat_ratchet_records_accepted_incomplete_replacement(self) -> None:
+        case_id = "conformance/types/literal/templateLiteralTypes4.ts"
+        frozen_incomplete = "annotation-lower/infer-type/constraint"
+        gained_incomplete = "annotation-lower/infer-type/bigint-constraint"
+        frames = [
+            {
+                "case_id": case_id,
+                "semantic": {
+                    "diagnostics": [],
+                    "exit_code": 3,
+                    "incompletes": [gained_incomplete] * 28,
+                    "parse_errors": [],
+                },
+            }
+        ]
+        expected = {
+            "ratchet_rows": [
+                {
+                    "case_id": case_id,
+                    "status": "OOS:unsupported",
+                    "matched_diagnostics": [],
+                    "false_positive_diagnostics": [],
+                    "incompletes": [frozen_incomplete] * 99,
+                }
+            ],
+            "accepted_diagnostic_removals": self.contract["oracles"][
+                "typokat_accepted_diagnostic_removals"
+            ],
+            "accepted_incomplete_removals": self.contract["oracles"][
+                "typokat_accepted_incomplete_removals"
+            ],
+        }
+        progress = batch._typokat_ratchet_progress(frames, expected, self.contract)
+        self.assertEqual(len(progress), 1)
+        self.assertEqual(
+            set(progress[0]),
+            {
+                "case_id",
+                "removed_false_positive_diagnostics",
+                "removed_incomplete_identities",
+                "gained_incomplete_identities",
+            },
+        )
+        self.assertEqual(progress[0]["case_id"], case_id)
+        self.assertEqual(progress[0]["removed_false_positive_diagnostics"], [])
+        self.assertEqual(
+            progress[0]["removed_incomplete_identities"], [frozen_incomplete] * 99
+        )
+        self.assertEqual(
+            progress[0]["gained_incomplete_identities"], [gained_incomplete] * 28
+        )
+
+        unauthorized = copy.deepcopy(expected)
+        unauthorized["ratchet_rows"][0]["incompletes"] = ["unreviewed/incomplete"]
+        with self.assertRaisesRegex(
+            batch.BatchContractError, "unauthenticated incomplete"
+        ):
+            batch._typokat_ratchet_progress(frames, unauthorized, self.contract)
+
     def test_typokat_panel_uses_scoreboard_ratchet_not_exact_equality(self) -> None:
         authority = batch.load_authenticated_batch_oracles(self.contract)
         expected = batch.oracle_panel(authority, 32)
@@ -532,6 +696,7 @@ class SessionBatchContractTests(unittest.TestCase):
             {
                 "case_id": in_scope_case,
                 "removed_false_positive_diagnostics": [],
+                "removed_incomplete_identities": [],
                 "gained_incomplete_identities": ["class/member/new-gap"],
             }
         ]
@@ -553,6 +718,7 @@ class SessionBatchContractTests(unittest.TestCase):
             {
                 "case_id": arbitrary_case,
                 "removed_false_positive_diagnostics": ["21:2349"],
+                "removed_incomplete_identities": [],
                 "gained_incomplete_identities": [],
             }
         ]
@@ -2050,6 +2216,7 @@ def accepted_typokat_progress_receipt() -> list[dict[str, object]]:
                 "privateStaticMemberAccessibility.ts"
             ),
             "removed_false_positive_diagnostics": [],
+            "removed_incomplete_identities": [],
             "gained_incomplete_identities": [
                 "reviewed/a",
                 "reviewed/a",
@@ -2062,6 +2229,7 @@ def accepted_typokat_progress_receipt() -> list[dict[str, object]]:
                 "indexersInClassType.ts"
             ),
             "removed_false_positive_diagnostics": ["15:2339"],
+            "removed_incomplete_identities": [],
             "gained_incomplete_identities": ["reviewed/b"],
         },
     ]
@@ -2095,7 +2263,7 @@ def authenticate_contract_removals(removals: list[dict[str, object]]) -> None:
     source = (HERE / "session_batch_contract.toml").read_text()
     marker = "[[oracles.typokat_accepted_diagnostic_removals]]"
     start = source.index(marker)
-    end = source.index("\n[current_typokat_baseline]", start)
+    end = source.index("[[oracles.typokat_accepted_incomplete_removals]]", start)
     blocks = []
     for removal in removals:
         multiplicity = removal["multiplicity"]
@@ -2109,6 +2277,38 @@ def authenticate_contract_removals(removals: list[dict[str, object]]) -> None:
                     marker,
                     f"case_id = {json.dumps(removal['case_id'])}",
                     f"diagnostic = {json.dumps(removal['diagnostic'])}",
+                    f"multiplicity = {rendered_multiplicity}",
+                ]
+            )
+        )
+    candidate = source[:start] + "\n\n".join(blocks) + "\n\n" + source[end:]
+    with tempfile.TemporaryDirectory() as temporary:
+        path = Path(temporary) / "session_batch_contract.toml"
+        path.write_text(candidate)
+        contract = batch.verify_contract(path)
+        batch.load_authenticated_batch_oracles(contract)
+
+
+def authenticate_contract_incomplete_removals(
+    removals: list[dict[str, object]],
+) -> None:
+    source = (HERE / "session_batch_contract.toml").read_text()
+    marker = "[[oracles.typokat_accepted_incomplete_removals]]"
+    start = source.index(marker)
+    end = source.index("\n[current_typokat_baseline]", start)
+    blocks = []
+    for removal in removals:
+        multiplicity = removal["multiplicity"]
+        if type(multiplicity) is bool:
+            rendered_multiplicity = "true" if multiplicity else "false"
+        else:
+            rendered_multiplicity = str(multiplicity)
+        blocks.append(
+            "\n".join(
+                [
+                    marker,
+                    f"case_id = {json.dumps(removal['case_id'])}",
+                    f"incomplete = {json.dumps(removal['incomplete'])}",
                     f"multiplicity = {rendered_multiplicity}",
                 ]
             )
