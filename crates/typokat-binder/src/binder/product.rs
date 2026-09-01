@@ -49,15 +49,6 @@ fn record_successful_library_product_certification_for_test() {
     );
 }
 
-#[cfg(test)]
-pub(crate) fn record_library_product_certification_attempt_for_test() {
-    LIBRARY_PRODUCT_CERTIFICATIONS_FOR_TEST.set(
-        LIBRARY_PRODUCT_CERTIFICATIONS_FOR_TEST
-            .get()
-            .saturating_add(1),
-    );
-}
-
 pub struct LibraryProductSource<'manifest, 'ast> {
     pub ordinal: u32,
     pub name: &'manifest str,
@@ -4696,9 +4687,7 @@ mod tests {
             .chars()
             .filter(|character| !character.is_whitespace())
             .collect::<String>();
-        assert!(instantiation_source.contains(
-            "record_library_product_certification_attempt_for_test();declaration_product.validate()"
-        ));
+        assert!(!instantiation_source.contains("declaration_product.validate()"));
 
         let instantiation = LibraryProductCertificationWorkScopeForTest::start();
         for _ in 0..2 {

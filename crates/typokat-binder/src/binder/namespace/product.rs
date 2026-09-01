@@ -281,11 +281,6 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
     compilation_global: ScopeId,
     script_namespace_root: ScopeId,
 ) -> Result<LibraryProductInstantiationFacts, LibraryProductInstantiationError> {
-    #[cfg(test)]
-    crate::binder::product::record_library_product_certification_attempt_for_test();
-    declaration_product
-        .validate()
-        .map_err(LibraryProductInstantiationError::InvalidProduct)?;
     let strings = declaration_product.strings();
     let string = |key: product::StringKey| {
         strings

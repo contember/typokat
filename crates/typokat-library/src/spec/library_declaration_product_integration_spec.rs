@@ -809,13 +809,13 @@ fn qualified_path_schema_authenticates_production_tables() {
         .find(|path| path.recipe.index() == iterator_recipe)
         .expect("IteratorObject path")
         .resolution = wrong_cause[0].resolution;
-    let changed = typokat_library_product::with_qualified_path_tables_for_test(
+    let validation = typokat_library_product::validate_with_qualified_path_tables_for_test(
         &product,
         wrong_cause_table,
         segments.clone(),
     );
     assert!(matches!(
-        changed.validate(),
+        validation,
         Err(
             typokat_library_product::ProductValidationError::QualifiedPathResolutionMismatch { .. }
         )
@@ -843,13 +843,13 @@ fn qualified_path_schema_authenticates_production_tables() {
         .find(|path| path.recipe.index() == iterator_recipe)
         .expect("IteratorObject path")
         .resolution = wrong_ordinal[0].resolution;
-    let changed = typokat_library_product::with_qualified_path_tables_for_test(
+    let validation = typokat_library_product::validate_with_qualified_path_tables_for_test(
         &product,
         wrong_ordinal_table,
         segments.clone(),
     );
     assert!(matches!(
-        changed.validate(),
+        validation,
         Err(
             typokat_library_product::ProductValidationError::QualifiedPathResolutionMismatch { .. }
         )
@@ -857,13 +857,13 @@ fn qualified_path_schema_authenticates_production_tables() {
 
     let mut missing_header = paths.clone();
     let missing_recipe = missing_header.remove(0).recipe.index();
-    let changed = typokat_library_product::with_qualified_path_tables_for_test(
+    let validation = typokat_library_product::validate_with_qualified_path_tables_for_test(
         &product,
         missing_header,
         segments.clone(),
     );
     assert_eq!(
-        changed.validate(),
+        validation,
         Err(
             typokat_library_product::ProductValidationError::MissingQualifiedPath {
                 recipe: missing_recipe,
@@ -873,13 +873,13 @@ fn qualified_path_schema_authenticates_production_tables() {
 
     let mut duplicate_header = paths.clone();
     duplicate_header.insert(1, duplicate_header[0]);
-    let changed = typokat_library_product::with_qualified_path_tables_for_test(
+    let validation = typokat_library_product::validate_with_qualified_path_tables_for_test(
         &product,
         duplicate_header,
         segments.clone(),
     );
     assert_eq!(
-        changed.validate(),
+        validation,
         Err(
             typokat_library_product::ProductValidationError::DuplicateQualifiedPath {
                 table: "qualified_paths",
@@ -895,13 +895,13 @@ fn qualified_path_schema_authenticates_production_tables() {
             QualifiedPathRole::Reference
         }
     };
-    let changed = typokat_library_product::with_qualified_path_tables_for_test(
+    let validation = typokat_library_product::validate_with_qualified_path_tables_for_test(
         &product,
         wrong_role,
         segments.clone(),
     );
     assert_eq!(
-        changed.validate(),
+        validation,
         Err(
             typokat_library_product::ProductValidationError::InvalidQualifiedPath {
                 table: "qualified_paths",
@@ -912,13 +912,13 @@ fn qualified_path_schema_authenticates_production_tables() {
 
     let mut missing_segment = segments.clone();
     missing_segment.remove(0);
-    let changed = typokat_library_product::with_qualified_path_tables_for_test(
+    let validation = typokat_library_product::validate_with_qualified_path_tables_for_test(
         &product,
         paths.clone(),
         missing_segment,
     );
     assert!(matches!(
-        changed.validate(),
+        validation,
         Err(
             typokat_library_product::ProductValidationError::InvalidQualifiedPath {
                 table: "qualified_path_segments",
@@ -929,13 +929,13 @@ fn qualified_path_schema_authenticates_production_tables() {
 
     let mut duplicate_segment = segments.clone();
     duplicate_segment.insert(1, duplicate_segment[0]);
-    let changed = typokat_library_product::with_qualified_path_tables_for_test(
+    let validation = typokat_library_product::validate_with_qualified_path_tables_for_test(
         &product,
         paths.clone(),
         duplicate_segment,
     );
     assert!(matches!(
-        changed.validate(),
+        validation,
         Err(
             typokat_library_product::ProductValidationError::DuplicateQualifiedPath {
                 table: "qualified_path_segments",
@@ -948,19 +948,22 @@ fn qualified_path_schema_authenticates_production_tables() {
     let mut extra = extra_segment[0];
     extra.ordinal = extra.ordinal.saturating_add(1);
     extra_segment.insert(1, extra);
-    let changed = typokat_library_product::with_qualified_path_tables_for_test(
+    let validation = typokat_library_product::validate_with_qualified_path_tables_for_test(
         &product,
         paths.clone(),
         extra_segment,
     );
-    assert!(changed.validate().is_err());
+    assert!(validation.is_err());
 
     let mut invalid_span = segments.clone();
     invalid_span[0].site.end = invalid_span[0].site.start;
-    let changed =
-        typokat_library_product::with_qualified_path_tables_for_test(&product, paths, invalid_span);
+    let validation = typokat_library_product::validate_with_qualified_path_tables_for_test(
+        &product,
+        paths,
+        invalid_span,
+    );
     assert_eq!(
-        changed.validate(),
+        validation,
         Err(
             typokat_library_product::ProductValidationError::InvalidQualifiedPath {
                 table: "qualified_path_segments",

@@ -10,8 +10,8 @@ pub use schema::*;
 pub use validate::ProductValidationError;
 #[cfg(feature = "test-utils")]
 pub use validate::{
-    lexical_scope_corruption_receipt_for_test, with_changed_callable_site_for_test,
-    with_qualified_path_tables_for_test, LexicalScopeCorruptionReceipt,
+    lexical_scope_corruption_receipt_for_test, validate_with_qualified_path_tables_for_test,
+    with_changed_callable_site_for_test, LexicalScopeCorruptionReceipt,
 };
 pub use walk::{ProductFieldClass, ProductFieldVisitor};
 

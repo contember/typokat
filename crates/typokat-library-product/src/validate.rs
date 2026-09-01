@@ -1293,15 +1293,15 @@ pub fn with_changed_callable_site_for_test(
 }
 
 #[cfg(feature = "test-utils")]
-pub fn with_qualified_path_tables_for_test(
+pub fn validate_with_qualified_path_tables_for_test(
     product: &LibraryDeclarationProduct,
     paths: Vec<crate::schema::QualifiedPathRecipe>,
     segments: Vec<crate::schema::QualifiedPathSegmentRecipe>,
-) -> LibraryDeclarationProduct {
+) -> Result<(), ProductValidationError> {
     let mut changed = product.clone();
     changed.qualified_paths = paths.into_boxed_slice();
     changed.qualified_path_segments = segments.into_boxed_slice();
-    changed
+    changed.validate()
 }
 
 #[cfg(feature = "test-utils")]
