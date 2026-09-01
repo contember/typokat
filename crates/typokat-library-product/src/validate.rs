@@ -5,6 +5,29 @@ use crate::schema::{
     ValueReferenceResolution,
 };
 
+#[cfg(feature = "test-utils")]
+thread_local! {
+    static LIBRARY_PRODUCT_VALIDATIONS_FOR_TEST: std::cell::Cell<u64> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(feature = "test-utils")]
+pub struct LibraryProductValidationScopeForTest(u64);
+
+#[cfg(feature = "test-utils")]
+impl LibraryProductValidationScopeForTest {
+    pub fn start() -> Self {
+        Self(LIBRARY_PRODUCT_VALIDATIONS_FOR_TEST.get())
+    }
+
+    pub fn finish(self) -> u64 {
+        LIBRARY_PRODUCT_VALIDATIONS_FOR_TEST
+            .get()
+            .saturating_sub(self.0)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProductValidationError {
     EmptyProfile,
@@ -150,6 +173,9 @@ impl std::error::Error for ProductValidationError {}
 
 impl LibraryDeclarationProduct {
     pub fn validate(&self) -> Result<(), ProductValidationError> {
+        #[cfg(feature = "test-utils")]
+        LIBRARY_PRODUCT_VALIDATIONS_FOR_TEST
+            .set(LIBRARY_PRODUCT_VALIDATIONS_FOR_TEST.get().saturating_add(1));
         if self.profile.index() >= self.strings.len() || self.profile_identity().is_empty() {
             return Err(ProductValidationError::EmptyProfile);
         }

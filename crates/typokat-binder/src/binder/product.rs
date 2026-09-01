@@ -17,38 +17,6 @@ use oxc_span::GetSpan;
 use std::collections::BTreeMap;
 use typokat_library_product as product;
 
-#[cfg(test)]
-thread_local! {
-    static LIBRARY_PRODUCT_CERTIFICATIONS_FOR_TEST: std::cell::Cell<u64> = const {
-        std::cell::Cell::new(0)
-    };
-}
-
-#[cfg(test)]
-pub(crate) struct LibraryProductCertificationWorkScopeForTest(u64);
-
-#[cfg(test)]
-impl LibraryProductCertificationWorkScopeForTest {
-    pub(crate) fn start() -> Self {
-        Self(LIBRARY_PRODUCT_CERTIFICATIONS_FOR_TEST.get())
-    }
-
-    pub(crate) fn finish(self) -> u64 {
-        LIBRARY_PRODUCT_CERTIFICATIONS_FOR_TEST
-            .get()
-            .saturating_sub(self.0)
-    }
-}
-
-#[cfg(test)]
-fn record_successful_library_product_certification_for_test() {
-    LIBRARY_PRODUCT_CERTIFICATIONS_FOR_TEST.set(
-        LIBRARY_PRODUCT_CERTIFICATIONS_FOR_TEST
-            .get()
-            .saturating_add(1),
-    );
-}
-
 pub struct LibraryProductSource<'manifest, 'ast> {
     pub ordinal: u32,
     pub name: &'manifest str,
@@ -1159,8 +1127,6 @@ fn project_library_declaration_product_inner(
     if product_values != value_oracle {
         return Err(LibraryProductProjectionError::AuthenticatedOracleMismatch { table: "values" });
     }
-    #[cfg(test)]
-    record_successful_library_product_certification_for_test();
     Ok(LibraryProductProjectionOutput {
         product,
         #[cfg(any(test, feature = "test-utils"))]
@@ -4011,6 +3977,7 @@ mod tests {
     use oxc_allocator::Allocator;
     use oxc_parser::Parser;
     use oxc_span::SourceType;
+    use typokat_library_product::LibraryProductValidationScopeForTest;
 
     #[test]
     fn projection_resolves_nested_duplicate_names_and_type_parameters_exactly() {
@@ -4679,17 +4646,11 @@ mod tests {
 
     #[test]
     fn immutable_declaration_product_is_certified_only_during_construction() {
-        let construction = LibraryProductCertificationWorkScopeForTest::start();
+        let construction = LibraryProductValidationScopeForTest::start();
         let product = project_test_source("certification.d.ts", "interface Box<T> { value: T }");
         assert_eq!(construction.finish(), 1);
 
-        let instantiation_source = include_str!("namespace/product.rs")
-            .chars()
-            .filter(|character| !character.is_whitespace())
-            .collect::<String>();
-        assert!(!instantiation_source.contains("declaration_product.validate()"));
-
-        let instantiation = LibraryProductCertificationWorkScopeForTest::start();
+        let instantiation = LibraryProductValidationScopeForTest::start();
         for _ in 0..2 {
             let (_, units) = ProjectBinderBuilder::from_library_declaration_product(&product)
                 .expect("immutable declaration product instantiates");
