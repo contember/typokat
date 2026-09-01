@@ -4,15 +4,15 @@ use super::lowerer::{lower_product_groups, ProductLoweringMetadataPlan, ProductL
 #[cfg(any(test, feature = "test-utils"))]
 use super::observation::ProjectLocalSemanticPhaseForTest;
 use super::project_local_pass_port::{
-    project_local_published_types, ContainerKind, DeclarationPayload, DependencyKind,
-    DependencyTarget, LibraryDeclarationProduct, ProjectLocalDemandSnapshot,
-    ProjectLocalPublishedTypeInputs, ProjectLocalTypeOverlayDraft, ProjectLocalUserDemandGateway,
-    PublishedAliases, TypeGroupId, TypeParamId, ValueStorageId,
+    project_local_published_types, DeclarationPayload, DependencyKind, DependencyTarget,
+    LibraryDeclarationProduct, ProjectLocalDemandSnapshot, ProjectLocalPublishedTypeInputs,
+    ProjectLocalTypeOverlayDraft, ProjectLocalUserDemandGateway, PublishedAliases, TypeGroupId,
+    TypeParamId, ValueStorageId,
 };
 #[cfg(any(test, feature = "test-utils"))]
 use super::project_local_pass_port::{
-    Interner, IntrinsicKind, LiteralValue, PublishedAliasTerminal, PublishedAliasUnavailable,
-    TypeId, TypeTag,
+    ContainerKind, Interner, IntrinsicKind, LiteralValue, PublishedAliasTerminal,
+    PublishedAliasUnavailable, TypeId, TypeTag,
 };
 use super::record_staging::LibraryRecordAccumulator;
 use super::session::SessionCore;

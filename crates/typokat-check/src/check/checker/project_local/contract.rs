@@ -11,6 +11,7 @@ use std::cell::{Cell, RefCell};
 #[cfg(test)]
 use std::rc::Rc;
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProjectLocalProductGroupForTest {
     pub product_key: usize,
@@ -22,6 +23,7 @@ pub struct ProjectLocalProductGroupForTest {
     pub has_namespace: bool,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 impl Clone for ProjectLocalProductGroupForTest {
     fn clone(&self) -> Self {
         #[cfg(test)]
@@ -110,6 +112,7 @@ pub struct ProjectLocalOrdinaryPreparationReceiptForTest {
     pub owned_product_group_name_copy_count: usize,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProjectLocalProductDependencyForTest {
     pub owner: usize,
@@ -119,6 +122,7 @@ pub struct ProjectLocalProductDependencyForTest {
     pub source_start: u32,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProjectLocalMappedProductGroupForTest {
     pub product: ProjectLocalProductGroupForTest,
@@ -134,6 +138,7 @@ pub struct ProjectLocalSccForTest {
     pub members: Vec<String>,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProjectLocalProductSccForTest {
     pub members: Vec<ProjectLocalProductGroupForTest>,
