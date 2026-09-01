@@ -6,8 +6,12 @@ use super::project_local_pass_port::{
     NormalizedDiagnosticForTest, NormalizedIncompleteForTest, NormalizedTypeProbeForTest,
     SignatureProbe,
 };
+#[cfg(test)]
+use std::cell::{Cell, RefCell};
+#[cfg(test)]
+use std::rc::Rc;
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProjectLocalProductGroupForTest {
     pub product_key: usize,
     pub container_key: usize,
@@ -16,6 +20,94 @@ pub struct ProjectLocalProductGroupForTest {
     pub has_type: bool,
     pub has_value: bool,
     pub has_namespace: bool,
+}
+
+impl Clone for ProjectLocalProductGroupForTest {
+    fn clone(&self) -> Self {
+        #[cfg(test)]
+        record_project_local_product_group_name_copy_for_test();
+        Self {
+            product_key: self.product_key,
+            container_key: self.container_key,
+            compilation_global: self.compilation_global,
+            name: self.name.clone(),
+            has_type: self.has_type,
+            has_value: self.has_value,
+            has_namespace: self.has_namespace,
+        }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static ACTIVE_PRODUCT_GROUP_NAME_COPY_SCOPE: RefCell<Option<Rc<Cell<usize>>>> = const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(super) fn record_project_local_product_group_name_copy_for_test() {
+    ACTIVE_PRODUCT_GROUP_NAME_COPY_SCOPE.with(|active| {
+        if let Some(count) = active.borrow().as_ref() {
+            count.set(count.get().saturating_add(1));
+        }
+    });
+}
+
+#[cfg(test)]
+pub(super) struct ProjectLocalProductGroupNameCopyScopeForTest {
+    count: Rc<Cell<usize>>,
+    active: bool,
+}
+
+#[cfg(test)]
+impl ProjectLocalProductGroupNameCopyScopeForTest {
+    pub(super) fn start() -> Self {
+        let count = Rc::new(Cell::new(0));
+        ACTIVE_PRODUCT_GROUP_NAME_COPY_SCOPE.with(|active| {
+            let replaced = active.borrow_mut().replace(Rc::clone(&count));
+            assert!(
+                replaced.is_none(),
+                "product-group name-copy scopes cannot nest"
+            );
+        });
+        Self {
+            count,
+            active: true,
+        }
+    }
+
+    pub(super) fn finish(mut self) -> usize {
+        self.close();
+        self.count.get()
+    }
+
+    fn close(&mut self) {
+        if !self.active {
+            return;
+        }
+        ACTIVE_PRODUCT_GROUP_NAME_COPY_SCOPE.with(|active| {
+            let installed = active
+                .borrow_mut()
+                .take()
+                .expect("product-group name-copy scope remains installed");
+            assert!(Rc::ptr_eq(&installed, &self.count));
+        });
+        self.active = false;
+    }
+}
+
+#[cfg(test)]
+impl Drop for ProjectLocalProductGroupNameCopyScopeForTest {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProjectLocalOrdinaryPreparationReceiptForTest {
+    pub product_group_count: usize,
+    pub product_scc_count: usize,
+    pub owned_product_group_name_copy_count: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]

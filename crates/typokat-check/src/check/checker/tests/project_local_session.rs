@@ -94,7 +94,6 @@ fn checker_session_owns_product_binding_and_returns_real_check_results() {
         diagnostic.message,
         "Type 'string' is not assignable to type 'number'"
     );
-
     let receipt = observation.finish();
     assert_eq!(
         receipt
@@ -143,6 +142,54 @@ fn checker_session_owns_product_binding_and_returns_real_check_results() {
         metadata_plan_constructions.finish(),
         0,
         "a session without product demand must not construct a metadata plan"
+    );
+}
+
+#[test]
+fn ordinary_preparation_copies_no_owned_product_group_names_for_scheduling() {
+    const INDEPENDENT_GROUP_COUNT: usize = 24;
+    let library_source = (0..INDEPENDENT_GROUP_COUNT)
+        .map(|index| format!("interface Independent{index} {{ value: number }}\n"))
+        .collect::<String>();
+    let product = Arc::new(extract_library_product(&library_source));
+    let run = run_prepared_project_frontend(
+        vec![FileInput {
+            name: USER_PATH.to_owned(),
+            source: "const value: number = \"wrong\";\n".to_owned(),
+        }],
+        move |programs, source_reexports, default_modules| {
+            let preparation = CheckerSession::new(Arc::clone(&product))
+                .prepare_project_programs_for_test(programs, source_reexports, default_modules)?;
+            let results = CheckerSession::new(product).check_project_programs(
+                programs,
+                source_reexports,
+                default_modules,
+            )?;
+            Ok::<_, crate::check::checker::project_local::CheckerSessionError>((
+                preparation,
+                results,
+            ))
+        },
+    );
+
+    assert_eq!(run.parse_errors, [Vec::<String>::new()]);
+    let (preparation, results) = run
+        .product
+        .expect("clean project reaches the session")
+        .expect("ordinary preparation and checking succeed");
+    assert_eq!(preparation.product_group_count, INDEPENDENT_GROUP_COUNT);
+    assert_eq!(preparation.product_scc_count, INDEPENDENT_GROUP_COUNT);
+    let [result] = results.as_slice() else {
+        panic!("one user program must produce one real CheckResult")
+    };
+    assert!(result.incomplete.is_empty());
+    let [diagnostic] = result.diagnostics.as_slice() else {
+        panic!("the session must preserve the user's one structured diagnostic")
+    };
+    assert_eq!(diagnostic.code.as_str(), "TK2322");
+    assert_eq!(
+        preparation.owned_product_group_name_copy_count, 0,
+        "ordinary preparation must schedule by numeric product identity without copying owned product-group names"
     );
 }
 

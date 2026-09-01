@@ -458,7 +458,11 @@ impl ProjectLocalSemanticCoordinator {
                 container_key: group.container.index(),
                 compilation_global: product.containers()[group.container.index()].kind
                     == ContainerKind::CompilationGlobal,
-                name: product.strings()[group.name.index()].clone(),
+                name: {
+                    #[cfg(test)]
+                    super::contract::record_project_local_product_group_name_copy_for_test();
+                    product.strings()[group.name.index()].clone()
+                },
                 has_type: group.slots.r#type,
                 has_value: group.slots.value,
                 has_namespace: group.slots.namespace,

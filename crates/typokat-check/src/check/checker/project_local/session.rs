@@ -1,6 +1,8 @@
 //! Project and publisher lifetime ownership.
 
 use super::cache::DurableCache;
+#[cfg(test)]
+use super::entry::prepare_ordinary_project_local_execution_receipt_for_test;
 use super::entry::run_ordinary_project_local_semantics;
 #[cfg(feature = "session-bench")]
 use super::entry::run_ordinary_project_local_semantics_for_session_bench;
@@ -55,6 +57,29 @@ impl CheckerSession {
         .map_err(CheckerSessionError::Binding)?;
         run_ordinary_project_local_semantics(&self.product, library_units, bound, programs)
             .map_err(|error| CheckerSessionError::Semantic(error.to_string()))
+    }
+
+    #[cfg(test)]
+    pub fn prepare_project_programs_for_test<'ast>(
+        self,
+        programs: &[ProjectProgram<'ast>],
+        source_reexports: &AdmittedSourceReexports,
+        default_modules: &DefaultModuleCandidates,
+    ) -> Result<super::ProjectLocalOrdinaryPreparationReceiptForTest, CheckerSessionError> {
+        let (library_units, bound) = bind_library_product_project_programs(
+            &self.product,
+            programs,
+            source_reexports,
+            default_modules,
+        )
+        .map_err(CheckerSessionError::Binding)?;
+        prepare_ordinary_project_local_execution_receipt_for_test(
+            &self.product,
+            library_units,
+            bound,
+            programs,
+        )
+        .map_err(|error| CheckerSessionError::Semantic(error.to_string()))
     }
 
     /// Check one benchmark frame through the ordinary binder and semantic executor.

@@ -223,6 +223,25 @@ fn prepare_ordinary_project_local_execution<'run, 'ast>(
     )
 }
 
+#[cfg(test)]
+pub(super) fn prepare_ordinary_project_local_execution_receipt_for_test<'run, 'ast>(
+    product: &'run LibraryDeclarationProduct,
+    library_units: Vec<LibraryBinderUnit>,
+    bound: BoundProjectBinder,
+    programs: &'run [ProjectProgram<'ast>],
+) -> Result<super::ProjectLocalOrdinaryPreparationReceiptForTest, ProjectLocalCandidateErrorForTest>
+{
+    let name_copies = super::contract::ProjectLocalProductGroupNameCopyScopeForTest::start();
+    let prepared =
+        prepare_ordinary_project_local_execution(product, library_units, bound, programs)?;
+    let owned_product_group_name_copy_count = name_copies.finish();
+    Ok(super::ProjectLocalOrdinaryPreparationReceiptForTest {
+        product_group_count: prepared.coordinator.groups().len(),
+        product_scc_count: prepared.coordinator.sccs().len(),
+        owned_product_group_name_copy_count,
+    })
+}
+
 #[cfg(any(test, feature = "test-utils"))]
 fn prepare_project_local_execution_for_test<'run, 'ast>(
     product: &'run LibraryDeclarationProduct,
@@ -326,7 +345,11 @@ fn mapped_product_groups(
                 container_key: group.container.index(),
                 compilation_global: product.containers()[group.container.index()].kind
                     == ContainerKind::CompilationGlobal,
-                name: product.strings()[group.name.index()].clone(),
+                name: {
+                    #[cfg(test)]
+                    super::contract::record_project_local_product_group_name_copy_for_test();
+                    product.strings()[group.name.index()].clone()
+                },
                 has_type: group.slots.r#type,
                 has_value: group.slots.value,
                 has_namespace: group.slots.namespace,
