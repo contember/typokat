@@ -741,6 +741,16 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
     for row in declaration_product.namespace_attachment_rows() {
         namespace_group_by_declaration.insert(row.declaration.index(), row.group.index());
     }
+    let mut namespace_instance_states =
+        vec![NamespaceInstanceState::NonInstantiated; declaration_product.regions().len()];
+    for declaration in declaration_product.declarations() {
+        #[cfg(test)]
+        record_namespace_instance_declaration_row_probe();
+        if declaration.spaces.value {
+            namespace_instance_states[declaration.region.index()] =
+                NamespaceInstanceState::Instantiated;
+        }
+    }
     let mut namespace_ids_by_container = vec![None; declaration_product.containers().len()];
     let mut namespace_fragments_by_declaration = BTreeMap::new();
     let mut namespace_fragments_by_region = vec![None; declaration_product.regions().len()];
@@ -832,7 +842,7 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
             .ok_or(LibraryProductInstantiationError::MissingRegion(
                 child_region.index(),
             ))?;
-        let instance_state = namespace_instance_state(declaration_product, child_region);
+        let instance_state = namespace_instance_states[child_region.index()];
         state.namespaces.fragments.push_local(NamespaceFragment {
             id: fragment_id,
             namespace,
@@ -868,7 +878,9 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
             ))?
             .namespace = Some(namespace);
         namespace_fragments_by_declaration.insert(declaration_index, fragment_id);
-        namespace_fragments_by_region[child_region.index()] = Some(fragment_id);
+        if namespace_fragments_by_region[child_region.index()].is_none() {
+            namespace_fragments_by_region[child_region.index()] = Some(fragment_id);
+        }
     }
 
     let mut global_by_region = BTreeMap::new();
@@ -1386,25 +1398,6 @@ fn declaration_owner_for_container(
         }
         owner => owner,
     })
-}
-
-fn namespace_instance_state(
-    declaration_product: &product::LibraryDeclarationProduct,
-    region: product::RegionKey,
-) -> NamespaceInstanceState {
-    if declaration_product
-        .declarations()
-        .iter()
-        .any(|declaration| {
-            #[cfg(test)]
-            record_namespace_instance_declaration_row_probe();
-            declaration.region == region && declaration.spaces.value
-        })
-    {
-        NamespaceInstanceState::Instantiated
-    } else {
-        NamespaceInstanceState::NonInstantiated
-    }
 }
 
 fn library_unit(
