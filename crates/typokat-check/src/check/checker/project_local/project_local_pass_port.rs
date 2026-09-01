@@ -1,7 +1,7 @@
 //! Neutral observable output types for the project-local checker pass.
 
+use super::coordinator::ProjectLocalProductRow;
 use super::validation::ProjectLocalValidationCandidate;
-use super::ProjectLocalMappedProductGroupForTest;
 #[cfg(any(test, feature = "test-utils"))]
 use super::{
     ProjectLocalCheckResultForTest, ProjectLocalContributorOriginForTest,
@@ -81,9 +81,9 @@ pub(super) use typokat_library_product::{
     DependencyKind, DependencyTarget, GroupKey, IntrinsicMarker, KeywordKind,
     LibraryDeclarationProduct, LiteralRecipe, MappedModifier, MemberKey, MemberKind, MemberRecipe,
     ParameterPattern, PropertyNameRecipe, QualifiedPathResolutionOutcome, QualifiedPathRole,
-    QualifiedPathUnresolvedCause, RegionKey, SignatureKey, SourceSite, SymbolicValueNameRecipe,
-    TypeOperator, TypeParameterKey, TypeRecipeKey, TypeRecipeNode, TypeReferenceResolution,
-    ValueReferenceResolution,
+    QualifiedPathUnresolvedCause, RegionKey, SignatureKey, SourceKey, SourceSite, StringKey,
+    SymbolicValueNameRecipe, TypeOperator, TypeParameterKey, TypeRecipeKey, TypeRecipeNode,
+    TypeReferenceResolution, ValueReferenceResolution,
 };
 pub(super) use typokat_types::alias_semantics::{
     PublishedAliasSurface, PublishedAliasTerminal, PublishedAliasUnavailable, PublishedAliases,
@@ -109,7 +109,7 @@ pub(super) fn project_local_semantic_query_state(
 
 pub(super) fn project_local_user_augmented_product_groups(
     bound: &BoundProjectBinder,
-    mapped: &[ProjectLocalMappedProductGroupForTest],
+    mapped: &[ProjectLocalProductRow],
 ) -> BTreeMap<usize, TypeGroupId> {
     mapped
         .iter()
@@ -129,7 +129,7 @@ pub(super) fn project_local_user_augmented_product_groups(
                         .compilation_origin_for_source(fragment.source)
                         .is_some_and(|origin| matches!(origin, CompilationOrigin::User(_)))
                 });
-            augmented.then_some((row.product.product_key, group))
+            augmented.then_some((row.product_key, group))
         })
         .collect()
 }
@@ -225,7 +225,7 @@ pub(in crate::check::checker) fn project_local_final_product_dependencies(
 #[cfg(any(test, feature = "test-utils"))]
 pub(super) fn project_local_final_type_group_fragment_counts(
     bound: &BoundProjectBinder,
-    mapped: &[ProjectLocalMappedProductGroupForTest],
+    mapped: &[ProjectLocalProductRow],
 ) -> BTreeMap<usize, usize> {
     mapped
         .iter()
@@ -240,7 +240,7 @@ pub(super) fn project_local_final_type_group_fragment_counts(
 #[cfg(any(test, feature = "test-utils"))]
 pub(super) fn project_local_final_value_declaration_counts(
     bound: &BoundProjectBinder,
-    mapped: &[ProjectLocalMappedProductGroupForTest],
+    mapped: &[ProjectLocalProductRow],
 ) -> BTreeMap<usize, usize> {
     mapped
         .iter()
@@ -516,7 +516,7 @@ pub(super) struct ProjectLocalPublishedTypeInputs<'a> {
 
 pub(super) fn project_local_published_types(
     product: &LibraryDeclarationProduct,
-    mapped: &[ProjectLocalMappedProductGroupForTest],
+    mapped: &[ProjectLocalProductRow],
     inputs: ProjectLocalPublishedTypeInputs<'_>,
 ) -> PublishedTypeEnvironment {
     let ProjectLocalPublishedTypeInputs {
@@ -539,18 +539,18 @@ pub(super) fn project_local_published_types(
         .map(|_| unavailable.clone())
         .collect::<Vec<_>>();
     for row in mapped {
-        if !ready_product_groups.contains(&row.product.product_key)
-            || unavailable_product_groups.contains(&row.product.product_key)
+        if !ready_product_groups.contains(&row.product_key)
+            || unavailable_product_groups.contains(&row.product_key)
         {
             continue;
         }
         let (Some(local), Some(ty)) = (
             row.local_type_group,
-            group_types.get(row.product.product_key).copied().flatten(),
+            group_types.get(row.product_key).copied().flatten(),
         ) else {
             continue;
         };
-        let product_group = &product.groups()[row.product.product_key];
+        let product_group = &product.groups()[row.product_key];
         let parameters = product_group
             .fragments
             .iter()
@@ -584,7 +584,7 @@ pub(super) fn project_local_published_types(
             .map(|parameter| type_parameter_defaults[parameter.index()])
             .collect::<Vec<_>>();
         terminals[local] = PublishedTypeGroupTerminal::Ready(PublishedTypeGroup {
-            name: row.product.name.clone(),
+            name: product.strings()[row.name.index()].clone(),
             surface: PublishedTypeGroupSurface::Template(ty),
             parameters: parameter_ids,
             parameter_names,

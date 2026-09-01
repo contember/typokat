@@ -1,8 +1,12 @@
 //! Capability-limited entry for the project-local semantic candidate.
 
 #[cfg(any(test, feature = "test-utils"))]
+use super::coordinator::product_group_for_test;
+#[cfg(any(test, feature = "test-utils"))]
 use super::coordinator::PublicationInjection;
-use super::coordinator::{ProjectLocalPassDemandGateway, ProjectLocalSemanticCoordinator};
+use super::coordinator::{
+    ProjectLocalPassDemandGateway, ProjectLocalProductRow, ProjectLocalSemanticCoordinator,
+};
 #[cfg(any(test, feature = "test-utils"))]
 use super::fault_gate::FaultStateForTest;
 #[cfg(any(test, feature = "test-utils"))]
@@ -27,7 +31,6 @@ use super::project_local_pass_port::{
 };
 use super::recipe_primitives::certified_well_known_symbol_owner;
 use super::session::SessionCore;
-use super::ProjectLocalMappedProductGroupForTest;
 #[cfg(any(test, feature = "test-utils"))]
 use super::{
     ProjectLocalRepeatedDemandForTest, ProjectLocalSccForTest, ProjectLocalSccPublicationForTest,
@@ -272,7 +275,10 @@ fn prepare_project_local_execution_for_test<'run, 'ast>(
             _ => None,
         })
         .map(|group| {
-            (coordinator.groups().get(group.product_key) == Some(group))
+            coordinator
+                .groups()
+                .get(group.product_key)
+                .is_some_and(|row| product_group_matches(product, row, group))
                 .then_some(group.product_key)
                 .ok_or(
                     ProjectLocalCandidateErrorForTest::MissingMappedProductGroup(group.product_key),
@@ -331,46 +337,30 @@ fn final_type_dependencies(
 fn mapped_product_groups(
     product: &LibraryDeclarationProduct,
     bound: &BoundProjectBinder,
-) -> Result<Vec<ProjectLocalMappedProductGroupForTest>, ProjectLocalCandidateErrorForTest> {
+) -> Result<Vec<ProjectLocalProductRow>, ProjectLocalCandidateErrorForTest> {
     let map = bound
         .library_product_map_for_test()
         .ok_or(ProjectLocalCandidateErrorForTest::MissingProductBinderMap)?;
-    let product_groups = product
+    product
         .groups()
         .iter()
         .enumerate()
-        .map(
-            |(product_key, group)| super::ProjectLocalProductGroupForTest {
+        .map(|(product_key, group)| {
+            let key = product
+                .group_key_at(product_key)
+                .ok_or(ProjectLocalCandidateErrorForTest::MissingMappedProductGroup(product_key))?;
+            let binding = map
+                .group(key)
+                .ok_or(ProjectLocalCandidateErrorForTest::MissingMappedProductGroup(product_key))?;
+            Ok(ProjectLocalProductRow {
                 product_key,
                 container_key: group.container.index(),
                 compilation_global: product.containers()[group.container.index()].kind
                     == ContainerKind::CompilationGlobal,
-                name: {
-                    #[cfg(test)]
-                    super::contract::record_project_local_product_group_name_copy_for_test();
-                    product.strings()[group.name.index()].clone()
-                },
+                name: group.name,
                 has_type: group.slots.r#type,
                 has_value: group.slots.value,
                 has_namespace: group.slots.namespace,
-            },
-        )
-        .collect::<Vec<_>>();
-    product_groups
-        .iter()
-        .map(|product_group| {
-            let key = product.group_key_at(product_group.product_key).ok_or(
-                ProjectLocalCandidateErrorForTest::MissingMappedProductGroup(
-                    product_group.product_key,
-                ),
-            )?;
-            let binding = map.group(key).ok_or(
-                ProjectLocalCandidateErrorForTest::MissingMappedProductGroup(
-                    product_group.product_key,
-                ),
-            )?;
-            Ok(ProjectLocalMappedProductGroupForTest {
-                product: product_group.clone(),
                 local_symbol: binding.symbol().index(),
                 local_type_group: binding.ty().map(|identity| identity.index()),
                 local_value: binding.value().map(|identity| identity.index()),
@@ -378,6 +368,21 @@ fn mapped_product_groups(
             })
         })
         .collect()
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn product_group_matches(
+    product: &LibraryDeclarationProduct,
+    row: &ProjectLocalProductRow,
+    expected: &super::ProjectLocalProductGroupForTest,
+) -> bool {
+    row.product_key == expected.product_key
+        && row.container_key == expected.container_key
+        && row.compilation_global == expected.compilation_global
+        && product.strings()[row.name.index()] == expected.name
+        && row.has_type == expected.has_type
+        && row.has_value == expected.has_value
+        && row.has_namespace == expected.has_namespace
 }
 
 fn no_additional_product_demands(
@@ -427,7 +432,9 @@ where
         coordinator
             .mapped_groups()
             .iter()
-            .find(|row| row.product.compilation_global && row.product.name == name)
+            .find(|row| {
+                row.compilation_global && product.strings()[row.name.index()].as_str() == name
+            })
             .and_then(|row| row.local_type_group)
             .map(|index| {
                 TypeGroupId(u32::try_from(index).expect("local type group identity fits u32"))
@@ -440,7 +447,7 @@ where
                     .mapped_groups()
                     .iter()
                     .find(|row| row.local_type_group == Some(identity.index()))
-                    .map(|row| row.product.product_key)
+                    .map(|row| row.product_key)
             })
         });
     let augmented_product_groups =
@@ -534,7 +541,7 @@ fn library_validation_groups(
         .filter_map(|row| {
             row.local_type_group.map(|local| {
                 (
-                    row.product.product_key,
+                    row.product_key,
                     TypeGroupId(u32::try_from(local).expect("local type group identity fits u32")),
                 )
             })
@@ -608,7 +615,7 @@ where
     let lexical_array_alias = coordinator
         .mapped_groups()
         .iter()
-        .find(|row| row.product.name == "Array")
+        .find(|row| product.strings()[row.name.index()].as_str() == "Array")
         .and_then(|row| row.local_type_group)
         .map(|index| {
             TypeGroupId(u32::try_from(index).expect("local type group identity fits u32"))
@@ -621,7 +628,7 @@ where
                 coordinator
                     .mapped_groups()
                     .get(owner.index())
-                    .filter(|row| row.product.product_key == owner.index())
+                    .filter(|row| row.product_key == owner.index())
             })
             .and_then(|row| row.local_value)
             .map(|storage| {
@@ -635,7 +642,7 @@ where
             let storage = row.local_value?;
             let ty = coordinator
                 .semantic_group_value_types()
-                .get(row.product.product_key)
+                .get(row.product_key)
                 .copied()
                 .flatten()?;
             Some((
@@ -654,7 +661,7 @@ where
             let storage = row.local_value?;
             let ty = coordinator
                 .semantic_group_value_types()
-                .get(row.product.product_key)
+                .get(row.product_key)
                 .copied()
                 .flatten()?;
             Some(ProjectLocalNamespaceSeed {
@@ -911,12 +918,14 @@ fn run_project_local_semantic_candidate(
     let materialized_keys = ordinary_materialized_keys;
     let materialized_product_groups = materialized_keys
         .iter()
-        .map(|key| coordinator.groups()[*key].clone())
+        .map(|key| product_group_for_test(product, *key))
         .collect::<Vec<_>>();
     let mut demand_root_visits = ordinary_demand_root_keys
         .iter()
         .map(|key| {
-            super::ProjectLocalDemandRootForTest::ProductGroup(coordinator.groups()[*key].clone())
+            super::ProjectLocalDemandRootForTest::ProductGroup(product_group_for_test(
+                product, *key,
+            ))
         })
         .collect::<Vec<_>>();
     demand_root_visits.extend(
@@ -978,7 +987,7 @@ fn run_project_local_semantic_candidate(
             coordinator
                 .repeat(key)
                 .map(|repeated_identity| ProjectLocalRepeatedDemandForTest {
-                    owner: coordinator.groups()[key].clone(),
+                    owner: product_group_for_test(product, key),
                     first_identity,
                     repeated_identity,
                 })
@@ -1011,11 +1020,11 @@ fn run_project_local_semantic_candidate(
         let keys = force_all_visited_keys.clone();
         let requested_groups = keys
             .iter()
-            .map(|key| coordinator.groups()[*key].clone())
+            .map(|key| product_group_for_test(product, *key))
             .collect::<Vec<_>>();
         let additional_materialized_product_groups = force_all_additional_materialized_keys
             .iter()
-            .map(|key| coordinator.groups()[*key].clone())
+            .map(|key| product_group_for_test(product, *key))
             .collect::<Vec<_>>();
         let (semantic_probes, terminal_census) = session
             .with_interner(|interner| {
@@ -1050,7 +1059,7 @@ fn run_project_local_semantic_candidate(
                     },
                 );
                 coordinator
-                    .force_all_terminal_census(interner)
+                    .force_all_terminal_census(product, interner)
                     .map(|terminals| (probes, terminals))
             })
             .map_err(ProjectLocalCandidateErrorForTest::UserPass)?;
@@ -1062,7 +1071,7 @@ fn run_project_local_semantic_candidate(
                 .as_ref()
                 .expect("force_all validation roots were captured")
                 .iter()
-                .map(|key| coordinator.groups()[*key].clone())
+                .map(|key| product_group_for_test(product, *key))
                 .collect(),
             terminal_census,
             semantic_probes,
@@ -1105,16 +1114,16 @@ fn run_project_local_semantic_candidate(
         publisher_session_identity,
         source_inputs,
         source_visit_rows,
-        admitted_product_groups: coordinator.groups().to_vec(),
-        mapped_product_groups: coordinator.mapped_groups().to_vec(),
-        product_dependencies: coordinator.dependencies().to_vec(),
-        product_publication_sccs: coordinator.sccs().to_vec(),
+        admitted_product_groups: coordinator.groups_for_test(product),
+        mapped_product_groups: coordinator.mapped_groups_for_test(product),
+        product_dependencies: coordinator.dependencies_for_test(product),
+        product_publication_sccs: coordinator.sccs_for_test(product),
         demand_root_visits,
         materialized_owner_work_count: materialized_product_groups.len(),
         materialized_product_groups,
         production_validation_roots: ordinary_validation_keys
             .iter()
-            .map(|key| coordinator.groups()[*key].clone())
+            .map(|key| product_group_for_test(product, *key))
             .collect(),
         production_library_records: ordinary_production_records,
         semantic_probes,
@@ -1122,8 +1131,8 @@ fn run_project_local_semantic_candidate(
         user_check_results: user_output.check_results,
         unavailable_audits: user_output.unavailable_audits,
         scc_publications,
-        publication_scc_commits: coordinator.commits().to_vec(),
-        durable_cache_writes: coordinator.cache_writes().to_vec(),
+        publication_scc_commits: coordinator.commits_for_test(product),
+        durable_cache_writes: coordinator.cache_writes_for_test(product),
         published_global_contributors: global_publication.published_contributors,
         final_global_contributors: global_publication.final_contributors,
         repeated_demands,

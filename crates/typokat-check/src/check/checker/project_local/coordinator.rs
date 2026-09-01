@@ -25,30 +25,66 @@ use super::{
     ProjectLocalForceAllLiteralKindForTest, ProjectLocalForceAllObjectShapeForTest,
     ProjectLocalForceAllReadySurfaceForTest, ProjectLocalForceAllTerminalForTest,
     ProjectLocalForceAllTerminalRowForTest, ProjectLocalForceAllTypeKindForTest,
-    ProjectLocalPublicationSccCommitForTest, ProjectLocalTerminalStateForTest,
-};
-use super::{
     ProjectLocalMappedProductGroupForTest, ProjectLocalProductDependencyForTest,
     ProjectLocalProductGroupForTest, ProjectLocalProductSccForTest,
+    ProjectLocalPublicationSccCommitForTest, ProjectLocalTerminalStateForTest,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ProjectLocalProductRow {
+    pub(super) product_key: usize,
+    pub(super) container_key: usize,
+    pub(super) compilation_global: bool,
+    pub(super) name: super::project_local_pass_port::StringKey,
+    pub(super) has_type: bool,
+    pub(super) has_value: bool,
+    pub(super) has_namespace: bool,
+    pub(super) local_symbol: usize,
+    pub(super) local_type_group: Option<usize>,
+    pub(super) local_value: Option<usize>,
+    pub(super) local_namespace: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ProjectLocalProductDependencyRow {
+    owner: usize,
+    target: usize,
+    kind: DependencyKind,
+    source: super::project_local_pass_port::SourceKey,
+    source_start: u32,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+struct ProjectLocalPublicationSccCommitRow {
+    scc_members: Vec<usize>,
+    reserved_members: Vec<usize>,
+    published_members: Vec<usize>,
+    observed_before_complete: Vec<usize>,
+    state_before_publish: ProjectLocalTerminalStateForTest,
+    final_state: ProjectLocalTerminalStateForTest,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+struct ProjectLocalCacheWriteRow {
+    owner: usize,
+    state: ProjectLocalTerminalStateForTest,
+}
+
 pub(super) struct ProjectLocalSemanticCoordinator {
     session: Rc<SessionCore>,
+    groups: Vec<ProjectLocalProductRow>,
     #[cfg(any(test, feature = "test-utils"))]
-    groups: Vec<ProjectLocalProductGroupForTest>,
-    mapped_groups: Vec<ProjectLocalMappedProductGroupForTest>,
-    #[cfg(any(test, feature = "test-utils"))]
-    dependencies: Vec<ProjectLocalProductDependencyForTest>,
+    dependencies: Vec<ProjectLocalProductDependencyRow>,
     dependency_targets: BTreeMap<usize, Vec<usize>>,
     containment_targets: BTreeMap<usize, Vec<usize>>,
-    sccs: Vec<ProjectLocalProductSccForTest>,
+    sccs: Vec<Vec<usize>>,
     group_scc: BTreeMap<usize, usize>,
     #[cfg(any(test, feature = "test-utils"))]
-    commits: Vec<ProjectLocalPublicationSccCommitForTest>,
+    commits: Vec<ProjectLocalPublicationSccCommitRow>,
     #[cfg(any(test, feature = "test-utils"))]
-    cache_writes: Vec<ProjectLocalCacheWriteForTest>,
+    cache_writes: Vec<ProjectLocalCacheWriteRow>,
     semantic_group_types: Vec<Option<super::project_local_pass_port::TypeId>>,
     semantic_group_value_types: Vec<Option<super::project_local_pass_port::TypeId>>,
     ready: BTreeSet<usize>,
@@ -90,25 +126,25 @@ impl<'a, Commit> ProjectLocalPassDemandGateway<'a, Commit> {
         commit: Commit,
     ) -> Self {
         let type_products = coordinator
-            .mapped_groups
+            .groups
             .iter()
             .filter_map(|row| {
-                if !row.product.has_type {
+                if !row.has_type {
                     return None;
                 }
                 let local = u32::try_from(row.local_type_group?).ok()?;
-                Some((TypeGroupId(local), row.product.product_key))
+                Some((TypeGroupId(local), row.product_key))
             })
             .collect();
         let value_products = coordinator
-            .mapped_groups
+            .groups
             .iter()
             .filter_map(|row| {
-                if !row.product.has_value && !row.product.has_namespace {
+                if !row.has_value && !row.has_namespace {
                     return None;
                 }
                 let local = u32::try_from(row.local_value?).ok()?;
-                Some((usize::try_from(local).ok()?, row.product.product_key))
+                Some((usize::try_from(local).ok()?, row.product_key))
             })
             .collect();
         Self {
@@ -193,7 +229,7 @@ where
         self.coordinator.validate_publication_snapshot()?;
         let environment = project_local_published_types(
             self.product,
-            &self.coordinator.mapped_groups,
+            &self.coordinator.groups,
             ProjectLocalPublishedTypeInputs {
                 group_types: &self.coordinator.semantic_group_types,
                 type_parameter_ids: &self.coordinator.type_parameter_ids,
@@ -209,15 +245,11 @@ where
             .groups;
         let type_terminals = self
             .coordinator
-            .mapped_groups
+            .groups
             .iter()
             .filter(|row| {
-                !self.augmented_groups.contains_key(&row.product.product_key)
-                    && self
-                        .coordinator
-                        .session
-                        .cache()
-                        .contains(row.product.product_key)
+                !self.augmented_groups.contains_key(&row.product_key)
+                    && self.coordinator.session.cache().contains(row.product_key)
             })
             .filter_map(|row| {
                 let local = u32::try_from(row.local_type_group?).ok()?;
@@ -227,22 +259,18 @@ where
             .collect();
         let value_types = self
             .coordinator
-            .mapped_groups
+            .groups
             .iter()
             .filter(|row| {
-                !self.augmented_groups.contains_key(&row.product.product_key)
-                    && self
-                        .coordinator
-                        .session
-                        .cache()
-                        .contains(row.product.product_key)
+                !self.augmented_groups.contains_key(&row.product_key)
+                    && self.coordinator.session.cache().contains(row.product_key)
             })
             .filter_map(|row| {
                 let storage = u32::try_from(row.local_value?).ok()?;
                 let ty = self
                     .coordinator
                     .semantic_group_value_types
-                    .get(row.product.product_key)
+                    .get(row.product_key)
                     .copied()
                     .flatten()?;
                 Some((ValueStorageId(storage), ty))
@@ -250,15 +278,11 @@ where
             .collect();
         let namespace_seeds = self
             .coordinator
-            .mapped_groups
+            .groups
             .iter()
             .filter(|row| {
-                !self.augmented_groups.contains_key(&row.product.product_key)
-                    && self
-                        .coordinator
-                        .session
-                        .cache()
-                        .contains(row.product.product_key)
+                !self.augmented_groups.contains_key(&row.product_key)
+                    && self.coordinator.session.cache().contains(row.product_key)
             })
             .filter_map(|row| {
                 let namespace = u32::try_from(row.local_namespace?).ok()?;
@@ -266,7 +290,7 @@ where
                 let ty = self
                     .coordinator
                     .semantic_group_value_types
-                    .get(row.product.product_key)
+                    .get(row.product_key)
                     .copied()
                     .flatten()?;
                 Some(super::project_local_pass_port::ProjectLocalNamespaceSeed {
@@ -419,55 +443,36 @@ impl<Activate: FnMut(PublicationInjection)> PublicationFaultPolicy
 impl ProjectLocalSemanticCoordinator {
     pub(super) fn new_ordinary(
         product: &LibraryDeclarationProduct,
-        mapped_groups: Vec<ProjectLocalMappedProductGroupForTest>,
+        groups: Vec<ProjectLocalProductRow>,
         session: Rc<SessionCore>,
     ) -> Self {
         let dependencies = product_dependencies(product);
-        Self::new_inner(product, mapped_groups, session, dependencies)
+        Self::new_inner(product, groups, session, dependencies)
     }
 
     #[cfg(any(test, feature = "test-utils"))]
     pub(super) fn new_with_dependencies(
         product: &LibraryDeclarationProduct,
-        mapped_groups: Vec<ProjectLocalMappedProductGroupForTest>,
+        groups: Vec<ProjectLocalProductRow>,
         session: Rc<SessionCore>,
-        dependencies: Vec<ProjectLocalProductDependencyForTest>,
+        dependencies: Vec<ProjectLocalProductDependencyRow>,
     ) -> Self {
-        Self::new_inner(product, mapped_groups, session, dependencies)
+        Self::new_inner(product, groups, session, dependencies)
     }
 
     #[cfg(any(test, feature = "test-utils"))]
     pub(super) fn dependency_rows(
         product: &LibraryDeclarationProduct,
-    ) -> Vec<ProjectLocalProductDependencyForTest> {
+    ) -> Vec<ProjectLocalProductDependencyRow> {
         product_dependencies(product)
     }
 
     fn new_inner(
         product: &LibraryDeclarationProduct,
-        mapped_groups: Vec<ProjectLocalMappedProductGroupForTest>,
+        groups: Vec<ProjectLocalProductRow>,
         session: Rc<SessionCore>,
-        dependencies: Vec<ProjectLocalProductDependencyForTest>,
+        dependencies: Vec<ProjectLocalProductDependencyRow>,
     ) -> Self {
-        let groups = product
-            .groups()
-            .iter()
-            .enumerate()
-            .map(|(product_key, group)| ProjectLocalProductGroupForTest {
-                product_key,
-                container_key: group.container.index(),
-                compilation_global: product.containers()[group.container.index()].kind
-                    == ContainerKind::CompilationGlobal,
-                name: {
-                    #[cfg(test)]
-                    super::contract::record_project_local_product_group_name_copy_for_test();
-                    product.strings()[group.name.index()].clone()
-                },
-                has_type: group.slots.r#type,
-                has_value: group.slots.value,
-                has_namespace: group.slots.namespace,
-            })
-            .collect::<Vec<_>>();
         let mut dependency_targets = BTreeMap::<usize, Vec<usize>>::new();
         for row in &dependencies {
             dependency_targets
@@ -513,27 +518,21 @@ impl ProjectLocalSemanticCoordinator {
         let sccs = product
             .dependency_sccs()
             .into_iter()
-            .map(|members| ProjectLocalProductSccForTest {
-                members: members
+            .map(|members| {
+                members
                     .into_iter()
-                    .map(|key| groups[key.index()].clone())
-                    .collect(),
+                    .map(|key| key.index())
+                    .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
         let group_scc = sccs
             .iter()
             .enumerate()
-            .flat_map(|(scc, row)| {
-                row.members
-                    .iter()
-                    .map(move |member| (member.product_key, scc))
-            })
+            .flat_map(|(scc, row)| row.iter().copied().map(move |member| (member, scc)))
             .collect();
         Self {
             session,
-            #[cfg(any(test, feature = "test-utils"))]
             groups,
-            mapped_groups,
             #[cfg(any(test, feature = "test-utils"))]
             dependencies,
             dependency_targets,
@@ -582,32 +581,111 @@ impl ProjectLocalSemanticCoordinator {
     }
 
     #[cfg(any(test, feature = "test-utils"))]
-    pub(super) fn groups(&self) -> &[ProjectLocalProductGroupForTest] {
+    pub(super) fn groups(&self) -> &[ProjectLocalProductRow] {
         &self.groups
     }
 
-    pub(super) fn mapped_groups(&self) -> &[ProjectLocalMappedProductGroupForTest] {
-        &self.mapped_groups
+    pub(super) fn mapped_groups(&self) -> &[ProjectLocalProductRow] {
+        &self.groups
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(super) fn dependencies(&self) -> &[ProjectLocalProductDependencyForTest] {
-        &self.dependencies
-    }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(super) fn sccs(&self) -> &[ProjectLocalProductSccForTest] {
+    #[cfg(test)]
+    pub(super) fn sccs(&self) -> &[Vec<usize>] {
         &self.sccs
     }
 
     #[cfg(any(test, feature = "test-utils"))]
-    pub(super) fn commits(&self) -> &[ProjectLocalPublicationSccCommitForTest] {
-        &self.commits
+    pub(super) fn groups_for_test(
+        &self,
+        product: &LibraryDeclarationProduct,
+    ) -> Vec<ProjectLocalProductGroupForTest> {
+        self.groups
+            .iter()
+            .map(|row| product_group_for_test(product, row.product_key))
+            .collect()
     }
 
     #[cfg(any(test, feature = "test-utils"))]
-    pub(super) fn cache_writes(&self) -> &[ProjectLocalCacheWriteForTest] {
-        &self.cache_writes
+    pub(super) fn mapped_groups_for_test(
+        &self,
+        product: &LibraryDeclarationProduct,
+    ) -> Vec<ProjectLocalMappedProductGroupForTest> {
+        self.groups
+            .iter()
+            .map(|row| ProjectLocalMappedProductGroupForTest {
+                product: product_group_for_test(product, row.product_key),
+                local_symbol: row.local_symbol,
+                local_type_group: row.local_type_group,
+                local_value: row.local_value,
+                local_namespace: row.local_namespace,
+            })
+            .collect()
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(super) fn dependencies_for_test(
+        &self,
+        product: &LibraryDeclarationProduct,
+    ) -> Vec<ProjectLocalProductDependencyForTest> {
+        self.dependencies
+            .iter()
+            .map(|row| {
+                let source = &product.sources()[row.source.index()];
+                ProjectLocalProductDependencyForTest {
+                    owner: row.owner,
+                    target: row.target,
+                    kind: dependency_kind_name(row.kind).to_owned(),
+                    source_path: product.strings()[source.name.index()].clone(),
+                    source_start: row.source_start,
+                }
+            })
+            .collect()
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(super) fn sccs_for_test(
+        &self,
+        product: &LibraryDeclarationProduct,
+    ) -> Vec<ProjectLocalProductSccForTest> {
+        self.sccs
+            .iter()
+            .map(|members| product_scc_for_test(product, members))
+            .collect()
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(super) fn commits_for_test(
+        &self,
+        product: &LibraryDeclarationProduct,
+    ) -> Vec<ProjectLocalPublicationSccCommitForTest> {
+        self.commits
+            .iter()
+            .map(|row| ProjectLocalPublicationSccCommitForTest {
+                scc: product_scc_for_test(product, &row.scc_members),
+                reserved_members: product_groups_for_test(product, &row.reserved_members),
+                published_members: product_groups_for_test(product, &row.published_members),
+                observed_before_complete: product_groups_for_test(
+                    product,
+                    &row.observed_before_complete,
+                ),
+                state_before_publish: row.state_before_publish,
+                final_state: row.final_state,
+            })
+            .collect()
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(super) fn cache_writes_for_test(
+        &self,
+        product: &LibraryDeclarationProduct,
+    ) -> Vec<ProjectLocalCacheWriteForTest> {
+        self.cache_writes
+            .iter()
+            .map(|row| ProjectLocalCacheWriteForTest {
+                owner: product_group_for_test(product, row.owner),
+                state: row.state,
+            })
+            .collect()
     }
 
     pub(super) fn demand_product_groups(
@@ -808,11 +886,10 @@ impl ProjectLocalSemanticCoordinator {
     fn validate_publication_snapshot(&self) -> Result<(), &'static str> {
         for scc in &self.sccs {
             let published = scc
-                .members
                 .iter()
-                .filter(|member| self.session.cache().contains(member.product_key))
+                .filter(|member| self.session.cache().contains(**member))
                 .count();
-            if published != 0 && published != scc.members.len() {
+            if published != 0 && published != scc.len() {
                 return Err("project-local demand observed a partial publication SCC");
             }
         }
@@ -903,6 +980,7 @@ impl ProjectLocalSemanticCoordinator {
     #[cfg(any(test, feature = "test-utils"))]
     pub(super) fn force_all_terminal_census(
         &self,
+        product: &LibraryDeclarationProduct,
         interner: &Interner,
     ) -> Result<Vec<ProjectLocalForceAllTerminalRowForTest>, &'static str> {
         self.groups
@@ -929,7 +1007,7 @@ impl ProjectLocalSemanticCoordinator {
                     }
                 };
                 Ok(ProjectLocalForceAllTerminalRowForTest {
-                    group: group.clone(),
+                    group: product_group_for_test(product, group.product_key),
                     terminal,
                 })
             })
@@ -1005,18 +1083,18 @@ impl ProjectLocalSemanticCoordinator {
             let Some(scc) = self.group_scc.get(&owner).copied() else {
                 continue;
             };
-            for member in &self.sccs[scc].members {
-                if closure.insert(member.product_key) {
+            for member in &self.sccs[scc] {
+                if closure.insert(*member) {
                     pending.extend(
                         self.dependency_targets
-                            .get(&member.product_key)
+                            .get(member)
                             .into_iter()
                             .flatten()
                             .copied(),
                     );
                     pending.extend(
                         self.containment_targets
-                            .get(&member.product_key)
+                            .get(member)
                             .into_iter()
                             .flatten()
                             .copied(),
@@ -1035,48 +1113,43 @@ impl ProjectLocalSemanticCoordinator {
         unavailable: &BTreeSet<usize>,
         policy: &mut Policy,
     ) {
-        let scc = self.sccs[scc_index].clone();
-        if scc
-            .members
+        let members = self.sccs[scc_index].clone();
+        if members
             .iter()
-            .all(|member| self.session.cache().contains(member.product_key))
+            .all(|member| self.session.cache().contains(*member))
         {
             return;
         }
-        let component_unavailable = scc
-            .members
-            .iter()
-            .any(|member| unavailable.contains(&member.product_key));
-        let premature = policy.publish_before_scc_complete(scc.members.len());
+        let component_unavailable = members.iter().any(|member| unavailable.contains(member));
+        let premature = policy.publish_before_scc_complete(members.len());
         if premature {
             policy.record_partial_publication(scc_index);
-            let member = scc
-                .members
+            let member = members
                 .first()
                 .expect("non-trivial publication SCC has a first member")
-                .clone();
+                .to_owned();
             let mut identity = "publisher:".to_owned();
             identity.push_str(&self.session.publisher_identity().to_string());
             identity.push_str(":product:");
-            identity.push_str(&member.product_key.to_string());
+            identity.push_str(&member.to_string());
             if self.session.cache().commit(
-                member.product_key,
+                member,
                 ProductTerminal::Ready {
                     identity,
-                    ty: group_types[member.product_key],
-                    value_ty: group_value_types[member.product_key],
+                    ty: group_types[member],
+                    value_ty: group_value_types[member],
                 },
             ) {
                 #[cfg(any(test, feature = "test-utils"))]
-                self.cache_writes.push(ProjectLocalCacheWriteForTest {
-                    owner: member.clone(),
+                self.cache_writes.push(ProjectLocalCacheWriteRow {
+                    owner: member,
                     state: ProjectLocalTerminalStateForTest::Ready,
                 });
             }
             #[cfg(any(test, feature = "test-utils"))]
-            self.commits.push(ProjectLocalPublicationSccCommitForTest {
-                scc: scc.clone(),
-                reserved_members: scc.members,
+            self.commits.push(ProjectLocalPublicationSccCommitRow {
+                scc_members: members.clone(),
+                reserved_members: members,
                 published_members: vec![member],
                 observed_before_complete: Vec::new(),
                 state_before_publish: ProjectLocalTerminalStateForTest::Resolving,
@@ -1085,8 +1158,8 @@ impl ProjectLocalSemanticCoordinator {
             return;
         }
         let resolving_cache = policy.write_resolving_to_durable_cache();
-        let mut published = Vec::with_capacity(scc.members.len());
-        for member in &scc.members {
+        let mut published = Vec::with_capacity(members.len());
+        for member in &members {
             let terminal = if component_unavailable {
                 let reason = super::ProjectLocalUnavailableReasonForTest::UnsupportedProductRecipe;
                 ProductTerminal::Unavailable(reason)
@@ -1094,11 +1167,11 @@ impl ProjectLocalSemanticCoordinator {
                 let mut identity = "publisher:".to_owned();
                 identity.push_str(&self.session.publisher_identity().to_string());
                 identity.push_str(":product:");
-                identity.push_str(&member.product_key.to_string());
+                identity.push_str(&member.to_string());
                 ProductTerminal::Ready {
                     identity,
-                    ty: group_types[member.product_key],
-                    value_ty: group_value_types[member.product_key],
+                    ty: group_types[*member],
+                    value_ty: group_value_types[*member],
                 }
             };
             let terminal = if resolving_cache && published.is_empty() {
@@ -1108,21 +1181,21 @@ impl ProjectLocalSemanticCoordinator {
             };
             #[cfg(any(test, feature = "test-utils"))]
             let state = terminal_state_for_test(&terminal);
-            if self.session.cache().commit(member.product_key, terminal) {
+            if self.session.cache().commit(*member, terminal) {
                 #[cfg(any(test, feature = "test-utils"))]
-                self.cache_writes.push(ProjectLocalCacheWriteForTest {
-                    owner: member.clone(),
+                self.cache_writes.push(ProjectLocalCacheWriteRow {
+                    owner: *member,
                     state,
                 });
             }
             if !component_unavailable {
-                published.push(member.clone());
+                published.push(*member);
             }
         }
         #[cfg(any(test, feature = "test-utils"))]
-        self.commits.push(ProjectLocalPublicationSccCommitForTest {
-            scc: scc.clone(),
-            reserved_members: scc.members,
+        self.commits.push(ProjectLocalPublicationSccCommitRow {
+            scc_members: members.clone(),
+            reserved_members: members,
             published_members: published,
             observed_before_complete: Vec::new(),
             state_before_publish: ProjectLocalTerminalStateForTest::Resolving,
@@ -1223,7 +1296,7 @@ fn force_all_type_kind(interner: &Interner, ty: TypeId) -> ProjectLocalForceAllT
 
 fn product_dependencies(
     product: &LibraryDeclarationProduct,
-) -> Vec<ProjectLocalProductDependencyForTest> {
+) -> Vec<ProjectLocalProductDependencyRow> {
     let mut dependencies = product
         .dependency_rows()
         .iter()
@@ -1231,18 +1304,73 @@ fn product_dependencies(
             let DependencyTarget::Group(target) = row.target else {
                 return None;
             };
-            let source = &product.sources()[row.site.source.index()];
-            Some(ProjectLocalProductDependencyForTest {
+            Some(ProjectLocalProductDependencyRow {
                 owner: row.owner.index(),
                 target: target.index(),
-                kind: dependency_kind_name(row.kind).to_owned(),
-                source_path: product.strings()[source.name.index()].clone(),
+                kind: row.kind,
+                source: row.site.source,
                 source_start: row.site.start,
             })
         })
         .collect::<Vec<_>>();
-    dependencies.sort();
+    dependencies.sort_by(|left, right| {
+        let left_source = &product.sources()[left.source.index()];
+        let right_source = &product.sources()[right.source.index()];
+        (
+            left.owner,
+            left.target,
+            dependency_kind_name(left.kind),
+            product.strings()[left_source.name.index()].as_str(),
+            left.source_start,
+        )
+            .cmp(&(
+                right.owner,
+                right.target,
+                dependency_kind_name(right.kind),
+                product.strings()[right_source.name.index()].as_str(),
+                right.source_start,
+            ))
+    });
     dependencies
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub(super) fn product_group_for_test(
+    product: &LibraryDeclarationProduct,
+    product_key: usize,
+) -> ProjectLocalProductGroupForTest {
+    let group = &product.groups()[product_key];
+    ProjectLocalProductGroupForTest {
+        product_key,
+        container_key: group.container.index(),
+        compilation_global: product.containers()[group.container.index()].kind
+            == ContainerKind::CompilationGlobal,
+        name: product.strings()[group.name.index()].clone(),
+        has_type: group.slots.r#type,
+        has_value: group.slots.value,
+        has_namespace: group.slots.namespace,
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn product_groups_for_test(
+    product: &LibraryDeclarationProduct,
+    product_keys: &[usize],
+) -> Vec<ProjectLocalProductGroupForTest> {
+    product_keys
+        .iter()
+        .map(|key| product_group_for_test(product, *key))
+        .collect()
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn product_scc_for_test(
+    product: &LibraryDeclarationProduct,
+    members: &[usize],
+) -> ProjectLocalProductSccForTest {
+    ProjectLocalProductSccForTest {
+        members: product_groups_for_test(product, members),
+    }
 }
 
 const fn dependency_kind_name(kind: DependencyKind) -> &'static str {
