@@ -143,6 +143,7 @@ pub(super) fn project_local_final_type_dependencies(
     product: &LibraryDeclarationProduct,
     bound: &BoundProjectBinder,
     programs: &[ProjectProgram<'_>],
+    product_library_dependencies_required: bool,
 ) -> Result<ProjectLocalFinalTypeDependencies, &'static str> {
     let map = bound
         .library_product_map_for_test()
@@ -170,8 +171,11 @@ pub(super) fn project_local_final_type_dependencies(
             .map_err(|_| "project-local user declaration inventory is unavailable")
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let mut dependencies =
-        crate::check::checker::project_local_semantics::library_type_dependencies(product, map)?;
+    let mut dependencies = if product_library_dependencies_required {
+        crate::check::checker::project_local_semantics::library_type_dependencies(product, map)?
+    } else {
+        Vec::new()
+    };
     dependencies.extend(
         crate::check::checker::project_local_semantics::user_type_dependencies(
             product,
@@ -219,7 +223,7 @@ pub(in crate::check::checker) fn project_local_final_product_dependencies(
     bound: &BoundProjectBinder,
     programs: &[ProjectProgram<'_>],
 ) -> Result<Vec<(usize, usize)>, &'static str> {
-    Ok(project_local_final_type_dependencies(product, bound, programs)?.product)
+    Ok(project_local_final_type_dependencies(product, bound, programs, true)?.product)
 }
 
 #[cfg(any(test, feature = "test-utils"))]

@@ -205,9 +205,16 @@ fn prepare_ordinary_project_local_execution<'run, 'ast>(
 ) -> Result<PreparedProjectLocalExecution<'run, 'ast>, ProjectLocalCandidateErrorForTest> {
     let session = SessionCore::start();
     let mapped_groups = mapped_product_groups(product, &bound)?;
+    let augmented_product_groups =
+        project_local_user_augmented_product_groups(&bound, &mapped_groups);
     let coordinator =
         ProjectLocalSemanticCoordinator::new_ordinary(product, mapped_groups, Rc::clone(&session));
-    let final_type_dependencies = final_type_dependencies(product, &bound, programs)?;
+    let final_type_dependencies = final_type_dependencies(
+        product,
+        &bound,
+        programs,
+        !augmented_product_groups.is_empty(),
+    )?;
     #[cfg(not(any(test, feature = "test-utils")))]
     let _ = library_units;
     prepare_project_local_execution(
@@ -220,6 +227,7 @@ fn prepare_ordinary_project_local_execution<'run, 'ast>(
         },
         session,
         coordinator,
+        augmented_product_groups,
         final_type_dependencies,
         no_additional_product_demands,
         ProjectLocalSemanticCoordinator::commit_demanded_checked,
@@ -257,6 +265,8 @@ fn prepare_project_local_execution_for_test<'run, 'ast>(
 ) -> Result<PreparedProjectLocalExecutionForTest<'run, 'ast>, ProjectLocalCandidateErrorForTest> {
     let session = SessionCore::start();
     let mapped_groups = mapped_product_groups(product, &bound)?;
+    let augmented_product_groups =
+        project_local_user_augmented_product_groups(&bound, &mapped_groups);
     let mut fault_state = FaultStateForTest::new(fault);
     let mut dependencies = ProjectLocalSemanticCoordinator::dependency_rows(product);
     if fault_state.activate(super::ProjectLocalSemanticFaultForTest::OmitDependencyEdge) {
@@ -291,7 +301,12 @@ fn prepare_project_local_execution_for_test<'run, 'ast>(
             user_products: std::collections::BTreeMap::new(),
         }
     } else {
-        final_type_dependencies(product, &bound, programs)?
+        final_type_dependencies(
+            product,
+            &bound,
+            programs,
+            !augmented_product_groups.is_empty(),
+        )?
     };
     let prepared = prepare_project_local_execution(
         ProjectLocalExecutionInputs {
@@ -302,6 +317,7 @@ fn prepare_project_local_execution_for_test<'run, 'ast>(
         },
         session,
         coordinator,
+        augmented_product_groups,
         final_type_dependencies,
         move |coordinator, product, augmented_product_groups, native_array_groups| {
             if requested_product_keys.is_empty() {
@@ -329,9 +345,15 @@ fn final_type_dependencies(
     product: &LibraryDeclarationProduct,
     bound: &BoundProjectBinder,
     programs: &[ProjectProgram<'_>],
+    product_library_dependencies_required: bool,
 ) -> Result<ProjectLocalFinalTypeDependencies, ProjectLocalCandidateErrorForTest> {
-    project_local_final_type_dependencies(product, bound, programs)
-        .map_err(ProjectLocalCandidateErrorForTest::UserPass)
+    project_local_final_type_dependencies(
+        product,
+        bound,
+        programs,
+        product_library_dependencies_required,
+    )
+    .map_err(ProjectLocalCandidateErrorForTest::UserPass)
 }
 
 fn mapped_product_groups(
@@ -398,6 +420,7 @@ fn prepare_project_local_execution<'run, 'ast, Demand, Commit>(
     inputs: ProjectLocalExecutionInputs<'run, 'ast>,
     session: Rc<SessionCore>,
     mut coordinator: ProjectLocalSemanticCoordinator,
+    augmented_product_groups: std::collections::BTreeMap<usize, TypeGroupId>,
     final_type_dependencies: ProjectLocalFinalTypeDependencies,
     mut demand: Demand,
     mut commit: Commit,
@@ -450,8 +473,6 @@ where
                     .map(|row| row.product_key)
             })
         });
-    let augmented_product_groups =
-        project_local_user_augmented_product_groups(&bound, coordinator.mapped_groups());
     let augmented_roots = augmented_product_groups.keys().copied().collect::<Vec<_>>();
     for root in augmented_roots {
         let _ = coordinator.demand_product_groups(
