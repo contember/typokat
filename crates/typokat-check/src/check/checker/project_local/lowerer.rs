@@ -55,6 +55,20 @@ enum GroupState {
     Unavailable,
 }
 
+fn callable_property_signatures(interner: &Interner, ty: TypeId) -> Option<Vec<TypeId>> {
+    if interner.store().function_type(ty).is_some() {
+        return Some(vec![ty]);
+    }
+    interner.store().object_type(ty).and_then(|object| {
+        (object.properties.is_empty()
+            && object.string_index.is_none()
+            && object.number_index.is_none()
+            && object.construct_signatures.is_empty()
+            && !object.call_signatures.is_empty())
+        .then(|| object.call_signatures.clone())
+    })
+}
+
 pub(super) struct ProductLoweringReceipt {
     pub(super) group_types: Vec<Option<TypeId>>,
     pub(super) group_value_types: Vec<Option<TypeId>>,
@@ -1023,6 +1037,7 @@ impl<'product, 'interner> ProductLowerer<'product, 'interner> {
             let mut parents = Vec::new();
             let mut unavailable_member_keys = Vec::new();
             let mut omitted_overload_keys = Vec::new();
+            let mut merged_method_keys = Vec::new();
             let mut structural_error = None;
             for declaration in fragments {
                 let payload = self.product.declarations()[declaration.index()]
@@ -1041,6 +1056,20 @@ impl<'product, 'interner> ProductLowerer<'product, 'interner> {
                     } => (type_parameters, members, heritage, false),
                     _ => continue,
                 };
+                let method_keys = members
+                    .iter()
+                    .filter_map(|key| {
+                        let member = &self.product.members()[key.index()];
+                        (member.kind == MemberKind::Method)
+                            .then(|| {
+                                member
+                                    .name
+                                    .as_ref()
+                                    .and_then(|name| property_key(self.product, name))
+                            })
+                            .flatten()
+                    })
+                    .collect::<Vec<_>>();
                 let mut fragment = ObjectType::default();
                 let members_ready = remember_lowering_error(
                     &mut structural_error,
@@ -1065,7 +1094,17 @@ impl<'product, 'interner> ProductLowerer<'product, 'interner> {
                                 .filter(|property| property.ty == self.interner.well_known().error)
                                 .map(|property| property.key.clone()),
                         );
-                        merge_object_surface(&mut own, fragment);
+                        self.merge_declaration_fragment_surface(
+                            &mut own,
+                            fragment,
+                            &method_keys,
+                            &merged_method_keys,
+                        );
+                        for key in method_keys {
+                            if !merged_method_keys.contains(&key) {
+                                merged_method_keys.push(key);
+                            }
+                        }
                     }
                 }
                 for parent in heritage {
@@ -1127,6 +1166,43 @@ impl<'product, 'interner> ProductLowerer<'product, 'interner> {
             "annotation-lower/declaration-group/unsupported",
             "declaration group has no modeled type producer",
         )
+    }
+
+    fn merge_declaration_fragment_surface(
+        &mut self,
+        target: &mut ObjectType,
+        source: ObjectType,
+        source_method_keys: &[PropertyKey],
+        target_method_keys: &[PropertyKey],
+    ) {
+        for property in &source.properties {
+            let Some(existing_index) = target
+                .properties
+                .iter()
+                .position(|existing| existing.key == property.key)
+            else {
+                continue;
+            };
+            if !source_method_keys.contains(&property.key)
+                || !target_method_keys.contains(&property.key)
+            {
+                continue;
+            }
+            let existing_ty = target.properties[existing_index].ty;
+            let Some(mut signatures) = callable_property_signatures(self.interner, existing_ty)
+            else {
+                continue;
+            };
+            let Some(incoming) = callable_property_signatures(self.interner, property.ty) else {
+                continue;
+            };
+            signatures.extend(incoming);
+            target.properties[existing_index].ty = self.interner.intern_object(ObjectType {
+                call_signatures: signatures,
+                ..ObjectType::default()
+            });
+        }
+        merge_object_surface(target, source);
     }
 
     fn canonicalize_fragment_object(
