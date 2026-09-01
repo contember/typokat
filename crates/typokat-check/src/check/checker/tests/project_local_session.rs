@@ -6,7 +6,7 @@ use crate::binder::namespace::{
 use crate::binder::product::{project_library_declaration_product, LibraryProductSource};
 use crate::check::checker::project_local::{
     observation_storage_counts_for_test, CheckerSession, ObservationEventKindForTest,
-    ObservationScopeForTest,
+    ObservationScopeForTest, ProductLowererConstructionScopeForTest,
 };
 use crate::frontend::{run_prepared_project_frontend, FileInput};
 use crate::source::{CompilationOrigin, LibraryFileOrdinal};
@@ -131,6 +131,54 @@ fn checker_session_owns_product_binding_and_returns_real_check_results() {
         .cache_weak
         .iter()
         .all(|witness| !witness.upgraded_at_finish));
+}
+
+#[test]
+fn generic_library_demand_constructs_one_product_lowerer_without_identity_collision() {
+    let product = Arc::new(extract_library_product("interface Box<T> { value: T }\n"));
+    let constructions = ProductLowererConstructionScopeForTest::start();
+    let run = run_prepared_project_frontend(
+        vec![FileInput {
+            name: USER_PATH.to_owned(),
+            source: r#"function identity<T>(value: T): T {
+    return value;
+}
+const before: string = identity("before");
+const box: Box<number> = { value: 1 };
+const boxValue: number = box.value;
+const after: string = identity("after");
+"#
+            .to_owned(),
+        }],
+        move |programs, source_reexports, default_modules| {
+            CheckerSession::new(product).check_project_programs(
+                programs,
+                source_reexports,
+                default_modules,
+            )
+        },
+    );
+
+    assert_eq!(run.parse_errors, [Vec::<String>::new()]);
+    let results = run
+        .product
+        .expect("clean project reaches the session")
+        .expect("project-local session checks");
+    let [result] = results.as_slice() else {
+        panic!("one user program must produce one real CheckResult")
+    };
+    assert!(result.incomplete.is_empty());
+    assert!(result.diagnostics.is_empty());
+
+    let construction_count = constructions.finish();
+    assert_ne!(
+        construction_count, 0,
+        "the scope must count the real ProductLowerer constructor"
+    );
+    assert_eq!(
+        construction_count, 1,
+        "only the Box<number> demand constructs ProductLowerer"
+    );
 }
 
 #[test]

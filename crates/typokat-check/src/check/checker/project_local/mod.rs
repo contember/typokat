@@ -30,6 +30,7 @@ pub use entry::*;
 #[cfg(test)]
 pub(super) use lowerer::{
     accumulate_product_library_records_for_test, lower_product_groups_for_test,
+    ProductLowererConstructionScopeForTest,
 };
 #[cfg(any(test, feature = "test-utils"))]
 pub use observation::{
