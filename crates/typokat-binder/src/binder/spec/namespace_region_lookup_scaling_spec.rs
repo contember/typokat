@@ -118,8 +118,8 @@ fn namespace_region_lookup_work_scales_with_product_rows() {
     let small_product_rows = u64::try_from(DECLARATIONS_PER_REGION * SMALL).unwrap_or(u64::MAX);
     let scaled_product_rows = u64::try_from(DECLARATIONS_PER_REGION * SCALED).unwrap_or(u64::MAX);
     let step = scaled_product_rows / small_product_rows;
-    let small = measure(SMALL).declaration_row_probes;
-    let scaled = measure(SCALED).declaration_row_probes;
+    let small = measure(SMALL).index_probes;
+    let scaled = measure(SCALED).index_probes;
     let small_budget = ROW_PROBES_PER_DECLARATION * small_product_rows;
     let scaled_budget = ROW_PROBES_PER_DECLARATION * scaled_product_rows;
 

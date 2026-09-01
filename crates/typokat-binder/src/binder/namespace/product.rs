@@ -15,32 +15,28 @@ use typokat_library_product as product;
 
 #[cfg(test)]
 thread_local! {
-    static NAMESPACE_REGION_DECLARATION_ROW_PROBES: std::cell::Cell<u64> = const {
+    static NAMESPACE_REGION_INDEX_PROBES: std::cell::Cell<u64> = const {
         std::cell::Cell::new(0)
     };
 }
 
-/// Declaration rows inspected while resolving declaration regions to namespace fragments.
+/// Dense index entries inspected while resolving declaration regions to namespace fragments.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct NamespaceRegionLookupWorkForTest {
-    pub(crate) declaration_row_probes: u64,
+    pub(crate) index_probes: u64,
 }
 
 #[cfg(test)]
 fn namespace_region_lookup_work_for_test() -> NamespaceRegionLookupWorkForTest {
     NamespaceRegionLookupWorkForTest {
-        declaration_row_probes: NAMESPACE_REGION_DECLARATION_ROW_PROBES.get(),
+        index_probes: NAMESPACE_REGION_INDEX_PROBES.get(),
     }
 }
 
 #[cfg(test)]
-fn record_namespace_region_declaration_row_probe() {
-    NAMESPACE_REGION_DECLARATION_ROW_PROBES.set(
-        NAMESPACE_REGION_DECLARATION_ROW_PROBES
-            .get()
-            .saturating_add(1),
-    );
+fn record_namespace_region_index_probe() {
+    NAMESPACE_REGION_INDEX_PROBES.set(NAMESPACE_REGION_INDEX_PROBES.get().saturating_add(1));
 }
 
 #[cfg(test)]
@@ -55,9 +51,7 @@ impl NamespaceRegionLookupWorkScopeForTest {
     pub(crate) fn finish(self) -> NamespaceRegionLookupWorkForTest {
         let end = namespace_region_lookup_work_for_test();
         NamespaceRegionLookupWorkForTest {
-            declaration_row_probes: end
-                .declaration_row_probes
-                .saturating_sub(self.0.declaration_row_probes),
+            index_probes: end.index_probes.saturating_sub(self.0.index_probes),
         }
     }
 }
@@ -732,6 +726,7 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
     }
     let mut namespace_ids_by_container = vec![None; declaration_product.containers().len()];
     let mut namespace_fragments_by_declaration = BTreeMap::new();
+    let mut namespace_fragments_by_region = vec![None; declaration_product.regions().len()];
     for (declaration_index, declaration) in declaration_product.declarations().iter().enumerate() {
         let product::DeclarationPayload::Namespace { child_region } = declaration.payload else {
             continue;
@@ -856,6 +851,7 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
             ))?
             .namespace = Some(namespace);
         namespace_fragments_by_declaration.insert(declaration_index, fragment_id);
+        namespace_fragments_by_region[child_region.index()] = Some(fragment_id);
     }
 
     let mut global_by_region = BTreeMap::new();
@@ -977,11 +973,13 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
         .map(|(index, declaration)| (index, declaration.region.index()))
         .collect::<Vec<_>>();
     for (declaration_index, region_index) in regions_by_declaration {
-        let Some(fragment) = namespace_fragment_for_region(
-            declaration_product,
-            region_index,
-            &namespace_fragments_by_declaration,
-        ) else {
+        #[cfg(test)]
+        record_namespace_region_index_probe();
+        let Some(fragment) = namespace_fragments_by_region
+            .get(region_index)
+            .copied()
+            .flatten()
+        else {
             continue;
         };
         if namespace_fragments_by_declaration.contains_key(&declaration_index) {
@@ -1386,29 +1384,6 @@ fn namespace_instance_state(
     } else {
         NamespaceInstanceState::NonInstantiated
     }
-}
-
-fn namespace_fragment_for_region(
-    declaration_product: &product::LibraryDeclarationProduct,
-    region: usize,
-    fragments: &BTreeMap<usize, NamespaceFragmentId>,
-) -> Option<NamespaceFragmentId> {
-    declaration_product
-        .declarations()
-        .iter()
-        .enumerate()
-        .find_map(|(index, declaration)| {
-            #[cfg(test)]
-            record_namespace_region_declaration_row_probe();
-            match declaration.payload {
-                product::DeclarationPayload::Namespace { child_region }
-                    if child_region.index() == region =>
-                {
-                    fragments.get(&index).copied()
-                }
-                _ => None,
-            }
-        })
 }
 
 fn library_unit(
