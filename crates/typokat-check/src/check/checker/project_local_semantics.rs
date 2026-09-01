@@ -1,5 +1,7 @@
 //! Project-owned demand scheduling for immutable library declaration products.
 
+#[cfg(test)]
+use std::cell::Cell;
 use std::collections::BTreeMap;
 #[cfg(any(test, feature = "test-utils"))]
 use std::collections::BTreeSet;
@@ -14,10 +16,77 @@ use oxc_ast_visit::{walk, Visit};
 use rustc_hash::FxHashMap;
 use typokat_library_product::{DependencyTarget, LibraryDeclarationProduct};
 
+#[cfg(test)]
+thread_local! {
+    static LIBRARY_TYPE_DEPENDENCY_RECONSTRUCTION_WORK: Cell<LibraryTypeDependencyReconstructionWorkForTest> = const {
+        Cell::new(LibraryTypeDependencyReconstructionWorkForTest {
+            invocations: 0,
+            product_dependency_rows: 0,
+        })
+    };
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::check::checker) struct LibraryTypeDependencyReconstructionWorkForTest {
+    pub invocations: usize,
+    pub product_dependency_rows: usize,
+}
+
+#[cfg(test)]
+impl LibraryTypeDependencyReconstructionWorkForTest {
+    fn saturating_sub(self, start: Self) -> Self {
+        Self {
+            invocations: self.invocations.saturating_sub(start.invocations),
+            product_dependency_rows: self
+                .product_dependency_rows
+                .saturating_sub(start.product_dependency_rows),
+        }
+    }
+}
+
+#[cfg(test)]
+pub(in crate::check::checker) struct LibraryTypeDependencyReconstructionScopeForTest(
+    LibraryTypeDependencyReconstructionWorkForTest,
+);
+
+#[cfg(test)]
+impl LibraryTypeDependencyReconstructionScopeForTest {
+    pub fn start() -> Self {
+        Self(LIBRARY_TYPE_DEPENDENCY_RECONSTRUCTION_WORK.get())
+    }
+
+    pub fn finish(self) -> LibraryTypeDependencyReconstructionWorkForTest {
+        LIBRARY_TYPE_DEPENDENCY_RECONSTRUCTION_WORK
+            .get()
+            .saturating_sub(self.0)
+    }
+}
+
+#[cfg(test)]
+fn record_library_type_dependency_reconstruction_invocation_for_test() {
+    LIBRARY_TYPE_DEPENDENCY_RECONSTRUCTION_WORK.with(|work| {
+        let mut current = work.get();
+        current.invocations = current.invocations.saturating_add(1);
+        work.set(current);
+    });
+}
+
+#[cfg(test)]
+fn record_library_type_dependency_reconstruction_rows_for_test(rows: usize) {
+    LIBRARY_TYPE_DEPENDENCY_RECONSTRUCTION_WORK.with(|work| {
+        let mut current = work.get();
+        current.product_dependency_rows = current.product_dependency_rows.saturating_add(rows);
+        work.set(current);
+    });
+}
+
 pub(super) fn library_type_dependencies(
     product: &LibraryDeclarationProduct,
     map: &LibraryProductBinderMap,
 ) -> Result<Vec<(SymbolId, SymbolId)>, &'static str> {
+    #[cfg(test)]
+    record_library_type_dependency_reconstruction_invocation_for_test();
     let mut rows = Vec::new();
     for dependency in product.dependency_rows() {
         let DependencyTarget::Group(target) = dependency.target else {
@@ -35,6 +104,8 @@ pub(super) fn library_type_dependencies(
     }
     rows.sort_by_key(|(owner, target)| (owner.index(), target.index()));
     rows.dedup();
+    #[cfg(test)]
+    record_library_type_dependency_reconstruction_rows_for_test(rows.len());
     Ok(rows)
 }
 

@@ -17,6 +17,9 @@ use crate::check::checker::project_local::{
     ProjectLocalSemanticTraceForTest, ProjectLocalTerminalStateForTest,
     ProjectLocalUnavailableReasonForTest,
 };
+use crate::check::checker::project_local_semantics::{
+    LibraryTypeDependencyReconstructionScopeForTest, LibraryTypeDependencyReconstructionWorkForTest,
+};
 use crate::check::checker::{
     bind_library_product_project_programs, LibraryProductProjectBindingError,
 };
@@ -902,19 +905,61 @@ fn contextual_signature_tuple_rest_constraint_uses_the_member_owner_fallback() {
 }
 
 #[test]
+fn non_augmenting_user_class_dependency_skips_library_dependency_reconstruction() {
+    const LIBRARY_SOURCE: &str = "\
+declare class LibraryBase { value: string }\n\
+declare class LibraryDerived extends LibraryBase { stable: boolean }\n";
+    const USER_SOURCE: &str = "class UserDerived extends LibraryDerived {}\n";
+    let work = LibraryTypeDependencyReconstructionScopeForTest::start();
+    let trace = candidate_trace(
+        "non-augmenting-user-class-dependency",
+        LIBRARY_SOURCE,
+        USER_SOURCE,
+        false,
+    );
+    let work = work.finish();
+
+    assert_no_user_records(&trace);
+    assert!(trace.production_validation_roots.is_empty());
+    let mut demanded_groups = trace
+        .publication_scc_commits
+        .iter()
+        .flat_map(|commit| commit.scc.members.iter())
+        .map(|group| group.name.as_str())
+        .collect::<Vec<_>>();
+    demanded_groups.sort_unstable();
+    demanded_groups.dedup();
+    assert_eq!(demanded_groups, ["LibraryBase", "LibraryDerived"]);
+    assert_eq!(
+        work,
+        LibraryTypeDependencyReconstructionWorkForTest::default(),
+        "non-augmenting user demand must not rebuild library-to-library dependencies"
+    );
+}
+
+#[test]
 fn ordinary_augmentation_schedules_only_affected_library_validation_roots() {
     const LIBRARY_SOURCE: &str = "\
 interface Root { method(value: string): void }\n\
 interface Affected extends Root { method(value: string): void }\n\
 interface Unaffected { stable: boolean }\n";
     const USER_SOURCE: &str = "interface Root { method(value: number): void }\n";
+    let work = LibraryTypeDependencyReconstructionScopeForTest::start();
     let trace = candidate_trace(
         "ordinary-augmentation-validation",
         LIBRARY_SOURCE,
         USER_SOURCE,
         false,
     );
+    let work = work.finish();
 
+    assert_eq!(
+        work,
+        LibraryTypeDependencyReconstructionWorkForTest {
+            invocations: 1,
+            product_dependency_rows: 1,
+        }
+    );
     assert_eq!(
         group_names(&trace.production_validation_roots),
         ["Affected", "Root"]
