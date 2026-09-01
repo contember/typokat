@@ -515,3 +515,28 @@ fn project_local_computed_keys_reject_a_shadowed_symbol_value() {
         })
     );
 }
+
+#[test]
+fn project_local_symbol_brands_flow_through_iterable_array_inference() {
+    let receipt = invoke(
+        "project-local-symbol-brand-array-inference",
+        "type Nominal<Kind extends string, Type> = Type & {\n\
+           [Symbol.species]: Kind;\n\
+         };\n\
+         type A = Nominal<\"A\", string>;\n\
+         declare const a: Set<A>;\n\
+         declare const b: Set<A>;\n\
+         const combined = Array.from(a).concat(Array.from(b));\n\
+         declare function from<T>(): T[];\n\
+         const inferred: ReadonlyArray<A> = from();\n",
+    );
+    assert_eq!(
+        receipt["semantic"],
+        json!({
+            "diagnostics": [],
+            "exit_code": 0,
+            "incompletes": [],
+            "parse_errors": [],
+        })
+    );
+}
