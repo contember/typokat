@@ -28,7 +28,8 @@ use crate::binder::scope::ScopeId;
 use crate::binder::symbol::SymbolId;
 use crate::check::checker::annotations::project_local_well_known_symbol_from_name;
 pub(super) use crate::check::checker::context::{
-    ProjectLocalDemandSnapshot, ProjectLocalTypeOverlayDraft, ProjectLocalUserDemandGateway,
+    CertifiedLibraryValues, ProjectLocalDemandSnapshot, ProjectLocalTypeOverlayDraft,
+    ProjectLocalUserDemandGateway,
 };
 pub(super) use crate::check::checker::eval::keyof_of_type;
 #[cfg(any(test, feature = "test-utils"))]
@@ -77,9 +78,9 @@ use std::collections::{BTreeMap, BTreeSet};
 pub(super) use typokat_library_product::sha256_hex;
 pub(super) use typokat_library_product::{
     Accessibility, ContainerKind, DeclarationGroupRecipe, DeclarationKey, DeclarationPayload,
-    DependencyKind, DependencyTarget, IntrinsicMarker, KeywordKind, LibraryDeclarationProduct,
-    LiteralRecipe, MappedModifier, MemberKey, MemberKind, MemberRecipe, ParameterPattern,
-    PropertyNameRecipe, QualifiedPathResolutionOutcome, QualifiedPathRole,
+    DependencyKind, DependencyTarget, GroupKey, IntrinsicMarker, KeywordKind,
+    LibraryDeclarationProduct, LiteralRecipe, MappedModifier, MemberKey, MemberKind, MemberRecipe,
+    ParameterPattern, PropertyNameRecipe, QualifiedPathResolutionOutcome, QualifiedPathRole,
     QualifiedPathUnresolvedCause, RegionKey, SignatureKey, SourceSite, SymbolicValueNameRecipe,
     TypeOperator, TypeParameterKey, TypeRecipeKey, TypeRecipeNode, TypeReferenceResolution,
     ValueReferenceResolution,
@@ -611,6 +612,7 @@ pub(super) struct ProjectLocalUserPassRequest<'a, 'ast> {
     pub(super) product_type_overlays: Vec<(TypeGroupId, ProjectLocalTypeOverlayDraft)>,
     pub(super) user_namespace_demands: Vec<String>,
     pub(super) library_identity_groups: [Option<TypeGroupId>; 8],
+    pub(super) certified_library_values: CertifiedLibraryValues,
     pub(super) next_type_param: u32,
     pub(super) lexical_array_alias: Option<TypeGroupId>,
     pub(super) demand_gateway: &'a mut dyn ProjectLocalUserDemandGateway,
@@ -669,6 +671,7 @@ fn run_project_local_user_pass_inner<'ast>(
         product_type_overlays,
         user_namespace_demands,
         library_identity_groups,
+        certified_library_values,
         next_type_param,
         lexical_array_alias,
         demand_gateway,
@@ -686,6 +689,7 @@ fn run_project_local_user_pass_inner<'ast>(
             product_type_overlays,
             user_namespace_demands,
             library_identity_groups,
+            certified_library_values,
             next_type_param,
             lexical_array_alias,
             demand_gateway,

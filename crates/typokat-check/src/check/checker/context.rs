@@ -47,8 +47,8 @@ use super::type_groups::{
 
 /// Authenticated value-space roots that may authorize syntax-directed lowering.
 ///
-/// These ids come only from the retained library root projection. A same-spelled
-/// user binding therefore cannot acquire library authority.
+/// These ids come only from authenticated library ownership projections. A
+/// same-spelled user binding therefore cannot acquire library authority.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(in crate::check::checker) struct CertifiedLibraryValues {
     pub(in crate::check::checker) symbol: Option<ValueStorageId>,

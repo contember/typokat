@@ -15,8 +15,8 @@ pub use declared::DeclaredMaterializationError;
 use crate::types::hash::{structural_hash, StructuralKey};
 use crate::types::repr::{
     AliasId, ConditionalType, DeclaredRecipeId, DeclaredTypeRecipe, EnumId, EnumMemberId,
-    EnumMemberType, EnumType, IntrinsicKind, LiteralValue, MappedType, ObjectType, ParameterType,
-    PropertyType, TypeFlags, TypeParamId, TypeParamType, TypeTag,
+    EnumMemberType, EnumType, InferType, IntrinsicKind, LiteralValue, MappedType, ObjectType,
+    ParameterType, PropertyType, TypeFlags, TypeParamId, TypeParamType, TypeTag,
 };
 use crate::types::store::{Store, TypeId, TypeParamFreezeError};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -1531,16 +1531,25 @@ impl Interner {
         interned
     }
 
-    /// Intern an **`infer` binder** at the given de Bruijn index (M25). Identity is the
-    /// index alone, so alpha-equivalent conditionals hash-cons to one node.
+    /// Intern an unconstrained **`infer` binder** at the given de Bruijn index (M25).
     pub fn intern_infer(&mut self, index: u32) -> TypeId {
-        let key = StructuralKey::Infer(index);
+        self.intern_constrained_infer(index, None)
+    }
+
+    /// Intern an `infer` binder whose optional constraint is structural identity.
+    pub fn intern_constrained_infer(&mut self, index: u32, constraint: Option<TypeId>) -> TypeId {
+        let key = StructuralKey::Infer { index, constraint };
         let hash = structural_hash(&key);
-        if let Some(existing) = self.lookup(hash, |store, id| store.infer_index(id) == Some(index))
-        {
+        if let Some(existing) = self.lookup(hash, |store, id| {
+            store
+                .infer_type(id)
+                .is_some_and(|infer| infer.index == index && infer.constraint == constraint)
+        }) {
             return existing;
         }
-        let id = self.store.push_infer(index, TypeFlags::EMPTY);
+        let id = self
+            .store
+            .push_infer(InferType { index, constraint }, TypeFlags::EMPTY);
         self.dedup.entry(hash).or_default().push(id);
         id
     }

@@ -2315,6 +2315,110 @@ fn template_infer_captures_segments() {
 }
 
 #[test]
+fn constrained_template_infer_uses_typescript_numeric_capture_rules() {
+    use crate::types::repr::TemplateType;
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let parameter_id = TypeParamId(0);
+    let parameter = interner.intern_type_param(parameter_id, "N");
+    let pattern = interner.intern_template(TemplateType {
+        texts: vec![String::new(), String::new()],
+        holes: vec![parameter],
+    });
+    let constraints = FxHashMap::from_iter([(parameter_id, wk.number)]);
+
+    for (source, expected) in [
+        ("-1", Some(LiteralValue::Number(-1.0))),
+        ("01", None),
+        ("\u{00A0}", None),
+        ("\u{FEFF}", None),
+        ("\u{00A0}1\u{00A0}", None),
+        ("\u{FEFF}1\u{FEFF}", None),
+    ] {
+        let source = interner.intern_literal(LiteralValue::String(source.to_owned()));
+        let mut candidates = Candidates::default();
+        infer_from_types_for_constrained_conditional(
+            &mut interner,
+            source,
+            pattern,
+            &constraints,
+            &mut candidates,
+        );
+        let candidate = candidates[&parameter_id][0];
+        match expected {
+            Some(expected) => {
+                assert_eq!(interner.store().literal_value(candidate), Some(&expected))
+            }
+            None => assert_eq!(candidate, wk.number),
+        }
+    }
+
+    for invalid in ["no", "\u{0085}"] {
+        let invalid = interner.intern_literal(LiteralValue::String(invalid.to_owned()));
+        let mut candidates = Candidates::default();
+        infer_from_types_for_constrained_conditional(
+            &mut interner,
+            invalid,
+            pattern,
+            &constraints,
+            &mut candidates,
+        );
+        assert!(candidates.is_empty());
+    }
+}
+
+#[test]
+fn constrained_template_infer_preserves_matching_composite_constraints() {
+    use crate::types::repr::TemplateType;
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let parameter_id = TypeParamId(0);
+    let parameter = interner.intern_type_param(parameter_id, "N");
+    let pattern = interner.intern_template(TemplateType {
+        texts: vec![String::new(), String::new()],
+        holes: vec![parameter],
+    });
+    let one = interner.intern_literal(LiteralValue::Number(1.0));
+    let two = interner.intern_literal(LiteralValue::Number(2.0));
+    let numeric_literals = interner.union(vec![one, two]);
+    let auto = interner.intern_literal(LiteralValue::String("auto".to_owned()));
+    let number_or_auto = interner.union(vec![wk.number, auto]);
+    let boolean_true = interner.intern_literal(LiteralValue::Boolean(true));
+    let empty_object = interner.intern_object(ObjectType::default());
+    let number_and_empty = interner.intersection(vec![wk.number, empty_object]);
+
+    for (source, constraint, expected) in [
+        ("1", numeric_literals, Some(one)),
+        ("3", numeric_literals, None),
+        ("1", number_or_auto, Some(one)),
+        ("01", number_or_auto, Some(number_or_auto)),
+        ("auto", number_or_auto, Some(auto)),
+        ("true", wk.boolean, Some(boolean_true)),
+        ("1", number_and_empty, Some(number_and_empty)),
+        ("01", number_and_empty, Some(number_and_empty)),
+    ] {
+        let source = interner.intern_literal(LiteralValue::String(source.to_owned()));
+        let constraints = FxHashMap::from_iter([(parameter_id, constraint)]);
+        let mut candidates = Candidates::default();
+        infer_from_types_for_constrained_conditional(
+            &mut interner,
+            source,
+            pattern,
+            &constraints,
+            &mut candidates,
+        );
+        assert_eq!(
+            candidates
+                .get(&parameter_id)
+                .and_then(|candidates| candidates.first())
+                .copied(),
+            expected,
+            "composite constrained capture {source:?}"
+        );
+    }
+}
+
+#[test]
 fn conditional_tuple_rest_infer_captures_middle_as_tuple() {
     let mut interner = Interner::with_intrinsics();
     let wk = interner.well_known();

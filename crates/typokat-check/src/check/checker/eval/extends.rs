@@ -41,6 +41,22 @@ impl<'a> ConditionalEvaluator<'a> {
 
         let extends_f = self.substitute_infers(cond.extends_ty, &fresh);
         let true_f = self.substitute_infers(cond.true_branch, &fresh);
+        let raw_constraints = self.infer_constraints(cond.extends_ty, cond.infer_count);
+        let mut constraints: FxHashMap<TypeParamId, TypeId> = FxHashMap::default();
+        for (&id, raw) in fresh_ids.iter().zip(raw_constraints) {
+            let lowered = raw
+                .into_iter()
+                .map(|constraint| self.substitute_infers(constraint, &fresh))
+                .collect::<Vec<_>>();
+            if !lowered.is_empty() {
+                let constraint = self.interner.intersection(lowered);
+                let constraint = match normalization.normalize(constraint) {
+                    Ok(constraint) => constraint,
+                    Err(exhaustion) => return DemandOutcome::Exhausted(exhaustion),
+                };
+                constraints.insert(id, constraint);
+            }
+        }
 
         // Collect candidates by matching the (concrete) check against the freshened
         // extends type — in CONDITIONAL mode: literals never widen (tsc keeps `"x"`;
@@ -49,7 +65,18 @@ impl<'a> ConditionalEvaluator<'a> {
         // its candidates (or `unknown` — the no-candidate fallback, matching tsc for an
         // infer left unbound in a taken branch).
         let mut candidates = crate::check::infer::Candidates::default();
-        infer_from_types_for_conditional(self.interner, cond.check, extends_f, &mut candidates);
+        infer_from_types_for_constrained_conditional(
+            self.interner,
+            cond.check,
+            extends_f,
+            &constraints,
+            &mut candidates,
+        );
+        let complete_template_capture = self.interner.store().tag(extends_f) == TypeTag::Template
+            && candidates.len() == fresh_ids.len()
+            && fresh_ids
+                .iter()
+                .all(|id| candidates.get(id).is_some_and(|values| !values.is_empty()));
         let wk = self.interner.well_known();
         let mut map: FxHashMap<TypeParamId, TypeId> = FxHashMap::default();
         for &id in &fresh_ids {
@@ -60,10 +87,32 @@ impl<'a> ConditionalEvaluator<'a> {
             map.insert(id, fixed);
         }
 
+        for (&id, &constraint) in &constraints {
+            let Some(&candidate) = map.get(&id) else {
+                continue;
+            };
+            let constraint = substitute(self.interner, constraint, &map);
+            match self.is_assignable_with(candidate, constraint, normalization) {
+                DemandOutcome::Ready(true) => {}
+                DemandOutcome::Ready(false) => {
+                    return DemandOutcome::Ready((false, cond.true_branch));
+                }
+                DemandOutcome::Exhausted(exhaustion) => {
+                    return DemandOutcome::Exhausted(exhaustion);
+                }
+            }
+        }
+
         let extends_final = substitute(self.interner, extends_f, &map);
-        let matched = match self.is_assignable_with(cond.check, extends_final, normalization) {
-            DemandOutcome::Ready(matched) => matched,
-            DemandOutcome::Exhausted(exhaustion) => return DemandOutcome::Exhausted(exhaustion),
+        let matched = if complete_template_capture {
+            true
+        } else {
+            match self.is_assignable_with(cond.check, extends_final, normalization) {
+                DemandOutcome::Ready(matched) => matched,
+                DemandOutcome::Exhausted(exhaustion) => {
+                    return DemandOutcome::Exhausted(exhaustion);
+                }
+            }
         };
         let true_final = substitute(self.interner, true_f, &map);
         DemandOutcome::Ready((matched, true_final))

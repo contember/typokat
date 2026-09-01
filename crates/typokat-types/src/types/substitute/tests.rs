@@ -735,6 +735,21 @@ fn substitute_does_not_capture_infer_binders_under_nesting() {
     );
 }
 
+#[test]
+fn substitute_rewrites_infer_constraints_without_capturing_the_binder() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let parameter = interner.intern_type_param(TypeParamId(0), "T");
+    let infer = interner.intern_constrained_infer(0, Some(parameter));
+    let mut map = FxHashMap::default();
+    map.insert(TypeParamId(0), wk.number);
+
+    let result = substitute(&mut interner, infer, &map);
+    let rewritten = interner.store().infer_type(result).expect("infer payload");
+    assert_eq!(rewritten.index, 0);
+    assert_eq!(rewritten.constraint, Some(wk.number));
+}
+
 /// M25 distribution guard: union/`never`/`boolean` check arguments defer to lazy
 /// instantiation; single non-distributing arguments plainly rewrite.
 #[test]

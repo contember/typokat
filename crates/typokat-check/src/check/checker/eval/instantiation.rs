@@ -665,6 +665,33 @@ impl<'a> ConditionalEvaluator<'a> {
         values.pop().unwrap_or(ty)
     }
 
+    /// Collect constraints by de Bruijn index along exactly the edges freshening visits.
+    pub(super) fn infer_constraints(&self, root: TypeId, infer_count: u32) -> Vec<Vec<TypeId>> {
+        let infer_count = usize::try_from(infer_count).expect("infer count fits usize");
+        let mut constraints = vec![Vec::new(); infer_count];
+        let mut pending = vec![root];
+        let mut visited = FxHashSet::default();
+        while let Some(ty) = pending.pop() {
+            if !visited.insert(ty) {
+                continue;
+            }
+            if let Some(infer) = self.interner.store().infer_type(ty) {
+                if let (Some(slot), Some(constraint)) = (
+                    usize::try_from(infer.index)
+                        .ok()
+                        .and_then(|index| constraints.get_mut(index)),
+                    infer.constraint,
+                ) {
+                    slot.push(constraint);
+                }
+                continue;
+            }
+            let (_, children) = self.infer_rewrite_frame(ty, &[]);
+            pending.extend(children);
+        }
+        constraints
+    }
+
     fn infer_rewrite_frame(
         &self,
         ty: TypeId,
@@ -677,7 +704,8 @@ impl<'a> ConditionalEvaluator<'a> {
                     .interner
                     .store()
                     .infer_index(ty)
-                    .and_then(|index| fresh.get(index as usize).copied())
+                    .and_then(|index| usize::try_from(index).ok())
+                    .and_then(|index| fresh.get(index).copied())
                     .unwrap_or(ty);
                 (InferRewriteFrame::Identity { ty, result }, Vec::new())
             }

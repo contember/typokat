@@ -7,6 +7,20 @@ use crate::types::repr::{
 };
 
 impl<'a> Substitution<'a> {
+    pub(super) fn apply_infer(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {
+        let Some(infer) = interner.store().infer_type(ty).copied() else {
+            return ty;
+        };
+        let constraint = infer
+            .constraint
+            .map(|constraint| self.apply(interner, constraint));
+        if constraint == infer.constraint {
+            ty
+        } else {
+            interner.intern_constrained_infer(infer.index, constraint)
+        }
+    }
+
     /// Substitute through an object, re-interning only when a child changed.
     /// No-op substitution preserves nominal identity; re-entry returns the original
     /// id to break self-referential nominal cycles.

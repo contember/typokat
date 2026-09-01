@@ -5,7 +5,7 @@
 //! avoids host-stack overflow and reports `TK2589` on budget exhaustion.
 
 use super::context::Pass;
-use crate::check::infer::infer_from_types_for_conditional;
+use crate::check::infer::infer_from_types_for_constrained_conditional;
 use crate::class_semantics::{DemandOutcome, Exhaustion};
 use crate::diagnostics::Diagnostic;
 use crate::relate::cache::RelationCache;

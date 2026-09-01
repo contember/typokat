@@ -52,17 +52,15 @@ const wu7NamedTupleRestControl: Wu7NamedTupleRestControl = ["ok", 1, true];
 const wu7PlainGenericRestControl: Wu7PlainGenericRestControl<[number, boolean]> = ["ok", 1, true];
 const wu7NamedGenericRestControl: Wu7NamedGenericRestControl<[number, boolean]> = ["ok", 1, true];
 
-// Constrained infer is not modeled yet. Every constraint is withheld at the
-// infer declaration, including constraints which happen to be array-like.
-type Wu7ConstrainedInferDirect<T> = T extends infer R extends string ? R : never; // incomplete[annotation-lower/infer-type/constraint]
-type Wu7ConstrainedInferNonArray<T> = T extends [...infer R extends number] ? R : never; // incomplete[annotation-lower/infer-type/constraint]
-type Wu7ConstrainedInferArray<T> = T extends [...infer R extends readonly unknown[]] ? R : never; // incomplete[annotation-lower/infer-type/constraint]
+// Constrained infer preserves supported bounds. A tuple rest still requires an
+// array-like bound.
+type Wu7ConstrainedInferDirect<T> = T extends infer R extends string ? R : never;
+type Wu7ConstrainedInferNonArray<T> = T extends [...infer R extends number] ? R : never; // incomplete[annotation-lower/tuple-rest-element/non-array]
+type Wu7ConstrainedInferArray<T> = T extends [...infer R extends readonly unknown[]] ? R : never;
 
 // tsc selects the false branch and reports TS2322 on the following declaration.
-// Typokat withholds the alias at the constraint instead of publishing the
-// unconstrained number-tuple capture.
-type Wu7ConstrainedInferFalseClean<T> = T extends [...infer R extends string[]] ? R : "fallback"; // incomplete[annotation-lower/infer-type/constraint]
-const wu7ConstrainedInferFalseClean: Wu7ConstrainedInferFalseClean<[number]> = [1];
+type Wu7ConstrainedInferFalseClean<T> = T extends [...infer R extends string[]] ? R : "fallback";
+const wu7ConstrainedInferFalseClean: Wu7ConstrainedInferFalseClean<[number]> = [1]; // error[TK2322]: Type 'number[]' is not assignable to type '"fallback"'
 
 // A declaration becomes a reference only in the true branch. It is not visible
 // to a sibling type inside the same extends pattern, on either lowering path.

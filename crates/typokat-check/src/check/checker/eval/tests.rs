@@ -1991,6 +1991,205 @@ fn template_construction_collapses_and_distributes() {
     assert_eq!(eval(&mut interner, &mut next, &mut memo, ver), expect);
 }
 
+#[test]
+fn constrained_template_infer_converts_numeric_captures_and_rejects_text() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let constrained = interner.intern_constrained_infer(0, Some(wk.number));
+    let reference = interner.intern_infer(0);
+    let pattern = interner.intern_template(TemplateType {
+        texts: vec![String::new(), String::new()],
+        holes: vec![constrained],
+    });
+    let text = interner.intern_literal(LiteralValue::String("no".to_owned()));
+    let text_conditional = interner.intern_conditional(ConditionalType {
+        check: text,
+        extends_ty: pattern,
+        true_branch: reference,
+        false_branch: wk.never,
+        infer_count: 1,
+        distributive: false,
+        poisoned: false,
+    });
+    let mut next = 0;
+    let mut memo = FxHashMap::default();
+
+    for (source, expected) in [
+        ("42", interner.intern_literal(LiteralValue::Number(42.0))),
+        ("01", wk.number),
+        ("1e3", wk.number),
+        ("0x10", wk.number),
+        ("\u{00A0}", wk.number),
+        ("\u{FEFF}", wk.number),
+        ("\u{00A0}1\u{00A0}", wk.number),
+        ("\u{FEFF}1\u{FEFF}", wk.number),
+    ] {
+        let check = interner.intern_literal(LiteralValue::String(source.to_owned()));
+        let conditional = interner.intern_conditional(ConditionalType {
+            check,
+            extends_ty: pattern,
+            true_branch: reference,
+            false_branch: wk.never,
+            infer_count: 1,
+            distributive: false,
+            poisoned: false,
+        });
+        assert_eq!(
+            eval(&mut interner, &mut next, &mut memo, conditional),
+            expected,
+            "numeric capture {source}"
+        );
+    }
+    assert_eq!(
+        eval(&mut interner, &mut next, &mut memo, text_conditional),
+        wk.never
+    );
+
+    let free = interner.intern_type_param(TypeParamId(99), "T");
+    let symbolic_pattern = interner.intern_template(TemplateType {
+        texts: vec![String::new(), ":".to_owned(), String::new()],
+        holes: vec![constrained, free],
+    });
+    let symbolic_check = interner.intern_literal(LiteralValue::String("42:x".to_owned()));
+    let symbolic_conditional = interner.intern_conditional(ConditionalType {
+        check: symbolic_check,
+        extends_ty: symbolic_pattern,
+        true_branch: reference,
+        false_branch: wk.never,
+        infer_count: 1,
+        distributive: false,
+        poisoned: false,
+    });
+    assert_eq!(
+        eval(&mut interner, &mut next, &mut memo, symbolic_conditional),
+        wk.never,
+        "a free template parameter cannot borrow conditional infer authority"
+    );
+
+    let one = interner.intern_literal(LiteralValue::Number(1.0));
+    let two = interner.intern_literal(LiteralValue::Number(2.0));
+    let numeric_literals = interner.union(vec![one, two]);
+    let auto = interner.intern_literal(LiteralValue::String("auto".to_owned()));
+    let number_or_auto = interner.union(vec![wk.number, auto]);
+    let boolean_true = interner.intern_literal(LiteralValue::Boolean(true));
+    let empty_object = interner.intern_object(ObjectType::default());
+    let number_and_empty = interner.intersection(vec![wk.number, empty_object]);
+    for (source, constraint, expected) in [
+        ("1", numeric_literals, one),
+        ("3", numeric_literals, wk.never),
+        ("1", number_or_auto, one),
+        ("01", number_or_auto, number_or_auto),
+        ("auto", number_or_auto, auto),
+        ("true", wk.boolean, boolean_true),
+        ("1", number_and_empty, number_and_empty),
+        ("01", number_and_empty, number_and_empty),
+    ] {
+        let constrained = interner.intern_constrained_infer(0, Some(constraint));
+        let pattern = interner.intern_template(TemplateType {
+            texts: vec![String::new(), String::new()],
+            holes: vec![constrained],
+        });
+        let check = interner.intern_literal(LiteralValue::String(source.to_owned()));
+        let conditional = interner.intern_conditional(ConditionalType {
+            check,
+            extends_ty: pattern,
+            true_branch: reference,
+            false_branch: wk.never,
+            infer_count: 1,
+            distributive: false,
+            poisoned: false,
+        });
+        assert_eq!(
+            eval(&mut interner, &mut next, &mut memo, conditional),
+            expected,
+            "composite constrained capture {source}"
+        );
+    }
+}
+
+#[test]
+fn constrained_non_template_infer_rejects_candidates_outside_its_bound() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let constrained = interner.intern_constrained_infer(0, Some(wk.number));
+    let reference = interner.intern_infer(0);
+    let check = interner.intern_literal(LiteralValue::String("1".to_owned()));
+    let conditional = interner.intern_conditional(ConditionalType {
+        check,
+        extends_ty: constrained,
+        true_branch: reference,
+        false_branch: wk.never,
+        infer_count: 1,
+        distributive: false,
+        poisoned: false,
+    });
+    let mut next = 0;
+    let mut memo = FxHashMap::default();
+
+    assert_eq!(
+        eval(&mut interner, &mut next, &mut memo, conditional),
+        wk.never
+    );
+}
+
+#[test]
+fn repeated_and_nested_constrained_infer_binders_keep_lexical_ownership() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let constrained = interner.intern_constrained_infer(0, Some(wk.number));
+    let reference = interner.intern_infer(0);
+    let repeated_pattern = interner.intern_template(TemplateType {
+        texts: vec![String::new(), ":".to_owned(), String::new()],
+        holes: vec![constrained, constrained],
+    });
+    let repeated_check = interner.intern_literal(LiteralValue::String("1:2".to_owned()));
+    let repeated = interner.intern_conditional(ConditionalType {
+        check: repeated_check,
+        extends_ty: repeated_pattern,
+        true_branch: reference,
+        false_branch: wk.never,
+        infer_count: 1,
+        distributive: false,
+        poisoned: false,
+    });
+    let one = interner.intern_literal(LiteralValue::Number(1.0));
+    let two = interner.intern_literal(LiteralValue::Number(2.0));
+    let repeated_expected = interner.union(vec![one, two]);
+
+    let nested_pattern = interner.intern_template(TemplateType {
+        texts: vec![String::new(), String::new()],
+        holes: vec![constrained],
+    });
+    let nested_check = interner.intern_literal(LiteralValue::String("2".to_owned()));
+    let nested = interner.intern_conditional(ConditionalType {
+        check: nested_check,
+        extends_ty: nested_pattern,
+        true_branch: reference,
+        false_branch: wk.never,
+        infer_count: 1,
+        distributive: false,
+        poisoned: false,
+    });
+    let outer_check = interner.intern_literal(LiteralValue::String("outer".to_owned()));
+    let outer = interner.intern_conditional(ConditionalType {
+        check: outer_check,
+        extends_ty: reference,
+        true_branch: nested,
+        false_branch: wk.never,
+        infer_count: 1,
+        distributive: false,
+        poisoned: false,
+    });
+    let mut next = 0;
+    let mut memo = FxHashMap::default();
+
+    assert_eq!(
+        eval(&mut interner, &mut next, &mut memo, repeated),
+        repeated_expected
+    );
+    assert_eq!(eval(&mut interner, &mut next, &mut memo, outer), two);
+}
+
 /// M27 — a template with a **non-literal** hole (a `string` intrinsic, or a free
 /// declaration type parameter) stays a **symbolic** node; an **error-typed** hole
 /// degrades the whole template to the error type (M22 cascade suppression).

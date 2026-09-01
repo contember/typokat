@@ -91,8 +91,11 @@ pub enum StructuralKey<'a> {
     },
     /// One immutable recursive-alias declaration identity.
     AliasTemplate(AliasId),
-    /// An **`infer` binder** (M25), keyed over its de Bruijn index alone.
-    Infer(u32),
+    /// An **`infer` binder** (M25), keyed over its de Bruijn index and constraint.
+    Infer {
+        index: u32,
+        constraint: Option<TypeId>,
+    },
     /// A **mapped type** (M26), keyed over its whole shape (homomorphic flag, key
     /// source, value template, modifiers source (M28), and both modifier operators) so
     /// two structurally equal mapped types collide.
@@ -336,9 +339,10 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
             TypeTag::AliasTemplate.hash_discriminant(&mut h);
             alias.0.hash(&mut h);
         }
-        StructuralKey::Infer(index) => {
+        StructuralKey::Infer { index, constraint } => {
             TypeTag::Infer.hash_discriminant(&mut h);
             index.hash(&mut h);
+            constraint.map(|ty| ty.0).hash(&mut h);
         }
         StructuralKey::Mapped {
             homomorphic,

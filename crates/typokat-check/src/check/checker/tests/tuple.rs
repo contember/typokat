@@ -331,10 +331,10 @@ const capturedBad: Captured<[string, number]> = [\"ok\", \"bad\"];
     );
 }
 
-/// Every infer constraint is withheld by the infer owner itself; a tuple-rest
-/// wrapper must not add its older non-array record.
+/// Supported infer constraints lower without the tuple-rest wrapper adding an
+/// obsolete non-array record.
 #[test]
-fn constrained_infer_uses_central_owner_without_tuple_rest_duplicate() {
+fn constrained_infer_lowers_without_tuple_rest_duplicate() {
     let src = "\
 type Direct<T> = T extends infer R extends string ? R : never;
 type Rest<T> = T extends [...infer R extends readonly unknown[]] ? R : never;
@@ -342,15 +342,44 @@ type Rest<T> = T extends [...infer R extends readonly unknown[]] ? R : never;
     let out = check_source(src);
     assert!(out.parse_errors.is_empty(), "{:?}", out.parse_errors);
     assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
+    assert!(out.incomplete.is_empty(), "{:?}", out.incomplete);
+}
+
+#[test]
+fn constrained_template_infer_keeps_precise_true_branch_and_withholds_bigint() {
+    let src = "\
+type Numeric = \"1\" extends `${infer N extends 1 | 2}` ? N : number;
+const numeric: Numeric = 2;
+type BooleanCapture = \"true\" extends `${infer N extends boolean}` ? N : boolean;
+const booleanCapture: BooleanCapture = false;
+type Mixed = \"1\" extends `${infer N extends number | \"auto\"}` ? N : number;
+const mixed: Mixed = 2;
+type IntersectionCapture = \"1\" extends `${infer N extends number & {}}` ? N : never;
+const intersectionCapture: IntersectionCapture = 1;
+type Big = \"1\" extends `${infer N extends bigint}` ? N : never;
+type BigMixed = \"1\" extends `${infer N extends number | bigint}` ? N : never;
+";
+    let out = check_source(src);
+    assert!(out.parse_errors.is_empty(), "{:?}", out.parse_errors);
     let index = crate::span::LineIndex::new(src);
+    assert_eq!(
+        out.diagnostics
+            .iter()
+            .map(|diagnostic| (
+                index.line_of(diagnostic.span.start),
+                diagnostic.code.as_str(),
+            ))
+            .collect::<Vec<_>>(),
+        [(2, "TK2322"), (4, "TK2322"), (6, "TK2322")]
+    );
     assert_eq!(
         out.incomplete
             .iter()
             .map(|incomplete| (index.line_of(incomplete.span.start), incomplete.id.as_str(),))
             .collect::<Vec<_>>(),
         [
-            (1, "annotation-lower/infer-type/constraint"),
-            (2, "annotation-lower/infer-type/constraint"),
+            (9, "annotation-lower/infer-type/bigint-constraint"),
+            (10, "annotation-lower/infer-type/bigint-constraint"),
         ]
     );
 }

@@ -288,9 +288,13 @@ fn for_each_apply_child(
         | TypeTag::Literal
         | TypeTag::Enum
         | TypeTag::EnumMember
-        | TypeTag::Infer
         | TypeTag::MappedValue
         | TypeTag::AliasTemplate => {}
+        TypeTag::Infer => {
+            if let Some(constraint) = store.infer_type(ty).and_then(|infer| infer.constraint) {
+                visit(constraint);
+            }
+        }
         TypeTag::Declared => {
             if let Some(declared) = store.declared_type(ty) {
                 for &(_, value) in &declared.mapper {
@@ -840,11 +844,10 @@ impl<'a> Substitution<'a> {
                 TypeTag::Keyof => self.apply_keyof(interner, ty),
                 TypeTag::DeferredIndexedAccess => self.apply_deferred_indexed_access(interner, ty),
                 TypeTag::Declared => self.apply_declared(interner, ty),
-                // An `infer` binder (M25) / a mapped-value placeholder (M26) is a **bound**
-                // node-scoped variable, never a free declaration parameter — the no-capture
-                // rule (ADR-0002): substitution must leave it alone (the evaluator resolves
-                // it, not this pass).
-                TypeTag::Infer | TypeTag::MappedValue => ty,
+                // The infer variable itself remains bound; only its optional constraint can
+                // contain free declaration parameters.
+                TypeTag::Infer => self.apply_infer(interner, ty),
+                TypeTag::MappedValue => ty,
             };
 
             let frame_reentered = std::mem::replace(&mut self.frame_reentered, saved_reentered);

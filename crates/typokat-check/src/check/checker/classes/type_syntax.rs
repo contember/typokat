@@ -452,8 +452,17 @@ where
                     let direct_infer =
                         Self::tuple_rest_infer_declaration(&rest_type.type_annotation);
                     if let Some(ty) = lowered {
-                        let array_like =
-                            direct_infer.is_some() || self.tuple_rest_container_is_array_like(ty);
+                        let array_like = if direct_infer.is_some() {
+                            self.factory
+                                .store()
+                                .infer_type(ty)
+                                .and_then(|infer| infer.constraint)
+                                .is_none_or(|constraint| {
+                                    self.tuple_rest_container_is_array_like(constraint)
+                                })
+                        } else {
+                            self.tuple_rest_container_is_array_like(ty)
+                        };
                         if array_like {
                             rest = Some(TupleRestType::new(fixed.len(), ty));
                         } else {
@@ -1011,19 +1020,6 @@ where
     }
 
     fn lower_infer(&mut self, infer: &oxc_ast::ast::TSInferType<'_>) -> SurfaceTypeResult<Ticket> {
-        let accepts_declaration = self
-            .infer_frames
-            .last()
-            .is_some_and(|frame| frame.accepts_infer_declarations);
-        if infer.type_parameter.constraint.is_some() {
-            if accepts_declaration {
-                let frame = self.infer_frames.last_mut().expect("checked above");
-                let name = infer.type_parameter.name.name.as_str();
-                let next = frame.binders.len() as u32;
-                frame.binders.entry(name.to_string()).or_insert(next);
-            }
-            return Err(self.unsupported(infer.span));
-        }
         let Some(frame) = self.infer_frames.last_mut() else {
             return Err(self.unsupported(infer.span));
         };
@@ -1033,7 +1029,13 @@ where
         let name = infer.type_parameter.name.name.as_str();
         let next = frame.binders.len() as u32;
         let index = *frame.binders.entry(name.to_string()).or_insert(next);
-        Ok(self.factory.intern_infer(index))
+        let constraint = infer
+            .type_parameter
+            .constraint
+            .as_ref()
+            .map(|constraint| self.lower_type(constraint))
+            .transpose()?;
+        Ok(self.factory.intern_constrained_infer(index, constraint))
     }
 
     fn resolve_infer_name(&mut self, name: &str) -> Option<TypeId> {
@@ -2177,7 +2179,7 @@ mod tests {
     }
 
     #[test]
-    fn constrained_infer_withholds_class_surface_without_unresolved_cascade() {
+    fn constrained_infer_lowers_on_class_surfaces_without_unresolved_cascade() {
         let source = "type X = string extends infer R extends readonly unknown[] ? R : never;";
         with_alias_type(source, |annotation| {
             let mut interner = Interner::with_intrinsics();
@@ -2185,13 +2187,17 @@ mod tests {
             let mut resolver = Resolver::default();
             let mut lowerer = TypeSyntaxLowerer::new(&mut factory, &mut resolver);
 
-            assert_eq!(
-                lowerer.lower(annotation),
-                Err(SurfaceTypeFailure::Unsupported(
-                    u32::try_from(source.find("infer R").unwrap()).unwrap()
-                ))
-            );
+            let root = lowerer.lower(annotation).expect("constrained infer lowers");
             assert!(lowerer.take_child_failures().is_empty());
+            let conditional = factory
+                .store()
+                .conditional_type(root)
+                .expect("conditional payload");
+            let infer = factory
+                .store()
+                .infer_type(conditional.extends_ty)
+                .expect("infer payload");
+            assert!(infer.constraint.is_some());
         });
     }
 

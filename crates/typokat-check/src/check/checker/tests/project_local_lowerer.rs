@@ -1607,7 +1607,7 @@ fn source_unconstrained_infer_tuple_rest_is_supported() {
 }
 
 #[test]
-fn source_constrained_infer_tuple_rest_stages_only_exact_infer_record() {
+fn source_constrained_infer_tuple_rest_is_supported() {
     let source = "type InferRest<T> = T extends [...infer R extends number[]] ? R : never;";
     let product = extract_library_product(source, "source-constrained-infer-rest");
     let group = product_group(&product, "InferRest");
@@ -1621,18 +1621,10 @@ fn source_constrained_infer_tuple_rest_stages_only_exact_infer_record() {
         None,
     );
 
-    assert!(receipt.unavailable.contains(&group));
-    assert!(!receipt.ready.contains(&group));
-    assert_eq!(receipt.group_types[group], None);
-    assert_eq!(receipt.library_records.len(), 1);
-    let crate::check::checker::project_local::project_local_pass_port::NormalizedCheckerRecordForTest::Incomplete(incomplete) = &receipt.library_records[0].record else {
-        panic!("constrained infer stages an incomplete")
-    };
-    assert_eq!(incomplete.id, "annotation-lower/infer-type/constraint");
-    let infer = "infer R extends number[]";
-    let start = u32::try_from(source.find(infer).expect("infer recipe")).expect("infer offset");
-    assert_eq!(incomplete.span.start, start);
-    assert_eq!(incomplete.span.end, start + infer.len() as u32);
+    assert!(receipt.ready.contains(&group));
+    assert!(!receipt.unavailable.contains(&group));
+    assert!(receipt.group_types[group].is_some());
+    assert!(receipt.library_records.is_empty());
 }
 
 #[test]
@@ -1665,13 +1657,131 @@ fn source_constrained_infer_tuple_rest_walks_nested_constraint_failure() {
     assert_eq!(incompletes.len(), 2);
     assert!(incompletes
         .iter()
-        .any(|record| record.id == "annotation-lower/infer-type/constraint"));
+        .any(|record| record.id == "annotation-lower/type-query/typeof"));
     assert!(incompletes
         .iter()
-        .any(|record| record.id == "annotation-lower/type-query/typeof"));
-    assert!(!incompletes
-        .iter()
         .any(|record| record.id == "annotation-lower/tuple-rest-element/non-array"));
+}
+
+#[test]
+fn source_infer_registration_reaches_function_constructor_and_object_positions() {
+    let source = r#"
+        type FunctionCapture<T> = T extends (value: infer R extends number) => void ? R : never;
+        type ConstructorCapture<T> = T extends new (value: infer R extends number) => object ? R : never;
+        type ObjectCapture<T> = T extends { value: infer R extends number } ? R : never;
+        type MemberCapture<T> = T extends { method(value: infer R extends number): void } ? R : never;
+    "#;
+    let product = extract_library_product(source, "source-structural-constrained-infer");
+    let groups = [
+        product_group(&product, "FunctionCapture"),
+        product_group(&product, "ConstructorCapture"),
+        product_group(&product, "ObjectCapture"),
+        product_group(&product, "MemberCapture"),
+    ];
+    let mut interner = Interner::with_intrinsics();
+    let receipt = lower_product_groups_for_test(
+        &product,
+        &mut interner,
+        &groups,
+        &BTreeMap::new(),
+        [None, None],
+        None,
+    );
+
+    for group in groups {
+        assert!(receipt.ready.contains(&group));
+        assert!(!receipt.unavailable.contains(&group));
+        let template = receipt.group_types[group].expect("ready alias template");
+        let alias = interner
+            .store()
+            .alias_template_id(template)
+            .expect("published alias identity");
+        let PublishedAliasTerminal::Ready(surface) = receipt
+            .aliases
+            .terminal(alias)
+            .expect("published alias terminal")
+        else {
+            panic!("constrained infer alias is ready")
+        };
+        let conditional = interner
+            .store()
+            .conditional_type(surface.body())
+            .expect("published alias body is conditional");
+        assert_eq!(conditional.infer_count, 1);
+        assert!(!conditional.poisoned);
+    }
+}
+
+#[test]
+fn source_outer_infer_reference_inside_nested_conditional_is_conservatively_rejected() {
+    let source = r#"
+        type Cross<T> = T extends infer Outer
+            ? "x" extends `${infer Inner}`
+                ? Outer
+                : never
+            : never;
+    "#;
+    let product = extract_library_product(source, "source-cross-frame-infer");
+    let group = product_group(&product, "Cross");
+    let mut interner = Interner::with_intrinsics();
+    let receipt = lower_product_groups_for_test(
+        &product,
+        &mut interner,
+        &[group],
+        &BTreeMap::new(),
+        [None, None],
+        None,
+    );
+
+    assert!(receipt.unavailable.contains(&group));
+    assert!(!receipt.ready.contains(&group));
+    assert_eq!(receipt.group_types[group], None);
+}
+
+#[test]
+fn source_bigint_constrained_infer_is_explicitly_unavailable() {
+    let source = r#"
+        type Big<T> = T extends `${infer N extends bigint}` ? N : never;
+        type BigMixed<T> = T extends `${infer N extends number | bigint}` ? N : never;
+    "#;
+    let product = extract_library_product(source, "source-bigint-constrained-infer");
+    let groups = [
+        product_group(&product, "Big"),
+        product_group(&product, "BigMixed"),
+    ];
+    let mut interner = Interner::with_intrinsics();
+    let receipt = lower_product_groups_for_test(
+        &product,
+        &mut interner,
+        &groups,
+        &BTreeMap::new(),
+        [None, None],
+        None,
+    );
+
+    for group in groups {
+        assert!(receipt.unavailable.contains(&group));
+        assert!(!receipt.ready.contains(&group));
+        assert_eq!(receipt.group_types[group], None);
+    }
+    assert_eq!(
+        receipt
+            .library_records
+            .iter()
+            .filter_map(|record| match &record.record {
+                crate::check::checker::project_local::project_local_pass_port::NormalizedCheckerRecordForTest::Incomplete(incomplete)
+                    if incomplete.id == "annotation-lower/infer-type/bigint-constraint" =>
+                {
+                    Some(incomplete.id.as_str())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        [
+            "annotation-lower/infer-type/bigint-constraint",
+            "annotation-lower/infer-type/bigint-constraint",
+        ]
+    );
 }
 
 #[test]

@@ -52,8 +52,8 @@ pub enum TypeTag {
     /// do not expand at lowering.
     Instantiation = 11,
     /// An **`infer` binder** (`infer U` inside a conditional's `extends` type — M25).
-    /// `payload` is the node-local de Bruijn index. Identity is the index alone, and
-    /// substitution never targets it (bound variable; ADR-0002 no-capture rule).
+    /// `payload` indexes an immutable [`InferType`] carrying the node-local de Bruijn
+    /// index and optional constraint.
     Infer = 12,
     /// A **mapped type** (`{ [K in S]: V }` — M26). `payload` indexes `Store::mapped`.
     /// Carries the key source, the value template (with `T[K]` represented as the
@@ -960,6 +960,14 @@ pub struct ConditionalType {
     /// Identity-bearing like [`distributive`](ConditionalType::distributive) (folded
     /// into the hash/eq).
     pub poisoned: bool,
+}
+
+/// One conditional `infer` binder occurrence. The constraint is part of structural
+/// identity because it controls candidate acceptance and template-literal capture.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct InferType {
+    pub index: u32,
+    pub constraint: Option<TypeId>,
 }
 
 /// Lazy alias instantiation `substitute(base, args)` (M25). `args` is sorted by

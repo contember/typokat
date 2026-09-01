@@ -2011,10 +2011,22 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                     outcome => outcome,
                 }
             }
-            TypeTag::Infer => IdentityAttempt::Decided(DemandOutcome::Ready(
-                store.infer_index(left).expect("infer payload")
-                    == store.infer_index(right).expect("infer payload"),
-            )),
+            TypeTag::Infer => {
+                let left = *store.infer_type(left).expect("infer payload");
+                let right = *store.infer_type(right).expect("infer payload");
+                if left.index != right.index {
+                    return IdentityAttempt::Decided(DemandOutcome::Ready(false));
+                }
+                Self::identical_optional(
+                    store,
+                    plan,
+                    left.constraint,
+                    right.constraint,
+                    seen,
+                    alpha_binders,
+                    retry,
+                )
+            }
             TypeTag::MappedValue => IdentityAttempt::Decided(DemandOutcome::Ready(true)),
             _ => IdentityAttempt::Decided(DemandOutcome::Ready(false)),
         }

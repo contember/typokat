@@ -20,6 +20,7 @@ pub(super) struct InferenceContext<'query> {
     mode: InferenceMode,
     normalization: Option<&'query dyn crate::relate::RelationNormalization>,
     active_params: Option<&'query FxHashSet<TypeParamId>>,
+    conditional_constraints: Option<&'query FxHashMap<TypeParamId, TypeId>>,
     exhaustion: Option<crate::class_semantics::Exhaustion>,
     demands: Vec<crate::relate::RelationDemand>,
     demand_set: FxHashSet<crate::relate::RelationDemand>,
@@ -112,7 +113,7 @@ fn unwrap_declared_type_recipe(interner: &Interner, mut derived: DerivedType) ->
 impl<'query> InferenceContext<'query> {
     /// Conditional-`infer` mode (M25): a union extends target collects from its
     /// members; a template-pattern target captures `infer` holes (M27).
-    pub(super) fn for_conditional() -> Self {
+    pub(super) fn for_conditional(constraints: &'query FxHashMap<TypeParamId, TypeId>) -> Self {
         InferenceContext {
             visited: FxHashSet::default(),
             source_stack: Vec::new(),
@@ -122,6 +123,7 @@ impl<'query> InferenceContext<'query> {
             mode: InferenceMode::Conditional,
             normalization: None,
             active_params: None,
+            conditional_constraints: Some(constraints),
             exhaustion: None,
             demands: Vec::new(),
             demand_set: FxHashSet::default(),
@@ -141,6 +143,7 @@ impl<'query> InferenceContext<'query> {
             mode: InferenceMode::CallSite,
             normalization: Some(normalization),
             active_params,
+            conditional_constraints: None,
             exhaustion: None,
             demands: Vec::new(),
             demand_set: FxHashSet::default(),
@@ -982,7 +985,7 @@ impl<'query> InferenceContext<'query> {
         };
         let n = holes.len();
         // (param id, captured segment) pairs, interned once the whole scan succeeds.
-        let mut captures: Vec<(TypeParamId, String)> = Vec::new();
+        let mut captures: Vec<(TypeParamId, TypeId)> = Vec::new();
         for (i, &hole) in holes.iter().enumerate() {
             let sep = texts.get(i + 1).map(String::as_str).unwrap_or("");
             let seg: &str = if i == n - 1 {
@@ -1004,7 +1007,35 @@ impl<'query> InferenceContext<'query> {
             };
             if interner.store().tag(hole) == TypeTag::TypeParam {
                 if let Some(id) = interner.store().type_param(hole).map(|p| p.id) {
-                    captures.push((id, seg.to_string()));
+                    let captured = match self
+                        .conditional_constraints
+                        .and_then(|constraints| constraints.get(&id))
+                        .map(|constraint| {
+                            super::helpers::constrained_template_capture(
+                                interner.store(),
+                                *constraint,
+                                seg,
+                            )
+                        }) {
+                        Some(Some(super::helpers::ConstrainedTemplateCapture::Numeric(
+                            super::helpers::TemplateNumericCapture::Literal(number),
+                        ))) => interner.intern_literal(LiteralValue::Number(number)),
+                        Some(Some(super::helpers::ConstrainedTemplateCapture::Numeric(
+                            super::helpers::TemplateNumericCapture::Number,
+                        ))) => interner.well_known().number,
+                        Some(Some(super::helpers::ConstrainedTemplateCapture::Boolean(value))) => {
+                            interner.intern_literal(LiteralValue::Boolean(value))
+                        }
+                        Some(Some(super::helpers::ConstrainedTemplateCapture::Constraint)) => *self
+                            .conditional_constraints
+                            .and_then(|constraints| constraints.get(&id))
+                            .expect("constrained capture retains its constraint"),
+                        Some(Some(super::helpers::ConstrainedTemplateCapture::String)) | None => {
+                            interner.intern_literal(LiteralValue::String(seg.to_string()))
+                        }
+                        Some(None) => return,
+                    };
+                    captures.push((id, captured));
                 }
             } else if !segment_matches_hole(interner.store(), hole, seg) {
                 return;
@@ -1013,9 +1044,8 @@ impl<'query> InferenceContext<'query> {
         if !rest.is_empty() {
             return;
         }
-        for (id, seg) in captures {
-            let lit = interner.intern_literal(LiteralValue::String(seg));
-            candidates.entry(id).or_default().push(lit);
+        for (id, captured) in captures {
+            candidates.entry(id).or_default().push(captured);
         }
     }
 

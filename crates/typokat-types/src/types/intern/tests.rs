@@ -2596,6 +2596,27 @@ fn template_interning_is_structural() {
     assert_ne!(adjacent, separated, "adjacency is part of identity");
 }
 
+#[test]
+fn infer_constraint_is_structural_identity() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let unconstrained = interner.intern_infer(0);
+    let number = interner.intern_constrained_infer(0, Some(wk.number));
+    let number_again = interner.intern_constrained_infer(0, Some(wk.number));
+    let string = interner.intern_constrained_infer(0, Some(wk.string));
+
+    assert_eq!(number, number_again);
+    assert_ne!(unconstrained, number);
+    assert_ne!(number, string);
+    assert_eq!(
+        interner
+            .store()
+            .infer_type(number)
+            .map(|infer| infer.constraint),
+        Some(Some(wk.number))
+    );
+}
+
 /// The well-known intrinsic ids are assigned in `IntrinsicKind::ALL` order
 /// and are stable/small — the property the relation engine relies on.
 #[test]

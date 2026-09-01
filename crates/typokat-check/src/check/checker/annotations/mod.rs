@@ -193,7 +193,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             TSType::TSConditionalType(cond) => return self.lower_conditional_type(scope, cond),
             // M25: an `infer U` binder — only meaningful inside a conditional's `extends`
             // position (where an infer frame is active). Elsewhere it is out of subset.
-            TSType::TSInferType(infer) => return self.lower_infer_type(infer),
+            TSType::TSInferType(infer) => return self.lower_infer_type(scope, infer),
             // M27: a template literal type `` `a${T}b` ``. Lowered to an interned node
             // (WU1) and, at a value-position demand site, constructed (collapse / cartesian
             // union) — see [`lower_template_type`].
@@ -289,8 +289,13 @@ pub(super) fn modifier_op(op: Option<TSMappedTypeModifierOperator>) -> ModifierO
 
 #[cfg(test)]
 mod multi_child_recovery_tests {
+    use crate::check::checker::library_compiler::{
+        check_caller_certified_collision_free_source_with_owned_library,
+        compile_owned_injected_profile, InjectedLibrarySource,
+    };
     use crate::check::test_support::check_source;
     use crate::diagnostics::DiagnosticCode;
+    use crate::source::LibraryFileOrdinal;
 
     fn starts(source: &str, needle: &str) -> Vec<u32> {
         source
@@ -319,6 +324,41 @@ mod multi_child_recovery_tests {
             output.incomplete[0].span.start,
             starts(source, "Symbol.iterator")[0]
         );
+    }
+
+    #[test]
+    fn shadowed_symbol_value_does_not_inherit_certified_library_authority() -> Result<(), String> {
+        let (_, state) = compile_owned_injected_profile(&[InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(0),
+            name: "certified-symbol-shadow.d.ts",
+            source: "declare const Symbol: {};",
+        }])
+        .map_err(|error| format!("{error:?}"))?;
+        let run = check_caller_certified_collision_free_source_with_owned_library(
+            state,
+            r#"
+                function inspect(Symbol: { species: "local" }) {
+                    type Branded = string & { [Symbol.species]: "brand" };
+                }
+            "#,
+        )?;
+
+        assert!(
+            run.result.diagnostics.is_empty(),
+            "{:?}",
+            run.result.diagnostics
+        );
+        assert_eq!(
+            run.result.incomplete.len(),
+            1,
+            "{:?}",
+            run.result.incomplete
+        );
+        assert_eq!(
+            run.result.incomplete[0].id,
+            "signature/property-signature/computed-key"
+        );
+        Ok(())
     }
 
     #[test]

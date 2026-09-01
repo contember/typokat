@@ -5428,6 +5428,7 @@ pub(in crate::check::checker) struct ProjectLocalUserPassPlan<'a> {
     pub product_type_overlays: Vec<(TypeGroupId, context::ProjectLocalTypeOverlayDraft)>,
     pub user_namespace_demands: Vec<String>,
     pub library_identity_groups: [Option<TypeGroupId>; 8],
+    pub certified_library_values: context::CertifiedLibraryValues,
     pub next_type_param: u32,
     pub lexical_array_alias: Option<TypeGroupId>,
     pub demand_gateway: &'a mut dyn context::ProjectLocalUserDemandGateway,
@@ -5451,6 +5452,7 @@ pub(in crate::check::checker) fn check_bound_project_local_programs<'a, 'ast>(
         product_type_overlays,
         user_namespace_demands,
         library_identity_groups,
+        certified_library_values,
         next_type_param,
         lexical_array_alias,
         demand_gateway,
@@ -5708,6 +5710,7 @@ pub(in crate::check::checker) fn check_bound_project_local_programs<'a, 'ast>(
     pass.project_local_library_identity_groups = Some(library_identity_groups);
     pass.semantic_queries
         .set_native_identity_availability(library_identity_groups.map(|group| group.is_some()));
+    pass.certified_library_values = certified_library_values;
     pass.install_project_local_type_environment_base(published_types);
     pass.global_object_type = Some(project_local_global_object);
     pass.terminalize_unavailable_type_groups();

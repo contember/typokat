@@ -18,8 +18,8 @@ use super::project_local_pass_port::{
 };
 use super::recipe_primitives::{
     build_contextual_type_parameter_index, group_has_runtime_value, has_unsupported_computed_name,
-    infer_count, is_type_parameter_reference, mapped_modifier, member_visibility,
-    merge_object_surface, property_key,
+    is_type_parameter_reference, mapped_modifier, member_visibility, merge_object_surface,
+    property_key,
 };
 use super::record_staging::{
     LibraryRecordAccumulator, LibraryRecordEventIdentity, LibraryRecordOwnerIdentity,
@@ -196,6 +196,7 @@ struct ProductLowerer<'product, 'interner> {
     alias_unavailable: Vec<Option<PublishedAliasUnavailable>>,
     alias_indirection_depth: u32,
     mapped_frames: Vec<ProductMappedFrame>,
+    infer_frames: Vec<ProductInferFrame>,
     resolving_alias_depth: Vec<Option<u32>>,
     seed_aliases: PublishedAliases,
     records: LibraryRecordAccumulator,
@@ -223,6 +224,13 @@ struct ProductMappedFrame {
     parameter: TypeParameterKey,
     homomorphic: bool,
     modifiers_source: Option<TypeId>,
+}
+
+#[derive(Default)]
+struct ProductInferFrame {
+    binders: BTreeMap<TypeParameterKey, u32>,
+    accepts_declarations: bool,
+    active: bool,
 }
 
 #[derive(Clone)]
@@ -477,6 +485,7 @@ impl<'product, 'interner> ProductLowerer<'product, 'interner> {
             alias_unavailable: vec![None; product.group_count()],
             alias_indirection_depth: 0,
             mapped_frames: Vec::new(),
+            infer_frames: Vec::new(),
             resolving_alias_depth: vec![None; product.group_count()],
             seed_aliases,
             records: LibraryRecordAccumulator::default(),
@@ -1717,18 +1726,15 @@ impl<'product, 'interner> ProductLowerer<'product, 'interner> {
                             TypeRecipeNode::Infer(parameter) => Some(parameter),
                             _ => None,
                         };
-                        if direct_infer.is_some_and(|parameter| {
-                            self.product.type_parameters()[parameter.index()]
-                                .constraint
-                                .is_some()
-                        }) {
-                            if error.is_none() {
-                                error = Some(ProductLoweringError::UnsupportedRecipe);
-                            }
-                            continue;
-                        }
                         let array_like = match lowered {
-                            Some(_) if direct_infer.is_some() => true,
+                            Some(ty) if direct_infer.is_some() => self
+                                .interner
+                                .store()
+                                .infer_type(ty)
+                                .and_then(|infer| infer.constraint)
+                                .is_none_or(|constraint| {
+                                    self.tuple_rest_container_is_array_like(constraint)
+                                }),
                             Some(ty) => {
                                 let mut seen = BTreeSet::new();
                                 match self.tuple_rest_recipe_is_array_like(
@@ -1927,47 +1933,72 @@ impl<'product, 'interner> ProductLowerer<'product, 'interner> {
             } => {
                 let mut error = None;
                 let check_recipe = check;
+                self.infer_frames.push(ProductInferFrame::default());
                 let check =
                     remember_lowering_error(&mut error, self.lower_type(check_recipe, owner));
+                if let Some(frame) = self.infer_frames.last_mut() {
+                    frame.accepts_declarations = true;
+                }
                 let extends_ty =
                     remember_lowering_error(&mut error, self.lower_type(extends, owner));
+                if let Some(frame) = self.infer_frames.last_mut() {
+                    frame.accepts_declarations = false;
+                    frame.active = true;
+                }
                 let true_branch = remember_lowering_error(
                     &mut error,
                     self.with_indirection(|lowerer| lowerer.lower_type(when_true, owner)),
                 );
+                if let Some(frame) = self.infer_frames.last_mut() {
+                    frame.active = false;
+                }
                 let false_branch = remember_lowering_error(
                     &mut error,
                     self.with_indirection(|lowerer| lowerer.lower_type(when_false, owner)),
                 );
+                let frame = self
+                    .infer_frames
+                    .pop()
+                    .expect("conditional lowering closes its infer frame");
                 if let Some(error) = error {
                     return Err(error);
                 }
+                let infer_count = u32::try_from(frame.binders.len())
+                    .map_err(|_| ProductLoweringError::UnsupportedRecipe)?;
                 let conditional = ConditionalType {
                     check: check.expect("successful conditional check"),
                     extends_ty: extends_ty.expect("successful conditional constraint"),
                     true_branch: true_branch.expect("successful conditional true branch"),
                     false_branch: false_branch.expect("successful conditional false branch"),
-                    infer_count: infer_count(self.product, extends),
+                    infer_count,
                     distributive: is_type_parameter_reference(self.product, check_recipe),
                     poisoned: false,
                 };
                 Ok(self.interner.intern_conditional(conditional))
             }
             TypeRecipeNode::Infer(parameter) => {
-                if let Some(constraint) =
-                    self.product.type_parameters()[parameter.index()].constraint
-                {
-                    let _ = self.lower_type(constraint, owner);
+                let Some(frame) = self.infer_frames.last_mut() else {
+                    return Err(ProductLoweringError::UnsupportedRecipe);
+                };
+                if !frame.accepts_declarations {
+                    return Err(ProductLoweringError::UnsupportedRecipe);
+                }
+                let next = u32::try_from(frame.binders.len())
+                    .map_err(|_| ProductLoweringError::UnsupportedRecipe)?;
+                let index = *frame.binders.entry(parameter).or_insert(next);
+                let constraint = self.product.type_parameters()[parameter.index()]
+                    .constraint
+                    .map(|constraint| self.lower_type(constraint, owner))
+                    .transpose()?;
+                if constraint.is_some_and(|constraint| self.type_contains_bigint(constraint)) {
                     return self.unsupported(
                         recipe,
                         owner,
-                        "annotation-lower/infer-type/constraint",
-                        "infer type constraint not lowered",
+                        "annotation-lower/infer-type/bigint-constraint",
+                        "bigint-constrained infer requires bigint literal types",
                     );
                 }
-                let index = u32::try_from(parameter.index())
-                    .map_err(|_| ProductLoweringError::UnsupportedRecipe)?;
-                Ok(self.interner.intern_infer(index))
+                Ok(self.interner.intern_constrained_infer(index, constraint))
             }
             TypeRecipeNode::Template { texts, holes } => {
                 let texts = texts
@@ -1999,6 +2030,26 @@ impl<'product, 'interner> ProductLowerer<'product, 'interner> {
                 "contextual keyword lowering records its typed incomplete before degradation"
             ),
         }
+    }
+
+    fn type_contains_bigint(&self, root: TypeId) -> bool {
+        let mut pending = vec![root];
+        let mut visited = BTreeSet::new();
+        while let Some(ty) = pending.pop() {
+            if !visited.insert(ty) {
+                continue;
+            }
+            if ty == self.interner.well_known().bigint {
+                return true;
+            }
+            if let Some(members) = self.interner.store().union_members(ty) {
+                pending.extend(members.iter().copied());
+            }
+            if let Some(members) = self.interner.store().intersection_members(ty) {
+                pending.extend(members.iter().copied());
+            }
+        }
+        false
     }
 
     fn lower_literal(
@@ -2162,6 +2213,33 @@ impl<'product, 'interner> ProductLowerer<'product, 'interner> {
         owner: IssueOwner,
     ) -> Result<TypeId, ProductLoweringError> {
         if arguments.is_empty() {
+            let innermost = self.infer_frames.len().checked_sub(1);
+            if let Some((owner, index)) = self
+                .infer_frames
+                .iter()
+                .enumerate()
+                .rev()
+                .filter(|(_, frame)| frame.active)
+                .find_map(|(owner, frame)| {
+                    frame
+                        .binders
+                        .get(&parameter)
+                        .copied()
+                        .map(|index| (owner, index))
+                })
+            {
+                if Some(owner) != innermost {
+                    return Err(ProductLoweringError::UnsupportedRecipe);
+                }
+                return Ok(self.interner.intern_infer(index));
+            }
+            if self
+                .infer_frames
+                .iter()
+                .any(|frame| frame.binders.contains_key(&parameter))
+            {
+                return Err(ProductLoweringError::UnsupportedRecipe);
+            }
             return Ok(self.type_parameter_types[parameter.index()]);
         }
         let _ = self.lower_types(arguments, owner);
@@ -2849,7 +2927,7 @@ impl<'product, 'interner> ProductLowerer<'product, 'interner> {
         if !arguments.is_empty() {
             return None;
         }
-        self.contextual_type_parameters[recipe.index()].or_else(|| match resolution {
+        self.contextual_type_parameters[recipe.index()].or(match resolution {
             TypeReferenceResolution::TypeParameter(parameter) => Some(*parameter),
             _ => None,
         })

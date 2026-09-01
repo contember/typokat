@@ -148,6 +148,79 @@ fn repeated_nontrivial_positive_and_negative_pairs_are_constant_time_memo_hits()
 }
 
 #[test]
+fn infer_identity_recurses_into_constraints_and_caches_both_verdicts() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let left_constraint = generic_identity(&mut interner, TypeParamId(91_040), None);
+    let alpha_constraint = generic_identity(&mut interner, TypeParamId(91_041), None);
+    let left = interner.intern_constrained_infer(0, Some(left_constraint));
+    let alpha = interner.intern_constrained_infer(0, Some(alpha_constraint));
+    let constraint_mismatch = interner.intern_constrained_infer(0, Some(wk.string));
+    let index_mismatch = interner.intern_constrained_infer(1, Some(left_constraint));
+    let missing_constraint = interner.intern_infer(0);
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    let (warm, warm_measure) = measured(|| {
+        let mut coordinator = SemanticQueryCoordinator::new(
+            &mut interner,
+            &published,
+            &mut state,
+            &mut next_type_param,
+        );
+        (
+            coordinator.is_identical(left, alpha),
+            coordinator.is_identical(left, constraint_mismatch),
+            coordinator.is_identical(left, index_mismatch),
+            coordinator.is_identical(left, missing_constraint),
+        )
+    });
+    assert_eq!(
+        warm,
+        (
+            DemandOutcome::Ready(true),
+            DemandOutcome::Ready(false),
+            DemandOutcome::Ready(false),
+            DemandOutcome::Ready(false),
+        )
+    );
+    assert_eq!(warm_measure.durable_identity_yes_inserts, 1);
+    assert_eq!(warm_measure.durable_identity_no_inserts, 3);
+
+    let ((), repeat_measure) = measured(|| {
+        for _ in 0..REPEATS {
+            let mut coordinator = SemanticQueryCoordinator::new(
+                &mut interner,
+                &published,
+                &mut state,
+                &mut next_type_param,
+            );
+            assert_eq!(
+                coordinator.is_identical(alpha, left),
+                DemandOutcome::Ready(true)
+            );
+            assert_eq!(
+                coordinator.is_identical(constraint_mismatch, left),
+                DemandOutcome::Ready(false)
+            );
+            assert_eq!(
+                coordinator.is_identical(index_mismatch, left),
+                DemandOutcome::Ready(false)
+            );
+            assert_eq!(
+                coordinator.is_identical(missing_constraint, left),
+                DemandOutcome::Ready(false)
+            );
+        }
+    });
+    assert_eq!(repeat_measure.durable_identity_yes_hits, REPEATS);
+    assert_eq!(repeat_measure.durable_identity_no_hits, REPEATS * 3);
+    assert_eq!(repeat_measure.planner_transactions, 0);
+    assert_eq!(repeat_measure.identity_recursive_calls, 0);
+}
+
+#[test]
 fn alpha_renamed_generics_remain_identical_with_near_miss_ordering_guards() {
     fn two_parameter_identity(interner: &mut Interner) -> TypeId {
         let first = TypeParamId(91_020);

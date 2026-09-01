@@ -86,6 +86,14 @@ impl<'a> SurfaceTypeFactory<'a> {
         self.interner.intern_infer(index)
     }
 
+    pub(in crate::check::checker) fn intern_constrained_infer(
+        &mut self,
+        index: u32,
+        constraint: Option<TypeId>,
+    ) -> TypeId {
+        self.interner.intern_constrained_infer(index, constraint)
+    }
+
     pub(in crate::check::checker) fn intern_mapped_value(&mut self) -> TypeId {
         self.interner.intern_mapped_value()
     }

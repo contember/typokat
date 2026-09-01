@@ -211,7 +211,23 @@ pub fn infer_from_types_for_conditional(
     target: TypeId,
     candidates: &mut Candidates,
 ) {
-    let mut ctx = InferenceContext::for_conditional();
+    infer_from_types_for_constrained_conditional(
+        interner,
+        source,
+        target,
+        &FxHashMap::default(),
+        candidates,
+    );
+}
+
+pub(crate) fn infer_from_types_for_constrained_conditional(
+    interner: &mut Interner,
+    source: TypeId,
+    target: TypeId,
+    constraints: &FxHashMap<TypeParamId, TypeId>,
+    candidates: &mut Candidates,
+) {
+    let mut ctx = InferenceContext::for_conditional(constraints);
     ctx.infer(interner, source, target, candidates);
 }
 

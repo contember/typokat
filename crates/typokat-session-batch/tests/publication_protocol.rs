@@ -496,3 +496,22 @@ fn project_local_computed_keys_use_the_certified_symbol_value() {
         })
     );
 }
+
+#[test]
+fn project_local_computed_keys_reject_a_shadowed_symbol_value() {
+    let receipt = invoke(
+        "project-local-shadowed-symbol-value",
+        "function inspect(Symbol: { species: \"local\" }) {\n\
+           type Branded = string & { [Symbol.species]: \"brand\" };\n\
+         }\n",
+    );
+    assert_eq!(
+        receipt["semantic"],
+        json!({
+            "diagnostics": [],
+            "exit_code": 3,
+            "incompletes": ["signature/property-signature/computed-key"],
+            "parse_errors": [],
+        })
+    );
+}

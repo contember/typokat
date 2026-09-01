@@ -317,9 +317,17 @@ impl Interner {
             match store.tag(owner) {
                 TypeTag::Intrinsic
                 | TypeTag::Literal
-                | TypeTag::Infer
                 | TypeTag::MappedValue
                 | TypeTag::AliasTemplate => {}
+                TypeTag::Infer => {
+                    if let Some(constraint) = store
+                        .infer_type(owner)
+                        .ok_or("validated infer payload is missing")?
+                        .constraint
+                    {
+                        push_type_operand(&mut references, owner, constraint);
+                    }
+                }
                 TypeTag::Enum => {
                     store
                         .enum_type(owner)

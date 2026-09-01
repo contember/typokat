@@ -8,8 +8,8 @@ use crate::types::layered::{LayeredMap, LayeredSet, LayeredVec};
 use crate::types::repr::{
     AliasId, ArrayType, ClassInstanceType, ConditionalType, DeclaredRecipeId, DeclaredType,
     DeclaredTypeRecipe, DeferredIndexedAccessType, EnumId, EnumMemberId, EnumMemberType, EnumType,
-    FunctionType, InstantiationType, IntrinsicKind, LiteralValue, MappedType, ObjectType,
-    TemplateType, TupleType, TypeFlags, TypeParamId, TypeParamType, TypeTag,
+    FunctionType, InferType, InstantiationType, IntrinsicKind, LiteralValue, MappedType,
+    ObjectType, TemplateType, TupleType, TypeFlags, TypeParamId, TypeParamType, TypeTag,
 };
 use rustc_hash::FxHashSet;
 use std::sync::Arc;
@@ -88,6 +88,8 @@ pub struct Store {
     /// template row is reserved empty and filled in place (`fill_conditional`), like a
     /// nominal object.
     conditionals: LayeredVec<ConditionalType>,
+    /// Conditional infer binders, including identity-bearing optional constraints.
+    infers: LayeredVec<InferType>,
     /// Lazy alias instantiations (M25). Addressed by the `payload` of an
     /// `Instantiation`-tagged row. Identity is `(base, sorted args)`.
     instantiations: LayeredVec<InstantiationType>,
@@ -211,6 +213,7 @@ impl Store {
         self.arrays.freeze_as_base()?;
         self.tuples.freeze_as_base()?;
         self.conditionals.freeze_as_base()?;
+        self.infers.freeze_as_base()?;
         self.instantiations.freeze_as_base()?;
         self.class_instances.freeze_as_base()?;
         self.deferred_indexed_accesses.freeze_as_base()?;
@@ -247,6 +250,7 @@ impl Store {
             arrays: self.arrays.fork_delta()?,
             tuples: self.tuples.fork_delta()?,
             conditionals: self.conditionals.fork_delta()?,
+            infers: self.infers.fork_delta()?,
             instantiations: self.instantiations.fork_delta()?,
             class_instances: self.class_instances.fork_delta()?,
             deferred_indexed_accesses: self.deferred_indexed_accesses.fork_delta()?,
@@ -281,6 +285,7 @@ impl Store {
                 || self.arrays.local_len() != 0
                 || self.tuples.local_len() != 0
                 || self.conditionals.local_len() != 0
+                || self.infers.local_len() != 0
                 || self.instantiations.local_len() != 0
                 || self.class_instances.local_len() != 0
                 || self.deferred_indexed_accesses.local_len() != 0
@@ -321,6 +326,7 @@ impl Store {
             && self.arrays.shares_base_with(&other.arrays)
             && self.tuples.shares_base_with(&other.tuples)
             && self.conditionals.shares_base_with(&other.conditionals)
+            && self.infers.shares_base_with(&other.infers)
             && self.instantiations.shares_base_with(&other.instantiations)
             && self
                 .class_instances
@@ -374,6 +380,7 @@ impl Store {
             && self.arrays.shares_base_with(&other.arrays)
             && self.tuples.shares_base_with(&other.tuples)
             && self.conditionals.shares_base_with(&other.conditionals)
+            && self.infers.shares_base_with(&other.infers)
             && self.instantiations.shares_base_with(&other.instantiations)
             && self
                 .class_instances
@@ -423,6 +430,7 @@ impl Store {
                 + self.arrays.local_len()
                 + self.tuples.local_len()
                 + self.conditionals.local_len()
+                + self.infers.local_len()
                 + self.instantiations.local_len()
                 + self.class_instances.local_len()
                 + self.deferred_indexed_accesses.local_len()
@@ -587,14 +595,17 @@ impl Store {
             .get(usize::try_from(self.payload(id)).ok()?)
     }
 
-    /// The de Bruijn index of an `infer` binder (M25), or `None` if `id` is not one.
-    /// The index is reconstructed from the `payload` (stored inline like an intrinsic
-    /// kind).
-    pub fn infer_index(&self, id: TypeId) -> Option<u32> {
+    /// The immutable `infer` binder row (M25), or `None` for another type tag.
+    pub fn infer_type(&self, id: TypeId) -> Option<&InferType> {
         if self.tag(id) != TypeTag::Infer {
             return None;
         }
-        Some(self.payload(id))
+        self.infers.get(usize::try_from(self.payload(id)).ok()?)
+    }
+
+    /// The de Bruijn index of an `infer` binder (M25), or `None` if `id` is not one.
+    pub fn infer_index(&self, id: TypeId) -> Option<u32> {
+        self.infer_type(id).map(|infer| infer.index)
     }
 
     /// The `MappedType` of a mapped type (M26), or `None` if `id` is not a mapped type.
@@ -998,10 +1009,11 @@ impl Store {
         self.push(TypeTag::Declared, flags, payload)
     }
 
-    /// Append an infer-binder row (M25). Internal — `Interner` owns dedup (by index).
-    /// The de Bruijn index is stored inline in `payload`.
-    pub fn push_infer(&mut self, index: u32, flags: TypeFlags) -> TypeId {
-        self.push(TypeTag::Infer, flags, index)
+    /// Append an immutable infer-binder row (M25). Internal — `Interner` owns dedup.
+    pub fn push_infer(&mut self, infer: InferType, flags: TypeFlags) -> TypeId {
+        let payload = u32::try_from(self.infers.len()).expect("infer payload fits u32");
+        self.infers.push_local(infer);
+        self.push(TypeTag::Infer, flags, payload)
     }
 
     /// Append a mapped-type row (M26). Internal — `Interner` owns dedup (by the whole

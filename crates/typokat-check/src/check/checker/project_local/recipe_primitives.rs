@@ -2,8 +2,8 @@
 
 use super::project_local_pass_port::{
     number_to_string, well_known_symbol_from_name, Accessibility, DeclarationGroupRecipe,
-    DeclarationPayload, LibraryDeclarationProduct, MappedModifier, MemberRecipe, ModifierOp,
-    ObjectType, PropertyKey, PropertyNameRecipe, SignatureKey, SymbolicValueNameRecipe,
+    DeclarationPayload, GroupKey, LibraryDeclarationProduct, MappedModifier, MemberRecipe,
+    ModifierOp, ObjectType, PropertyKey, PropertyNameRecipe, SignatureKey, SymbolicValueNameRecipe,
     TypeParameterKey, TypeRecipeKey, TypeRecipeNode, TypeReferenceResolution,
     ValueReferenceResolution, Visibility,
 };
@@ -61,6 +61,38 @@ pub(super) fn property_key(
     }
 }
 
+pub(super) fn certified_well_known_symbol_owner(
+    product: &LibraryDeclarationProduct,
+) -> Option<GroupKey> {
+    let mut owner = None;
+    for member in product.members() {
+        let Some(PropertyNameRecipe::Computed {
+            value:
+                SymbolicValueNameRecipe::Path {
+                    path,
+                    resolution: ValueReferenceResolution::Group(candidate),
+                    ..
+                },
+            ..
+        }) = member.name.as_ref()
+        else {
+            continue;
+        };
+        if path
+            .last()
+            .and_then(|name| well_known_symbol_from_name(&product.strings()[name.index()]))
+            .is_none()
+        {
+            continue;
+        }
+        if owner.is_some_and(|owner| owner != *candidate) {
+            return None;
+        }
+        owner = Some(*candidate);
+    }
+    owner
+}
+
 pub(super) fn has_unsupported_computed_name(
     product: &LibraryDeclarationProduct,
     member: &MemberRecipe,
@@ -83,74 +115,6 @@ pub(super) fn is_type_parameter_reference(
             ..
         }
     )
-}
-
-pub(super) fn infer_count(product: &LibraryDeclarationProduct, recipe: TypeRecipeKey) -> u32 {
-    let mut seen = BTreeSet::new();
-    collect_infer(product, recipe, &mut seen);
-    u32::try_from(seen.len()).unwrap_or(u32::MAX)
-}
-
-fn collect_infer(
-    product: &LibraryDeclarationProduct,
-    recipe: TypeRecipeKey,
-    seen: &mut BTreeSet<usize>,
-) {
-    match &product.types()[recipe.index()].node {
-        TypeRecipeNode::Infer(parameter) => {
-            seen.insert(parameter.index());
-        }
-        TypeRecipeNode::Array(child) | TypeRecipeNode::Operator { operand: child, .. } => {
-            collect_infer(product, *child, seen);
-        }
-        TypeRecipeNode::Reference { arguments, .. }
-        | TypeRecipeNode::Import { arguments, .. }
-        | TypeRecipeNode::Union(arguments)
-        | TypeRecipeNode::Intersection(arguments) => {
-            for child in arguments.iter() {
-                collect_infer(product, *child, seen);
-            }
-        }
-        TypeRecipeNode::Tuple { elements } => {
-            for child in elements.iter() {
-                collect_infer(product, child.value, seen);
-            }
-        }
-        TypeRecipeNode::IndexedAccess { object, index } => {
-            collect_infer(product, *object, seen);
-            collect_infer(product, *index, seen);
-        }
-        TypeRecipeNode::Mapped { name, value, .. } => {
-            for child in name.iter().chain(value.iter()) {
-                collect_infer(product, *child, seen);
-            }
-        }
-        TypeRecipeNode::Conditional {
-            check,
-            extends,
-            when_true,
-            when_false,
-        } => {
-            for child in [check, extends, when_true, when_false] {
-                collect_infer(product, *child, seen);
-            }
-        }
-        TypeRecipeNode::Template { holes, .. } => {
-            for child in holes.iter() {
-                collect_infer(product, *child, seen);
-            }
-        }
-        TypeRecipeNode::Predicate {
-            value: Some(child), ..
-        } => collect_infer(product, *child, seen),
-        TypeRecipeNode::Predicate { value: None, .. }
-        | TypeRecipeNode::Keyword(_)
-        | TypeRecipeNode::Literal(_)
-        | TypeRecipeNode::Query { .. }
-        | TypeRecipeNode::Function(_)
-        | TypeRecipeNode::Constructor { .. }
-        | TypeRecipeNode::Object(_) => {}
-    }
 }
 
 pub(super) fn build_contextual_type_parameter_index(

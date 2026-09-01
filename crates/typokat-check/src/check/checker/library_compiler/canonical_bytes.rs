@@ -315,9 +315,13 @@ pub(super) fn encode_store_row(
                 bytes.type_id(*argument);
             }
         }
-        TypeTag::Infer => bytes.u32(store.infer_index(id).ok_or_else(|| {
-            InjectedProfileError::CanonicalProjection("missing infer index".to_owned())
-        })?),
+        TypeTag::Infer => {
+            let infer = store.infer_type(id).ok_or_else(|| {
+                InjectedProfileError::CanonicalProjection("missing infer payload".to_owned())
+            })?;
+            bytes.u32(infer.index);
+            bytes.optional_type_id(infer.constraint);
+        }
         TypeTag::Mapped => {
             let mapped = store.mapped_type(id).ok_or_else(|| {
                 InjectedProfileError::CanonicalProjection("missing mapped payload".to_owned())

@@ -105,25 +105,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// Lower an `infer U` declaration into the innermost conditional's `extends`
     /// frame. Binder references use [`resolve_infer_reference`] and remain visible
     /// through the true branch.
-    pub(super) fn lower_infer_type(&mut self, infer: &TSInferType<'_>) -> Option<TypeId> {
+    pub(super) fn lower_infer_type(
+        &mut self,
+        scope: ScopeId,
+        infer: &TSInferType<'_>,
+    ) -> Option<TypeId> {
         let name = infer.type_parameter.name.name.as_str();
-        let accepts_declaration = self
-            .cond_frames
-            .last()
-            .is_some_and(|frame| frame.accepts_infer_declarations);
-        if infer.type_parameter.constraint.is_some() {
-            self.record_incomplete(
-                "annotation-lower/infer-type/constraint",
-                Span::from_oxc(infer.span),
-                "infer type constraint not lowered",
-            );
-            if accepts_declaration {
-                let frame = self.cond_frames.last_mut()?;
-                let next = frame.binders.len() as u32;
-                frame.binders.entry(name.to_string()).or_insert(next);
-            }
-            return None;
-        }
         let frame = self.cond_frames.last_mut()?;
         if !frame.accepts_infer_declarations {
             return None;
@@ -136,7 +123,24 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 i
             }
         };
-        Some(self.interner.intern_infer(index))
+        if infer
+            .type_parameter
+            .constraint
+            .as_ref()
+            .is_some_and(|constraint| infer_constraint_contains_bigint(constraint))
+        {
+            self.record_incomplete(
+                "annotation-lower/infer-type/bigint-constraint",
+                Span::from_oxc(infer.span),
+                "bigint-constrained infer requires bigint literal types",
+            );
+            return None;
+        }
+        let constraint = match infer.type_parameter.constraint.as_ref() {
+            Some(constraint) => Some(self.lower_annotation(scope, constraint)?),
+            None => None,
+        };
+        Some(self.interner.intern_constrained_infer(index, constraint))
     }
 
     /// Lower a template literal type `` `a${T}b${U}c` `` to its interned node (M27, WU1).
@@ -545,5 +549,23 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
             _ => false,
         }
+    }
+}
+
+fn infer_constraint_contains_bigint(constraint: &TSType<'_>) -> bool {
+    match constraint {
+        TSType::TSBigIntKeyword(_) => true,
+        TSType::TSLiteralType(literal) => {
+            matches!(literal.literal, TSLiteral::BigIntLiteral(_))
+        }
+        TSType::TSUnionType(union) => union.types.iter().any(infer_constraint_contains_bigint),
+        TSType::TSIntersectionType(intersection) => intersection
+            .types
+            .iter()
+            .any(infer_constraint_contains_bigint),
+        TSType::TSParenthesizedType(parenthesized) => {
+            infer_constraint_contains_bigint(&parenthesized.type_annotation)
+        }
+        _ => false,
     }
 }

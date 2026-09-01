@@ -17,6 +17,7 @@ use super::project_local_pass_port::{
     CheckResult, ContainerKind, LibraryBinderUnit, LibraryDeclarationProduct, NamespaceId,
     ProjectLocalFinalTypeDependencies, ProjectLocalNamespaceSeed, ProjectLocalPublishedTypeInputs,
     ProjectLocalUserPassOutput, ProjectLocalUserPassRequest, ProjectProgram, TypeGroupId,
+    ValueStorageId,
 };
 #[cfg(any(test, feature = "test-utils"))]
 use super::project_local_pass_port::{
@@ -24,6 +25,7 @@ use super::project_local_pass_port::{
     project_local_probe_authority, project_local_semantic_query_state,
     project_local_user_pass_observables, run_project_local_user_pass_for_test, sha256_hex,
 };
+use super::recipe_primitives::certified_well_known_symbol_owner;
 use super::session::SessionCore;
 use super::ProjectLocalMappedProductGroupForTest;
 #[cfg(any(test, feature = "test-utils"))]
@@ -590,6 +592,19 @@ where
         });
     let next_type_param = u32::try_from(coordinator.type_parameter_ids().len())
         .expect("product type parameter count fits u32");
+    let certified_library_values = super::project_local_pass_port::CertifiedLibraryValues {
+        symbol: certified_well_known_symbol_owner(product)
+            .and_then(|owner| {
+                coordinator
+                    .mapped_groups()
+                    .get(owner.index())
+                    .filter(|row| row.product.product_key == owner.index())
+            })
+            .and_then(|row| row.local_value)
+            .map(|storage| {
+                ValueStorageId(u32::try_from(storage).expect("local value identity fits u32"))
+            }),
+    };
     let product_value_types = coordinator
         .mapped_groups()
         .iter()
@@ -652,6 +667,7 @@ where
                     product_type_overlays,
                     user_namespace_demands,
                     library_identity_groups,
+                    certified_library_values,
                     next_type_param,
                     lexical_array_alias,
                     demand_gateway: &mut demand_gateway,

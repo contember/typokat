@@ -196,12 +196,16 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         } else {
             self.with_indirection(|p| p.lower_annotation(scope, annotation))
         };
-        if infer.is_some_and(|infer| infer.type_parameter.constraint.is_some()) {
-            return None;
-        }
         if let Some(lowered) = lowered {
-            let container_is_array_like =
-                infer.is_some() || self.tuple_rest_container_is_array_like(lowered);
+            let container_is_array_like = if infer.is_some() {
+                self.interner
+                    .store()
+                    .infer_type(lowered)
+                    .and_then(|infer| infer.constraint)
+                    .is_none_or(|constraint| self.tuple_rest_container_is_array_like(constraint))
+            } else {
+                self.tuple_rest_container_is_array_like(lowered)
+            };
             if container_is_array_like {
                 return Some(lowered);
             }
