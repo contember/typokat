@@ -42,11 +42,21 @@ use std::collections::{BTreeMap, BTreeSet};
 #[cfg(test)]
 thread_local! {
     static PRODUCT_LOWERER_CONSTRUCTIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static PRODUCT_LOWERING_METADATA_PLAN_CONSTRUCTIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
 fn record_product_lowerer_construction_for_test() {
     PRODUCT_LOWERER_CONSTRUCTIONS.set(PRODUCT_LOWERER_CONSTRUCTIONS.get().saturating_add(1));
+}
+
+#[cfg(test)]
+fn record_product_lowering_metadata_plan_construction_for_test() {
+    PRODUCT_LOWERING_METADATA_PLAN_CONSTRUCTIONS.set(
+        PRODUCT_LOWERING_METADATA_PLAN_CONSTRUCTIONS
+            .get()
+            .saturating_add(1),
+    );
 }
 
 #[cfg(test)]
@@ -60,6 +70,22 @@ impl ProductLowererConstructionScopeForTest {
 
     pub fn finish(self) -> u64 {
         PRODUCT_LOWERER_CONSTRUCTIONS.get().saturating_sub(self.0)
+    }
+}
+
+#[cfg(test)]
+pub struct ProductLoweringMetadataPlanConstructionScopeForTest(u64);
+
+#[cfg(test)]
+impl ProductLoweringMetadataPlanConstructionScopeForTest {
+    pub fn start() -> Self {
+        Self(PRODUCT_LOWERING_METADATA_PLAN_CONSTRUCTIONS.get())
+    }
+
+    pub fn finish(self) -> u64 {
+        PRODUCT_LOWERING_METADATA_PLAN_CONSTRUCTIONS
+            .get()
+            .saturating_sub(self.0)
     }
 }
 
@@ -322,6 +348,8 @@ impl<'product, 'interner> ProductLowerer<'product, 'interner> {
                 interner.intern_type_param(id, product.strings()[parameter.name.index()].clone()),
             );
         }
+        #[cfg(test)]
+        record_product_lowering_metadata_plan_construction_for_test();
         let intrinsic_declarations: BTreeMap<usize, IntrinsicMarker> = product
             .intrinsic_marker_rows()
             .iter()

@@ -7,6 +7,7 @@ use crate::binder::product::{project_library_declaration_product, LibraryProduct
 use crate::check::checker::project_local::{
     observation_storage_counts_for_test, CheckerSession, ObservationEventKindForTest,
     ObservationScopeForTest, ProductLowererConstructionScopeForTest,
+    ProductLoweringMetadataPlanConstructionScopeForTest,
 };
 use crate::frontend::{run_prepared_project_frontend, FileInput};
 use crate::source::{CompilationOrigin, LibraryFileOrdinal};
@@ -134,9 +135,12 @@ fn checker_session_owns_product_binding_and_returns_real_check_results() {
 }
 
 #[test]
-fn generic_library_demand_constructs_one_product_lowerer_without_identity_collision() {
-    let product = Arc::new(extract_library_product("interface Box<T> { value: T }\n"));
-    let constructions = ProductLowererConstructionScopeForTest::start();
+fn separate_generic_library_demands_reuse_one_metadata_plan_without_identity_collision() {
+    let product = Arc::new(extract_library_product(
+        "interface Box<T> { value: T }\ninterface Cell<T> { current: T }\n",
+    ));
+    let lowerer_constructions = ProductLowererConstructionScopeForTest::start();
+    let metadata_plan_constructions = ProductLoweringMetadataPlanConstructionScopeForTest::start();
     let run = run_prepared_project_frontend(
         vec![FileInput {
             name: USER_PATH.to_owned(),
@@ -146,7 +150,10 @@ fn generic_library_demand_constructs_one_product_lowerer_without_identity_collis
 const before: string = identity("before");
 const box: Box<number> = { value: 1 };
 const boxValue: number = box.value;
-const after: string = identity("after");
+const between: string = identity("between");
+const cell: Cell<string> = { current: "cell" };
+const cellValue: string = cell.current;
+const after: number = identity(42);
 "#
             .to_owned(),
         }],
@@ -170,14 +177,19 @@ const after: string = identity("after");
     assert!(result.incomplete.is_empty());
     assert!(result.diagnostics.is_empty());
 
-    let construction_count = constructions.finish();
+    let lowerer_construction_count = lowerer_constructions.finish();
+    let metadata_plan_construction_count = metadata_plan_constructions.finish();
+    assert!(
+        lowerer_construction_count >= 2,
+        "the two independent demands must construct at least two real ProductLowerers, got {lowerer_construction_count}"
+    );
     assert_ne!(
-        construction_count, 0,
-        "the scope must count the real ProductLowerer constructor"
+        metadata_plan_construction_count, 0,
+        "the scope must count the metadata build inside ProductLowerer::new"
     );
     assert_eq!(
-        construction_count, 1,
-        "only the Box<number> demand constructs ProductLowerer"
+        metadata_plan_construction_count, 1,
+        "one immutable product-lowering metadata plan must serve the session; lowerers={lowerer_construction_count}, metadata_plans={metadata_plan_construction_count}"
     );
 }
 
