@@ -1,6 +1,6 @@
 //! Product-key scheduler and atomic terminal publication.
 
-use super::lowerer::{lower_product_groups, ProductLoweringSeed};
+use super::lowerer::{lower_product_groups, ProductLoweringMetadataPlan, ProductLoweringSeed};
 #[cfg(any(test, feature = "test-utils"))]
 use super::observation::ProjectLocalSemanticPhaseForTest;
 use super::project_local_pass_port::{
@@ -66,6 +66,7 @@ pub(super) struct ProjectLocalSemanticCoordinator {
     overlays: Vec<(TypeGroupId, ProjectLocalTypeOverlayDraft)>,
     library_records: LibraryRecordAccumulator,
     validations: ProjectLocalValidationAccumulator,
+    product_lowering_metadata_plan: Option<ProductLoweringMetadataPlan>,
 }
 
 pub(super) struct ProjectLocalPassDemandGateway<'a, Commit> {
@@ -572,6 +573,7 @@ impl ProjectLocalSemanticCoordinator {
             overlays: Vec::new(),
             library_records: LibraryRecordAccumulator::default(),
             validations: ProjectLocalValidationAccumulator::default(),
+            product_lowering_metadata_plan: None,
         }
     }
 
@@ -674,6 +676,9 @@ impl ProjectLocalSemanticCoordinator {
             }
             return closure.into_iter().collect();
         }
+        if self.product_lowering_metadata_plan.is_none() {
+            self.product_lowering_metadata_plan = Some(ProductLoweringMetadataPlan::new(product));
+        }
         let lowering = loop {
             for product_group in &closure {
                 if !self.session.cache().contains(*product_group)
@@ -698,6 +703,9 @@ impl ProjectLocalSemanticCoordinator {
             };
             let lowering = lower_product_groups(
                 product,
+                self.product_lowering_metadata_plan
+                    .as_ref()
+                    .expect("nonempty uncached lowering constructs its metadata plan"),
                 interner,
                 &materialized,
                 augmented_groups,

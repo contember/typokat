@@ -149,8 +149,100 @@ pub(super) struct ProductLoweringSeed<'a> {
     pub(super) overlays: &'a [(TypeGroupId, ProjectLocalTypeOverlayDraft)],
 }
 
+pub(super) struct ProductLoweringMetadataPlan {
+    intrinsic_declarations: BTreeMap<usize, IntrinsicMarker>,
+    contextual_type_parameters: Vec<Option<TypeParameterKey>>,
+    group_parameters: Vec<Vec<TypeParameterKey>>,
+    type_parameter_owners: Vec<Option<IssueOwner>>,
+    parameter_groups: Vec<BTreeSet<usize>>,
+    group_scc_members: Vec<Vec<usize>>,
+}
+
+impl ProductLoweringMetadataPlan {
+    pub(super) fn new(product: &LibraryDeclarationProduct) -> Self {
+        #[cfg(test)]
+        record_product_lowering_metadata_plan_construction_for_test();
+        let intrinsic_declarations = product
+            .intrinsic_marker_rows()
+            .iter()
+            .map(|row| (row.declaration.index(), row.marker))
+            .collect();
+        let contextual_type_parameters = build_contextual_type_parameter_index(product);
+        let group_parameters = product
+            .groups()
+            .iter()
+            .map(|group| {
+                group
+                    .fragments
+                    .iter()
+                    .find_map(|declaration| {
+                        match &product.declarations()[declaration.index()].payload {
+                            DeclarationPayload::Class {
+                                type_parameters, ..
+                            }
+                            | DeclarationPayload::Interface {
+                                type_parameters, ..
+                            }
+                            | DeclarationPayload::TypeAlias {
+                                type_parameters, ..
+                            } => Some(type_parameters.to_vec()),
+                            _ => None,
+                        }
+                    })
+                    .unwrap_or_default()
+            })
+            .collect();
+        let mut type_parameter_owners = vec![None; product.type_parameters().len()];
+        let mut parameter_groups = vec![BTreeSet::new(); product.type_parameters().len()];
+        for (group_index, group) in product.groups().iter().enumerate() {
+            for declaration in group.fragments.iter().copied() {
+                let row = &product.declarations()[declaration.index()];
+                let parameters = match &row.payload {
+                    DeclarationPayload::Class {
+                        type_parameters, ..
+                    }
+                    | DeclarationPayload::Interface {
+                        type_parameters, ..
+                    }
+                    | DeclarationPayload::TypeAlias {
+                        type_parameters, ..
+                    } => type_parameters,
+                    _ => continue,
+                };
+                let owner = IssueOwner {
+                    identity: LibraryRecordOwnerIdentity::Declaration(declaration.index()),
+                    start: row.binding_site.start,
+                };
+                for parameter in parameters.iter().copied() {
+                    type_parameter_owners[parameter.index()].get_or_insert(owner);
+                    parameter_groups[parameter.index()].insert(group_index);
+                }
+            }
+        }
+        let mut group_scc_members = vec![Vec::new(); product.group_count()];
+        for component in product.dependency_sccs() {
+            let members = component
+                .into_iter()
+                .map(|group| group.index())
+                .collect::<Vec<_>>();
+            for member in &members {
+                group_scc_members[*member] = members.clone();
+            }
+        }
+        Self {
+            intrinsic_declarations,
+            contextual_type_parameters,
+            group_parameters,
+            type_parameter_owners,
+            parameter_groups,
+            group_scc_members,
+        }
+    }
+}
+
 pub(super) fn lower_product_groups(
     product: &LibraryDeclarationProduct,
+    metadata_plan: &ProductLoweringMetadataPlan,
     interner: &mut Interner,
     materialized: &[usize],
     augmented_groups: &BTreeMap<usize, TypeGroupId>,
@@ -159,6 +251,7 @@ pub(super) fn lower_product_groups(
 ) -> ProductLoweringReceipt {
     let mut lowerer = ProductLowerer::new(
         product,
+        metadata_plan,
         interner,
         augmented_groups.clone(),
         native_array_groups,
@@ -226,17 +319,17 @@ pub(super) fn lower_product_groups(
     }
 }
 
-struct ProductLowerer<'product, 'interner> {
+struct ProductLowerer<'product, 'plan, 'interner> {
     product: &'product LibraryDeclarationProduct,
     interner: &'interner mut Interner,
     states: Vec<GroupState>,
     group_types: Vec<Option<TypeId>>,
     value_states: Vec<GroupState>,
     group_value_types: Vec<Option<TypeId>>,
-    group_parameters: Vec<Vec<TypeParameterKey>>,
+    group_parameters: &'plan [Vec<TypeParameterKey>],
     type_parameter_ids: Vec<TypeParamId>,
     type_parameter_types: Vec<TypeId>,
-    intrinsic_declarations: BTreeMap<usize, IntrinsicMarker>,
+    intrinsic_declarations: &'plan BTreeMap<usize, IntrinsicMarker>,
     augmented_groups: BTreeMap<usize, TypeGroupId>,
     staged_objects: BTreeMap<usize, ObjectType>,
     structural_drafts: BTreeMap<usize, ProductStructuralDraft>,
@@ -245,13 +338,13 @@ struct ProductLowerer<'product, 'interner> {
     structural_incomplete_groups: BTreeSet<usize>,
     recursive_alias_unavailable_groups: BTreeSet<usize>,
     overlays: Vec<(TypeGroupId, ProjectLocalTypeOverlayDraft)>,
-    contextual_type_parameters: Vec<Option<TypeParameterKey>>,
+    contextual_type_parameters: &'plan [Option<TypeParameterKey>],
     type_parameter_defaults: Vec<super::project_local_pass_port::PublishedTypeParameterDefault>,
     native_array_groups: [Option<usize>; 2],
     admitted_groups: BTreeSet<usize>,
     admitted_parameters: BTreeSet<usize>,
-    parameter_groups: Vec<BTreeSet<usize>>,
-    group_scc_members: Vec<Vec<usize>>,
+    parameter_groups: &'plan [BTreeSet<usize>],
+    group_scc_members: &'plan [Vec<usize>],
     missing_admissions: BTreeSet<usize>,
     owned_object_reservations: BTreeSet<TypeId>,
     alias_ids: Vec<Option<AliasId>>,
@@ -266,7 +359,7 @@ struct ProductLowerer<'product, 'interner> {
     records: LibraryRecordAccumulator,
     validations: ProjectLocalValidationAccumulator,
     current_validation_group: Option<usize>,
-    type_parameter_owners: Vec<Option<IssueOwner>>,
+    type_parameter_owners: &'plan [Option<IssueOwner>],
     default_applications: BTreeMap<(usize, LibraryRecordOwnerIdentity), PendingDefaultApplication>,
 }
 
@@ -324,9 +417,10 @@ fn remember_lowering_error<T>(
     }
 }
 
-impl<'product, 'interner> ProductLowerer<'product, 'interner> {
+impl<'product, 'plan, 'interner> ProductLowerer<'product, 'plan, 'interner> {
     fn new(
         product: &'product LibraryDeclarationProduct,
+        metadata_plan: &'plan ProductLoweringMetadataPlan,
         interner: &'interner mut Interner,
         augmented_groups: BTreeMap<usize, TypeGroupId>,
         native_array_groups: [Option<usize>; 2],
@@ -348,65 +442,11 @@ impl<'product, 'interner> ProductLowerer<'product, 'interner> {
                 interner.intern_type_param(id, product.strings()[parameter.name.index()].clone()),
             );
         }
-        #[cfg(test)]
-        record_product_lowering_metadata_plan_construction_for_test();
-        let intrinsic_declarations: BTreeMap<usize, IntrinsicMarker> = product
-            .intrinsic_marker_rows()
-            .iter()
-            .map(|row| (row.declaration.index(), row.marker))
-            .collect();
-        let contextual_type_parameters = build_contextual_type_parameter_index(product);
-        let group_parameters = product
-            .groups()
-            .iter()
-            .map(|group| {
-                group
-                    .fragments
-                    .iter()
-                    .find_map(|declaration| {
-                        match &product.declarations()[declaration.index()].payload {
-                            DeclarationPayload::Class {
-                                type_parameters, ..
-                            }
-                            | DeclarationPayload::Interface {
-                                type_parameters, ..
-                            }
-                            | DeclarationPayload::TypeAlias {
-                                type_parameters, ..
-                            } => Some(type_parameters.to_vec()),
-                            _ => None,
-                        }
-                    })
-                    .unwrap_or_default()
-            })
-            .collect::<Vec<_>>();
-        let mut type_parameter_owners = vec![None; product.type_parameters().len()];
-        let mut parameter_groups = vec![BTreeSet::new(); product.type_parameters().len()];
-        for (group_index, group) in product.groups().iter().enumerate() {
-            for declaration in group.fragments.iter().copied() {
-                let row = &product.declarations()[declaration.index()];
-                let parameters = match &row.payload {
-                    DeclarationPayload::Class {
-                        type_parameters, ..
-                    }
-                    | DeclarationPayload::Interface {
-                        type_parameters, ..
-                    }
-                    | DeclarationPayload::TypeAlias {
-                        type_parameters, ..
-                    } => type_parameters,
-                    _ => continue,
-                };
-                let owner = IssueOwner {
-                    identity: LibraryRecordOwnerIdentity::Declaration(declaration.index()),
-                    start: row.binding_site.start,
-                };
-                for parameter in parameters.iter().copied() {
-                    type_parameter_owners[parameter.index()].get_or_insert(owner);
-                    parameter_groups[parameter.index()].insert(group_index);
-                }
-            }
-        }
+        let intrinsic_declarations = &metadata_plan.intrinsic_declarations;
+        let contextual_type_parameters = &metadata_plan.contextual_type_parameters;
+        let group_parameters = &metadata_plan.group_parameters;
+        let type_parameter_owners = &metadata_plan.type_parameter_owners;
+        let parameter_groups = &metadata_plan.parameter_groups;
         let admitted_groups = materialized.iter().copied().collect::<BTreeSet<_>>();
         let admitted_parameters = parameter_groups
             .iter()
@@ -418,16 +458,7 @@ impl<'product, 'interner> ProductLowerer<'product, 'interner> {
                     .then_some(parameter)
             })
             .collect();
-        let mut group_scc_members = vec![Vec::new(); product.group_count()];
-        for component in product.dependency_sccs() {
-            let members = component
-                .into_iter()
-                .map(|group| group.index())
-                .collect::<Vec<_>>();
-            for member in &members {
-                group_scc_members[*member] = members.clone();
-            }
-        }
+        let group_scc_members = &metadata_plan.group_scc_members;
         let seeded_group_types = seed
             .as_ref()
             .map(|seed| seed.group_types.to_vec())
@@ -3567,8 +3598,10 @@ pub fn lower_product_groups_for_test(
     seed: Option<()>,
 ) -> ProductLoweringForTest {
     debug_assert!(seed.is_none());
+    let metadata_plan = ProductLoweringMetadataPlan::new(product);
     let receipt = lower_product_groups(
         product,
+        &metadata_plan,
         interner,
         materialized,
         augmented_groups,

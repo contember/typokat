@@ -59,6 +59,8 @@ fn extract_library_product(source: &str) -> LibraryDeclarationProduct {
 fn checker_session_owns_product_binding_and_returns_real_check_results() {
     let product = Arc::new(extract_library_product("interface Box<T> { value: T }\n"));
     let observation = ObservationScopeForTest::start();
+    let lowerer_constructions = ProductLowererConstructionScopeForTest::start();
+    let metadata_plan_constructions = ProductLoweringMetadataPlanConstructionScopeForTest::start();
     let run = run_prepared_project_frontend(
         vec![FileInput {
             name: USER_PATH.to_owned(),
@@ -132,6 +134,16 @@ fn checker_session_owns_product_binding_and_returns_real_check_results() {
         .cache_weak
         .iter()
         .all(|witness| !witness.upgraded_at_finish));
+    assert_eq!(
+        lowerer_constructions.finish(),
+        0,
+        "a session without product demand must not construct a ProductLowerer"
+    );
+    assert_eq!(
+        metadata_plan_constructions.finish(),
+        0,
+        "a session without product demand must not construct a metadata plan"
+    );
 }
 
 #[test]
@@ -185,7 +197,7 @@ const after: number = identity(42);
     );
     assert_ne!(
         metadata_plan_construction_count, 0,
-        "the scope must count the metadata build inside ProductLowerer::new"
+        "the scope must count the real metadata-plan constructor"
     );
     assert_eq!(
         metadata_plan_construction_count, 1,
