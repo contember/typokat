@@ -7,7 +7,7 @@ use super::project_local_pass_port::{
     project_local_published_types, ContainerKind, DeclarationPayload, DependencyKind,
     DependencyTarget, LibraryDeclarationProduct, ProjectLocalDemandSnapshot,
     ProjectLocalPublishedTypeInputs, ProjectLocalTypeOverlayDraft, ProjectLocalUserDemandGateway,
-    PublishedAliases, TypeGroupId, ValueStorageId,
+    PublishedAliases, TypeGroupId, TypeParamId, ValueStorageId,
 };
 #[cfg(any(test, feature = "test-utils"))]
 use super::project_local_pass_port::{
@@ -543,7 +543,13 @@ impl ProjectLocalSemanticCoordinator {
             semantic_group_value_types: vec![None; product.group_count()],
             ready: BTreeSet::new(),
             value_ready: BTreeSet::new(),
-            type_parameter_ids: Vec::new(),
+            type_parameter_ids: (0..product.type_parameters().len())
+                .map(|index| {
+                    TypeParamId(
+                        u32::try_from(index).expect("product type-parameter identity fits u32"),
+                    )
+                })
+                .collect(),
             type_parameter_defaults: product
                 .type_parameters()
                 .iter()
@@ -656,10 +662,12 @@ impl ProjectLocalSemanticCoordinator {
             }
         }
         let mut closure = self.closure(roots);
-        if !closure.is_empty()
-            && closure
-                .iter()
-                .all(|group| self.session.cache().contains(*group))
+        if closure.is_empty() {
+            return Vec::new();
+        }
+        if closure
+            .iter()
+            .all(|group| self.session.cache().contains(*group))
         {
             for root in roots {
                 let _ = self.session.cache().get(*root);
