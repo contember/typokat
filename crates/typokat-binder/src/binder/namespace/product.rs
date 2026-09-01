@@ -13,6 +13,55 @@ use rustc_hash::FxHashMap;
 use std::collections::BTreeMap;
 use typokat_library_product as product;
 
+#[cfg(test)]
+thread_local! {
+    static NAMESPACE_REGION_DECLARATION_ROW_PROBES: std::cell::Cell<u64> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+/// Declaration rows inspected while resolving declaration regions to namespace fragments.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct NamespaceRegionLookupWorkForTest {
+    pub(crate) declaration_row_probes: u64,
+}
+
+#[cfg(test)]
+fn namespace_region_lookup_work_for_test() -> NamespaceRegionLookupWorkForTest {
+    NamespaceRegionLookupWorkForTest {
+        declaration_row_probes: NAMESPACE_REGION_DECLARATION_ROW_PROBES.get(),
+    }
+}
+
+#[cfg(test)]
+fn record_namespace_region_declaration_row_probe() {
+    NAMESPACE_REGION_DECLARATION_ROW_PROBES.set(
+        NAMESPACE_REGION_DECLARATION_ROW_PROBES
+            .get()
+            .saturating_add(1),
+    );
+}
+
+#[cfg(test)]
+pub(crate) struct NamespaceRegionLookupWorkScopeForTest(NamespaceRegionLookupWorkForTest);
+
+#[cfg(test)]
+impl NamespaceRegionLookupWorkScopeForTest {
+    pub(crate) fn start() -> Self {
+        Self(namespace_region_lookup_work_for_test())
+    }
+
+    pub(crate) fn finish(self) -> NamespaceRegionLookupWorkForTest {
+        let end = namespace_region_lookup_work_for_test();
+        NamespaceRegionLookupWorkForTest {
+            declaration_row_probes: end
+                .declaration_row_probes
+                .saturating_sub(self.0.declaration_row_probes),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LibraryProductInstantiationError {
     InvalidProduct(product::ProductValidationError),
@@ -1348,13 +1397,17 @@ fn namespace_fragment_for_region(
         .declarations()
         .iter()
         .enumerate()
-        .find_map(|(index, declaration)| match declaration.payload {
-            product::DeclarationPayload::Namespace { child_region }
-                if child_region.index() == region =>
-            {
-                fragments.get(&index).copied()
+        .find_map(|(index, declaration)| {
+            #[cfg(test)]
+            record_namespace_region_declaration_row_probe();
+            match declaration.payload {
+                product::DeclarationPayload::Namespace { child_region }
+                    if child_region.index() == region =>
+                {
+                    fragments.get(&index).copied()
+                }
+                _ => None,
             }
-            _ => None,
         })
 }
 

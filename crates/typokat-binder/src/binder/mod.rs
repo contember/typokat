@@ -25,6 +25,10 @@ mod attach_declaration_scaling_spec;
 mod type_group_attach_scaling_spec;
 
 #[cfg(test)]
+#[path = "spec/namespace_region_lookup_scaling_spec.rs"]
+mod namespace_region_lookup_scaling_spec;
+
+#[cfg(test)]
 #[path = "spec/exact_declaration_site_spec.rs"]
 mod exact_declaration_site_spec;
 

@@ -32,6 +32,8 @@ pub use product::{
     LibraryProductGroupBinding, LibraryProductInstantiationError, LibraryProductRegionBinding,
     LibraryProductSourceBinding,
 };
+#[cfg(test)]
+pub(crate) use product::{NamespaceRegionLookupWorkForTest, NamespaceRegionLookupWorkScopeForTest};
 #[allow(unused_imports)]
 pub(crate) use values::NamespaceValueAttachmentPlan;
 pub(super) use values::{
