@@ -20,6 +20,9 @@ thread_local! {
     static NAMESPACE_INSTANCE_DECLARATION_ROW_PROBES: std::cell::Cell<u64> = const {
         std::cell::Cell::new(0)
     };
+    static FUNCTION_CALLABLE_SCOPE_PROBES: std::cell::Cell<u64> = const {
+        std::cell::Cell::new(0)
+    };
     static PRODUCT_GROUP_IDENTITY_NAME_COPIES: std::cell::Cell<u64> = const {
         std::cell::Cell::new(0)
     };
@@ -71,6 +74,7 @@ impl ProductInstantiationLookupWorkScopeForTest {
 pub(crate) struct NamespaceRegionLookupWorkForTest {
     pub(crate) index_probes: u64,
     pub(crate) declaration_row_probes: u64,
+    pub(crate) callable_scope_probes: u64,
 }
 
 #[cfg(test)]
@@ -78,6 +82,7 @@ fn namespace_region_lookup_work_for_test() -> NamespaceRegionLookupWorkForTest {
     NamespaceRegionLookupWorkForTest {
         index_probes: NAMESPACE_REGION_INDEX_PROBES.get(),
         declaration_row_probes: NAMESPACE_INSTANCE_DECLARATION_ROW_PROBES.get(),
+        callable_scope_probes: FUNCTION_CALLABLE_SCOPE_PROBES.get(),
     }
 }
 
@@ -96,6 +101,11 @@ fn record_namespace_instance_declaration_row_probe() {
 }
 
 #[cfg(test)]
+fn record_function_callable_scope_probe() {
+    FUNCTION_CALLABLE_SCOPE_PROBES.set(FUNCTION_CALLABLE_SCOPE_PROBES.get().saturating_add(1));
+}
+
+#[cfg(test)]
 pub(crate) struct NamespaceRegionLookupWorkScopeForTest(NamespaceRegionLookupWorkForTest);
 
 #[cfg(test)]
@@ -111,6 +121,9 @@ impl NamespaceRegionLookupWorkScopeForTest {
             declaration_row_probes: end
                 .declaration_row_probes
                 .saturating_sub(self.0.declaration_row_probes),
+            callable_scope_probes: end
+                .callable_scope_probes
+                .saturating_sub(self.0.callable_scope_probes),
         }
     }
 }
@@ -1209,6 +1222,8 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
             .callable_scopes()
             .iter()
             .find(|scope| {
+                #[cfg(test)]
+                record_function_callable_scope_probe();
                 scope.site.source == declaration.site.source
                     && scope.site.start == declaration.site.start
                     && scope.site.end == declaration.site.end

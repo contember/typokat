@@ -18,7 +18,8 @@ use oxc_span::SourceType;
 
 const SMALL: usize = 32;
 const SCALED: usize = 128;
-const DECLARATIONS_PER_REGION: usize = 3;
+const DECLARATIONS_PER_REGION: usize = 5;
+const VALUE_ATTACHMENTS_PER_REGION: usize = 2;
 const ROW_PROBES_PER_DECLARATION: u64 = 8;
 
 fn source(namespace_regions: usize) -> String {
@@ -28,6 +29,7 @@ fn source(namespace_regions: usize) -> String {
                 "declare namespace Region{index} {{\n\
                  interface Type{index} {{ marker: number }}\n\
                  const value{index}: Type{index};\n\
+                 function identity{index}(value: number): number;\n\
                  }}\n"
             )
         })
@@ -133,11 +135,24 @@ fn namespace_region_lookup_work_scales_with_product_rows() {
         (small_product_rows, scaled_product_rows),
         "dense namespace-region index must inspect exactly one entry per declaration"
     );
-    assert!(
-        small_work.declaration_row_probes > 0 && scaled_work.declaration_row_probes > 0,
-        "namespace-instance scans must record productive work: {} -> {} declaration-row probes",
-        small_work.declaration_row_probes,
-        scaled_work.declaration_row_probes
+    assert_eq!(
+        (
+            small_work.declaration_row_probes,
+            scaled_work.declaration_row_probes,
+        ),
+        (
+            u64::try_from(VALUE_ATTACHMENTS_PER_REGION * SMALL).unwrap_or(u64::MAX),
+            u64::try_from(VALUE_ATTACHMENTS_PER_REGION * SCALED).unwrap_or(u64::MAX),
+        ),
+        "namespace-instance reconstruction must inspect only value attachment rows"
+    );
+    assert_eq!(
+        (
+            small_work.callable_scope_probes,
+            scaled_work.callable_scope_probes,
+        ),
+        (0, 0),
+        "function storage mapping must use declaration site keys without scanning callable scopes"
     );
     let small = small_work
         .index_probes
