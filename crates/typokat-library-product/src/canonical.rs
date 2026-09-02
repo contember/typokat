@@ -250,7 +250,22 @@ fn dependency_scc_rows(product: &LibraryDeclarationProduct) -> String {
     output
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static DEPENDENCY_SCC_COMPUTATION_COUNT: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn dependency_scc_computation_count() -> usize {
+    DEPENDENCY_SCC_COMPUTATION_COUNT.get()
+}
+
 fn dependency_scc_indices(product: &LibraryDeclarationProduct) -> Vec<Vec<usize>> {
+    #[cfg(test)]
+    DEPENDENCY_SCC_COMPUTATION_COUNT
+        .set(dependency_scc_computation_count().checked_add(1).expect("SCC computation count"));
+
     let mut edges = vec![Vec::new(); product.groups.len()];
     for dependency in &product.dependencies {
         if let DependencyTarget::Group(target) = dependency.target {
@@ -402,5 +417,104 @@ fn compress(state: &mut [u32; 8], chunk: &[u8]) {
     }
     for (slot, value) in state.iter_mut().zip([a, b, c, d, e, f, g, h]) {
         *slot = slot.wrapping_add(value);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dependency_scc_computation_count;
+    use crate::{
+        ContainerKind, ContainerRecipe, DeclarationGroupRecipe, DeclarationSlots, GroupKey,
+        ProductAssembly, RegionKind, RegionRecipe, SourceClassification, SourceRecipe, SourceSite,
+    };
+
+    struct DependencySccComputationScope {
+        initial_count: usize,
+    }
+
+    impl DependencySccComputationScope {
+        fn start() -> Self {
+            Self {
+                initial_count: dependency_scc_computation_count(),
+            }
+        }
+
+        fn observed(&self) -> usize {
+            dependency_scc_computation_count()
+                .checked_sub(self.initial_count)
+                .expect("SCC computation counter must not move backwards")
+        }
+    }
+
+    #[test]
+    fn immutable_product_reuses_dependency_sccs_after_construction() {
+        let mut assembly = ProductAssembly::new();
+        let source = assembly.next_source_key().expect("source key");
+        let root_region = assembly.next_region_key().expect("root region key");
+        let container = assembly
+            .add_container(ContainerRecipe {
+                parent: None,
+                kind: ContainerKind::CompilationGlobal,
+                name: None,
+                anchor: None,
+            })
+            .expect("container");
+        let source_name = assembly.intern("scc.d.ts").expect("source name");
+        let source_digest = assembly.intern("00").expect("source digest");
+        assembly
+            .add_source(SourceRecipe {
+                ordinal: 0,
+                name: source_name,
+                sha256: source_digest,
+                byte_len: 1,
+                classification: SourceClassification::Script,
+                root_region,
+            })
+            .expect("source");
+        assembly
+            .add_region(RegionRecipe {
+                parent: None,
+                container,
+                kind: RegionKind::Source,
+                site: SourceSite {
+                    source,
+                    start: 0,
+                    end: 1,
+                },
+            })
+            .expect("root region");
+        let groups = ["First", "Second", "Third"].map(|name| {
+            let name = assembly.intern(name).expect("group name");
+            assembly
+                .add_group(DeclarationGroupRecipe {
+                    container,
+                    name,
+                    slots: DeclarationSlots::default(),
+                    fragments: Box::new([]),
+                })
+                .expect("group")
+        });
+        let product = assembly.finish("scc-cache-test").expect("valid product");
+        let computation_scope = DependencySccComputationScope::start();
+
+        let first = product.dependency_sccs();
+        let second = product.dependency_sccs();
+        let first: &[Vec<GroupKey>] = first.as_ref();
+        let second: &[Vec<GroupKey>] = second.as_ref();
+        let expected = [
+            vec![groups[0]],
+            vec![groups[1]],
+            vec![groups[2]],
+        ];
+
+        assert_eq!(first, expected.as_slice());
+        assert_eq!(second, expected.as_slice());
+        assert_eq!(first, second);
+        assert_eq!(
+            computation_scope.observed(),
+            0,
+            "immutable product dependency SCCs must be computed during ProductAssembly::finish \
+             and reused by checker sessions"
+        );
     }
 }
