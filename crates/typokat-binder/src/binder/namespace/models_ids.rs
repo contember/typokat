@@ -334,6 +334,7 @@ thread_local! {
     static MERGE_KEY_NAME_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static NON_MERGING_PARTICIPANT_ROWS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static NON_MERGING_MERGE_RECORDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static SINGLETON_GENERAL_CLASSIFICATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static PLACEMENT_ORDER_GROUPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static PLACEMENT_SORT_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static PLACEMENT_ROW_REORDERS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -356,6 +357,7 @@ pub struct MergeSubstrateWorkForTest {
     /// Merge records built for such a group: a classification of one declaration against
     /// itself, plus its `merge_indices` key.
     pub(crate) non_merging_merge_records: u64,
+    pub(crate) singleton_general_classifications: u64,
     /// Placement groups visited by the one-shot instance-state and canonical-order pass.
     pub(crate) placement_order_groups: u64,
     pub(crate) placement_sort_calls: u64,
@@ -372,6 +374,7 @@ fn merge_substrate_work_for_test() -> MergeSubstrateWorkForTest {
         merge_key_name_bytes: MERGE_KEY_NAME_BYTES.get(),
         non_merging_participant_rows: NON_MERGING_PARTICIPANT_ROWS.get(),
         non_merging_merge_records: NON_MERGING_MERGE_RECORDS.get(),
+        singleton_general_classifications: SINGLETON_GENERAL_CLASSIFICATIONS.get(),
         placement_order_groups: PLACEMENT_ORDER_GROUPS.get(),
         placement_sort_calls: PLACEMENT_SORT_CALLS.get(),
         placement_row_reorders: PLACEMENT_ROW_REORDERS.get(),
@@ -418,6 +421,11 @@ pub(super) fn record_non_merging_merge_record() {
 }
 
 #[cfg(any(test, feature = "test-utils"))]
+pub(super) fn record_singleton_general_classification() {
+    SINGLETON_GENERAL_CLASSIFICATIONS.set(SINGLETON_GENERAL_CLASSIFICATIONS.get() + 1);
+}
+
+#[cfg(any(test, feature = "test-utils"))]
 pub struct MergeSubstrateWorkScopeForTest(MergeSubstrateWorkForTest);
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -441,6 +449,9 @@ impl MergeSubstrateWorkScopeForTest {
             non_merging_merge_records: end
                 .non_merging_merge_records
                 .saturating_sub(self.0.non_merging_merge_records),
+            singleton_general_classifications: end
+                .singleton_general_classifications
+                .saturating_sub(self.0.singleton_general_classifications),
             placement_order_groups: end
                 .placement_order_groups
                 .saturating_sub(self.0.placement_order_groups),

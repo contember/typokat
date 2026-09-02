@@ -804,6 +804,10 @@ pub(super) fn enum_group_semantics(
 }
 
 fn classify_group(declarations: &[MergeParticipant]) -> MergeClassification {
+    #[cfg(any(test, feature = "test-utils"))]
+    if declarations.len() == 1 {
+        record_singleton_general_classification();
+    }
     use MergeDeclarationKind::{
         Class, Enum, Function, ImportAlias, Interface, Namespace, Variable,
     };
