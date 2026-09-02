@@ -627,6 +627,86 @@ class SessionBatchLiveCollectorTests(unittest.TestCase):
             hashlib.sha256(b'{"case_id":"case","ordinal":0}').hexdigest(),
         )
 
+    def test_tsgo_runner_receives_authenticated_staged_library_directory(self) -> None:
+        arguments = ["--batch", "--protocol-version", "1"]
+        stdin = '{"case_id":"case"}\n'
+        measurement = mock.sentinel.measurement
+
+        with tempfile.TemporaryDirectory() as directory:
+            live_root = Path(directory)
+            host = object.__new__(collect.SystemLiveHost)
+            host.contract = self.contract
+            host.live_root = live_root
+            host.collection_deadline = None
+            tsgo_runner = live_root / "tsgo-runner"
+            typokat_runner = live_root / "typokat-runner"
+
+            with (
+                mock.patch.object(collect, "ROOT", live_root),
+                mock.patch.object(
+                    collect, "_supervise", return_value=measurement
+                ) as supervise,
+            ):
+                staged_library_directory = (
+                    collect.ROOT
+                    / self.contract["tsgo"]["cold_binary_relative_path"]
+                ).resolve().parent
+                tsgo_result = host._run_runner(
+                    "tsgo",
+                    {"path": str(tsgo_runner)},
+                    arguments,
+                    stdin,
+                    timeout_seconds=11,
+                    address_space_limit_bytes=123,
+                    measured=True,
+                )
+                typokat_result = host._run_runner(
+                    "typokat",
+                    {"path": str(typokat_runner)},
+                    arguments,
+                    stdin,
+                    timeout_seconds=11,
+                    address_space_limit_bytes=123,
+                    measured=True,
+                )
+
+            self.assertTrue(staged_library_directory.is_absolute())
+            self.assertIs(tsgo_result, measurement)
+            self.assertIs(typokat_result, measurement)
+            self.assertEqual(
+                supervise.call_args_list,
+                [
+                    mock.call(
+                        [
+                            str(tsgo_runner),
+                            "--lib-dir",
+                            str(staged_library_directory),
+                            *arguments,
+                        ],
+                        stdin,
+                        cwd=live_root,
+                        environment={
+                            "LANG": "C",
+                            "LC_ALL": "C",
+                            "TZ": "UTC",
+                            "GOMAXPROCS": "1",
+                        },
+                        timeout_seconds=11,
+                        address_space_limit_bytes=123,
+                        measured=True,
+                    ),
+                    mock.call(
+                        [str(typokat_runner), *arguments],
+                        stdin,
+                        cwd=live_root,
+                        environment={"LANG": "C", "LC_ALL": "C", "TZ": "UTC"},
+                        timeout_seconds=11,
+                        address_space_limit_bytes=123,
+                        measured=True,
+                    ),
+                ],
+            )
+
     def test_typokat_build_cannot_load_home_ancestor_cargo_configuration(self) -> None:
         host = collect.SystemLiveHost(self.contract)
         candidate = {"commit": "a" * 40, "tree": "b" * 40, "dirty": False}
