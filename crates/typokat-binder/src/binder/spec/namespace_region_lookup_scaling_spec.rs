@@ -7,6 +7,7 @@ use super::bind::ProjectBinderBuilder;
 use super::declaration::SourceDeclarationManifest;
 use super::namespace::{
     CompilationUnit, NamespaceRegionLookupWorkForTest, NamespaceRegionLookupWorkScopeForTest,
+    ProductInstantiationLookupWorkForTest, ProductInstantiationLookupWorkScopeForTest,
     SourceUnitKey,
 };
 use super::product::{project_library_declaration_product, LibraryProductSource};
@@ -81,12 +82,19 @@ fn declaration_product(
     product
 }
 
-fn measure(namespace_regions: usize) -> NamespaceRegionLookupWorkForTest {
+fn measure(
+    namespace_regions: usize,
+) -> (
+    NamespaceRegionLookupWorkForTest,
+    ProductInstantiationLookupWorkForTest,
+) {
     let product = declaration_product(namespace_regions);
     let scope = NamespaceRegionLookupWorkScopeForTest::start();
+    let instantiation_scope = ProductInstantiationLookupWorkScopeForTest::start();
     let (builder, units) = ProjectBinderBuilder::from_library_declaration_product(&product)
         .expect("synthetic declaration product instantiates");
     let work = scope.finish();
+    let instantiation_work = instantiation_scope.finish();
     assert_eq!(units.len(), 1);
 
     let (binder, _) = builder
@@ -110,7 +118,7 @@ fn measure(namespace_regions: usize) -> NamespaceRegionLookupWorkForTest {
         assert!(scope.lookup_local(&format!("Type{index}")).is_some());
         assert!(scope.lookup_local(&format!("value{index}")).is_some());
     }
-    work
+    (work, instantiation_work)
 }
 
 #[test]
@@ -118,8 +126,8 @@ fn namespace_region_lookup_work_scales_with_product_rows() {
     let small_product_rows = u64::try_from(DECLARATIONS_PER_REGION * SMALL).unwrap_or(u64::MAX);
     let scaled_product_rows = u64::try_from(DECLARATIONS_PER_REGION * SCALED).unwrap_or(u64::MAX);
     let step = scaled_product_rows / small_product_rows;
-    let small_work = measure(SMALL);
-    let scaled_work = measure(SCALED);
+    let (small_work, small_instantiation_work) = measure(SMALL);
+    let (scaled_work, scaled_instantiation_work) = measure(SCALED);
     assert_eq!(
         (small_work.index_probes, scaled_work.index_probes),
         (small_product_rows, scaled_product_rows),
@@ -149,5 +157,15 @@ fn namespace_region_lookup_work_scales_with_product_rows() {
         scaled_work.declaration_row_probes,
         small_work.index_probes,
         scaled_work.index_probes
+    );
+    assert_eq!(
+        (
+            small_instantiation_work.group_identity_name_copies,
+            scaled_instantiation_work.group_identity_name_copies,
+            small_instantiation_work.dense_key_tree_probes,
+            scaled_instantiation_work.dense_key_tree_probes,
+        ),
+        (0, 0, 0, 0),
+        "product instantiation must retain dense keys instead of copying names or probing trees"
     );
 }

@@ -21,6 +21,60 @@ thread_local! {
     static NAMESPACE_INSTANCE_DECLARATION_ROW_PROBES: std::cell::Cell<u64> = const {
         std::cell::Cell::new(0)
     };
+    static PRODUCT_GROUP_IDENTITY_NAME_COPIES: std::cell::Cell<u64> = const {
+        std::cell::Cell::new(0)
+    };
+    static PRODUCT_DENSE_KEY_TREE_PROBES: std::cell::Cell<u64> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ProductInstantiationLookupWorkForTest {
+    pub(crate) group_identity_name_copies: u64,
+    pub(crate) dense_key_tree_probes: u64,
+}
+
+#[cfg(test)]
+fn product_instantiation_lookup_work_for_test() -> ProductInstantiationLookupWorkForTest {
+    ProductInstantiationLookupWorkForTest {
+        group_identity_name_copies: PRODUCT_GROUP_IDENTITY_NAME_COPIES.get(),
+        dense_key_tree_probes: PRODUCT_DENSE_KEY_TREE_PROBES.get(),
+    }
+}
+
+#[cfg(test)]
+fn record_product_group_identity_name_copy() {
+    PRODUCT_GROUP_IDENTITY_NAME_COPIES
+        .set(PRODUCT_GROUP_IDENTITY_NAME_COPIES.get().saturating_add(1));
+}
+
+#[cfg(test)]
+fn record_product_dense_key_tree_probe() {
+    PRODUCT_DENSE_KEY_TREE_PROBES.set(PRODUCT_DENSE_KEY_TREE_PROBES.get().saturating_add(1));
+}
+
+#[cfg(test)]
+pub(crate) struct ProductInstantiationLookupWorkScopeForTest(ProductInstantiationLookupWorkForTest);
+
+#[cfg(test)]
+impl ProductInstantiationLookupWorkScopeForTest {
+    pub(crate) fn start() -> Self {
+        Self(product_instantiation_lookup_work_for_test())
+    }
+
+    pub(crate) fn finish(self) -> ProductInstantiationLookupWorkForTest {
+        let end = product_instantiation_lookup_work_for_test();
+        ProductInstantiationLookupWorkForTest {
+            group_identity_name_copies: end
+                .group_identity_name_copies
+                .saturating_sub(self.0.group_identity_name_copies),
+            dense_key_tree_probes: end
+                .dense_key_tree_probes
+                .saturating_sub(self.0.dense_key_tree_probes),
+        }
+    }
 }
 
 /// Work inspected while reconstructing namespace regions and instance states.
@@ -648,7 +702,11 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
             .iter()
             .filter_map(|key| declaration_ids.get(key.index()).copied())
             .collect();
+        #[cfg(test)]
+        record_product_group_identity_name_copy();
         let key = (scope.0, name.to_owned());
+        #[cfg(test)]
+        record_product_dense_key_tree_probe();
         let symbol_id = if let Some(existing) = symbol_by_container_name.get(&key).copied() {
             let row = state
                 .symbols
@@ -690,6 +748,8 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
                     },
                 );
             }
+            #[cfg(test)]
+            record_product_dense_key_tree_probe();
             symbol_by_container_name.insert(key, symbol_id);
             symbol_id
         };
@@ -728,6 +788,8 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
             product::DeclarationLexicalScope::None
             | product::DeclarationLexicalScope::Region(_) => container_scope,
         };
+        #[cfg(test)]
+        record_product_group_identity_name_copy();
         group_locations.push(LibraryProductGroupLocation {
             scope: final_scope,
             name: name.into(),
@@ -736,6 +798,8 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
 
     let mut namespace_group_by_declaration = BTreeMap::new();
     for row in declaration_product.namespace_attachment_rows() {
+        #[cfg(test)]
+        record_product_dense_key_tree_probe();
         namespace_group_by_declaration.insert(row.declaration.index(), row.group.index());
     }
     let mut namespace_instance_states =
@@ -755,6 +819,8 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
         let product::DeclarationPayload::Namespace { child_region } = declaration.payload else {
             continue;
         };
+        #[cfg(test)]
+        record_product_dense_key_tree_probe();
         let group_index = *namespace_group_by_declaration
             .get(&declaration_index)
             .ok_or(LibraryProductInstantiationError::MissingNamespaceGroup(
@@ -874,6 +940,8 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
                 declaration_index,
             ))?
             .namespace = Some(namespace);
+        #[cfg(test)]
+        record_product_dense_key_tree_probe();
         namespace_fragments_by_declaration.insert(declaration_index, fragment_id);
         if namespace_fragments_by_region[child_region.index()].is_none() {
             namespace_fragments_by_region[child_region.index()] = Some(fragment_id);
@@ -933,6 +1001,8 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
             declared: declaration.flags.ambient,
             members: Vec::new(),
         });
+        #[cfg(test)]
+        record_product_dense_key_tree_probe();
         global_by_region.insert(child_region.index(), id);
     }
 
@@ -969,6 +1039,8 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
                     ),
                 },
             };
+            #[cfg(test)]
+            record_product_dense_key_tree_probe();
             let namespace_instance = namespace_fragments_by_declaration
                 .get(&declaration_index)
                 .and_then(|fragment| state.namespaces.fragment(*fragment))
@@ -985,6 +1057,8 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
                 syntax(declaration),
             )
             .ok_or(LibraryProductInstantiationError::MissingGroup(group_index))?;
+            #[cfg(test)]
+            record_product_dense_key_tree_probe();
             if let Some(fragment) = namespace_fragments_by_declaration.get(&declaration_index) {
                 participant.namespace_fragment = Some(*fragment);
                 participant.namespace_instance = namespace_instance;
@@ -1008,6 +1082,8 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
         else {
             continue;
         };
+        #[cfg(test)]
+        record_product_dense_key_tree_probe();
         if namespace_fragments_by_declaration.contains_key(&declaration_index) {
             continue;
         }
@@ -1083,6 +1159,8 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
         ) {
             continue;
         }
+        #[cfg(test)]
+        record_product_dense_key_tree_probe();
         let Some(global) = global_by_region.get(&declaration.region.index()).copied() else {
             continue;
         };

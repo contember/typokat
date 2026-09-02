@@ -33,7 +33,10 @@ pub use product::{
     LibraryProductSourceBinding,
 };
 #[cfg(test)]
-pub(crate) use product::{NamespaceRegionLookupWorkForTest, NamespaceRegionLookupWorkScopeForTest};
+pub(crate) use product::{
+    NamespaceRegionLookupWorkForTest, NamespaceRegionLookupWorkScopeForTest,
+    ProductInstantiationLookupWorkForTest, ProductInstantiationLookupWorkScopeForTest,
+};
 #[allow(unused_imports)]
 pub(crate) use values::NamespaceValueAttachmentPlan;
 pub(super) use values::{
