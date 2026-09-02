@@ -25,7 +25,7 @@ pub struct NamespaceTable {
     names: LayeredVec<Arc<str>>,
     /// Reverse index for [`NamespaceTable::intern_name`], shared by frozen-prefix forks.
     name_ids: LayeredMap<Arc<str>, NameId>,
-    pub(super) placements: LayeredMap<MergeKey, PlacementRows>,
+    pub(super) placements: LayeredMap<MergeKey, Arc<Vec<MergeParticipant>>>,
     /// Row index of every placement participant, keyed by its group and declaration, so finding
     /// the row a declaration already owns is a lookup instead of a scan of the group.
     /// Not layered — a sealed group can never take another row, so this only ever describes
@@ -1090,7 +1090,7 @@ impl NamespaceTable {
                     (
                         merge.owner,
                         merge.name.to_string(),
-                        merge.declarations.to_vec(),
+                        (*merge.declarations).clone(),
                     )
                 })
                 .collect(),
@@ -1166,7 +1166,7 @@ impl NamespaceTable {
                     (
                         merge.owner,
                         merge.name.to_string(),
-                        merge.declarations.to_vec(),
+                        (*merge.declarations).clone(),
                     )
                 })
                 .collect(),
