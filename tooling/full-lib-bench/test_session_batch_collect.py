@@ -651,7 +651,12 @@ class SessionBatchLiveCollectorTests(unittest.TestCase):
             )
             host.freeze_candidate = mock.Mock(return_value=candidate)
             host._run_build = build
-            host._build_typokat(candidate)
+            with mock.patch.object(
+                host,
+                "_validate_cargo_configuration",
+                wraps=host._validate_cargo_configuration,
+            ) as validate:
+                host._build_typokat(candidate)
         finally:
             shutil.rmtree(host.live_root)
 
@@ -665,12 +670,126 @@ class SessionBatchLiveCollectorTests(unittest.TestCase):
             ],
         )
         environment = captured["environment"]
+        target = Path(environment["CARGO_TARGET_DIR"])
+        cargo_home = Path(environment["CARGO_HOME"])
+        build_home = Path(environment["HOME"])
+        self.assertEqual(target, host.live_root / "rust-target")
+        self.assertTrue(target.is_relative_to(host.live_root))
+        self.assertEqual(cargo_home, host.live_root / "cargo-home")
+        self.assertEqual(build_home, host.live_root / "rust-home")
         self.assertEqual(
             environment["RUSTUP_TOOLCHAIN"],
             "1.95.0-x86_64-unknown-linux-gnu",
         )
+        self.assertEqual(environment["CARGO_BUILD_JOBS"], "1")
+        self.assertEqual(environment["TYPOKAT_CANDIDATE_COMMIT"], candidate["commit"])
         self.assertEqual(environment["RUSTC_WRAPPER"], "")
         self.assertEqual(environment["RUSTC_WORKSPACE_WRAPPER"], "")
+        self.assertEqual(environment["RUSTFLAGS"], "")
+        self.assertEqual(environment["CARGO_ENCODED_RUSTFLAGS"], "")
+        self.assertEqual(
+            validate.call_args_list,
+            [
+                mock.call(host.live_root, cargo_home),
+                mock.call(host.live_root, cargo_home),
+            ],
+        )
+
+    def test_opt_in_rust_build_cache_uses_deterministic_ignored_target(self) -> None:
+        candidate = {"commit": "a" * 40, "tree": "b" * 40, "dirty": False}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with mock.patch.object(collect, "ROOT", root):
+                host = collect.SystemLiveHost(
+                    self.contract,
+                    persistent_rust_build_cache=True,
+                )
+                try:
+                    target, cargo_home, environment = host._rust_build_context(candidate)
+                finally:
+                    shutil.rmtree(host.live_root)
+
+            self.assertEqual(target, root / "target/wu6/session-batch-live")
+            self.assertFalse(target.is_relative_to(host.live_root))
+            self.assertEqual(Path(environment["CARGO_TARGET_DIR"]), target)
+            self.assertEqual(cargo_home, host.live_root / "cargo-home")
+            self.assertEqual(Path(environment["HOME"]), host.live_root / "rust-home")
+            self.assertEqual(
+                environment["RUSTUP_TOOLCHAIN"],
+                "1.95.0-x86_64-unknown-linux-gnu",
+            )
+            self.assertEqual(environment["CARGO_BUILD_JOBS"], "1")
+            self.assertEqual(
+                environment["TYPOKAT_CANDIDATE_COMMIT"], candidate["commit"]
+            )
+            self.assertEqual(environment["RUSTC_WRAPPER"], "")
+            self.assertEqual(environment["RUSTC_WORKSPACE_WRAPPER"], "")
+
+    def test_persistent_rust_build_returns_private_runner_copy(self) -> None:
+        candidate = {"commit": "a" * 40, "tree": "b" * 40, "dirty": False}
+        built_runner: Path | None = None
+
+        def build(
+            argv: list[str], cwd: Path, environment: dict[str, str]
+        ) -> None:
+            nonlocal built_runner
+            built_runner = (
+                Path(environment["CARGO_TARGET_DIR"])
+                / "release"
+                / self.contract["typokat"]["runner_binary"]
+            )
+            built_runner.parent.mkdir(parents=True, exist_ok=True)
+            built_runner.write_bytes(b"cached-runner")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / self.contract["typokat"]["runner_source_relative_path"]
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"runner-source")
+            with mock.patch.object(collect, "ROOT", root):
+                host = collect.SystemLiveHost(
+                    self.contract,
+                    persistent_rust_build_cache=True,
+                )
+                try:
+                    host.freeze_candidate = mock.Mock(return_value=candidate)
+                    host._run_build = build
+                    with mock.patch.object(
+                        host,
+                        "_validate_cargo_configuration",
+                        wraps=host._validate_cargo_configuration,
+                    ) as validate:
+                        runner = host._build_typokat(candidate)
+                    self.assertIsNotNone(built_runner)
+                    private_runner = Path(runner["path"])
+                    self.assertTrue(private_runner.is_relative_to(host.live_root))
+                    self.assertNotEqual(private_runner, built_runner)
+                    self.assertFalse(private_runner.is_symlink())
+                    self.assertTrue(private_runner.is_file())
+                    self.assertNotEqual(
+                        private_runner.stat().st_ino,
+                        built_runner.stat().st_ino,
+                    )
+                    self.assertEqual(private_runner.read_bytes(), b"cached-runner")
+                    built_runner.write_bytes(b"changed-cache")
+                    self.assertEqual(private_runner.read_bytes(), b"cached-runner")
+                    self.assertEqual(
+                        runner["source_sha256"],
+                        hashlib.sha256(b"runner-source").hexdigest(),
+                    )
+                    self.assertEqual(
+                        runner["binary_sha256"],
+                        hashlib.sha256(b"cached-runner").hexdigest(),
+                    )
+                    self.assertEqual(
+                        validate.call_args_list,
+                        [
+                            mock.call(host.live_root, host.live_root / "cargo-home"),
+                            mock.call(host.live_root, host.live_root / "cargo-home"),
+                        ],
+                    )
+                finally:
+                    shutil.rmtree(host.live_root)
 
     def test_cargo_configuration_discovery_fails_on_any_external_config(self) -> None:
         host = object.__new__(collect.SystemLiveHost)
@@ -708,9 +827,7 @@ class SessionBatchLiveCollectorTests(unittest.TestCase):
                 result = collect.collect_live_preflight(output=output)
                 with self.assertRaisesRegex(batch.BatchContractError, "exists"):
                     collect.collect_live_preflight(output=output)
-                constructor.assert_called_once()
-                (constructed_contract,) = constructor.call_args.args
-                self.assertEqual(constructed_contract, self.contract)
+                constructor.assert_called_once_with(self.contract)
                 self.assertEqual(
                     output.read_bytes(),
                     json.dumps(
@@ -1005,6 +1122,7 @@ class SessionBatchLivePanelCollectorTests(unittest.TestCase):
             output = Path(directory) / "progressive-panels.json"
             with (
                 mock.patch.object(collect, "SystemLiveHost", return_value=host) as constructor,
+                mock.patch.object(collect.time, "monotonic", return_value=100.0),
                 mock.patch.object(
                     batch,
                     "validate_timing_preconditions",
@@ -1020,9 +1138,13 @@ class SessionBatchLivePanelCollectorTests(unittest.TestCase):
                 with self.assertRaisesRegex(batch.BatchContractError, "exists"):
                     collect.collect_live_panels(output=output)
 
-            constructor.assert_called_once()
-            (constructed_contract,) = constructor.call_args.args
-            self.assertEqual(constructed_contract, self.contract)
+            constructor.assert_called_once_with(
+                self.contract,
+                collection_deadline=(
+                    100.0 + self.contract["sampling"]["max_collection_wall_seconds"]
+                ),
+                persistent_rust_build_cache=True,
+            )
             timing_validation.assert_called_once_with(timing_receipt, self.contract)
             progressive.assert_called_once()
             self.assertIs(progressive.call_args.args[1], self.contract)
@@ -1287,7 +1409,7 @@ class SessionBatchLiveLinkageCollectorTests(unittest.TestCase):
                 result = collect.collect_live_linkage(output=output)
                 with self.assertRaisesRegex(batch.BatchContractError, "exists"):
                     collect.collect_live_linkage(output=output)
-                constructor.assert_called_once()
+                constructor.assert_called_once_with(self.contract)
                 self.assertEqual(
                     output.read_bytes(),
                     json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
