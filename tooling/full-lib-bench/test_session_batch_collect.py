@@ -709,11 +709,17 @@ class SessionBatchLiveCollectorTests(unittest.TestCase):
                 finally:
                     shutil.rmtree(host.live_root)
 
-            self.assertEqual(target, root / "target/wu6/session-batch-live")
+            cache_root = root / "target/wu6/session-batch-live"
+            self.assertEqual(target, cache_root)
             self.assertFalse(target.is_relative_to(host.live_root))
             self.assertEqual(Path(environment["CARGO_TARGET_DIR"]), target)
-            self.assertEqual(cargo_home, host.live_root / "cargo-home")
+            self.assertEqual(cargo_home, cache_root / "cargo-home")
+            self.assertEqual(Path(environment["CARGO_HOME"]), cargo_home)
+            for path in (target, cargo_home):
+                self.assertTrue(path.is_dir())
+                self.assertFalse(path.is_symlink())
             self.assertEqual(Path(environment["HOME"]), host.live_root / "rust-home")
+            self.assertEqual(host.git_home, host.live_root / "git-home")
             self.assertEqual(
                 environment["RUSTUP_TOOLCHAIN"],
                 "1.95.0-x86_64-unknown-linux-gnu",
@@ -724,6 +730,8 @@ class SessionBatchLiveCollectorTests(unittest.TestCase):
             )
             self.assertEqual(environment["RUSTC_WRAPPER"], "")
             self.assertEqual(environment["RUSTC_WORKSPACE_WRAPPER"], "")
+            self.assertEqual(environment["RUSTFLAGS"], "")
+            self.assertEqual(environment["CARGO_ENCODED_RUSTFLAGS"], "")
 
     def test_persistent_rust_build_returns_private_runner_copy(self) -> None:
         candidate = {"commit": "a" * 40, "tree": "b" * 40, "dirty": False}
@@ -784,10 +792,108 @@ class SessionBatchLiveCollectorTests(unittest.TestCase):
                     self.assertEqual(
                         validate.call_args_list,
                         [
-                            mock.call(host.live_root, host.live_root / "cargo-home"),
-                            mock.call(host.live_root, host.live_root / "cargo-home"),
+                            mock.call(
+                                host.live_root,
+                                root / "target/wu6/session-batch-live/cargo-home",
+                            ),
+                            mock.call(
+                                host.live_root,
+                                root / "target/wu6/session-batch-live/cargo-home",
+                            ),
                         ],
                     )
+                finally:
+                    shutil.rmtree(host.live_root)
+
+    def test_persistent_cargo_home_is_validated_around_cold_rust_build(self) -> None:
+        candidate = {"commit": "a" * 40, "tree": "b" * 40, "dirty": False}
+
+        def build(
+            argv: list[str], cwd: Path, environment: dict[str, str]
+        ) -> None:
+            binary = Path(environment["CARGO_TARGET_DIR"]) / "release/typokat"
+            binary.parent.mkdir(parents=True, exist_ok=True)
+            binary.write_bytes(b"cold-typokat")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with mock.patch.object(collect, "ROOT", root):
+                host = collect.SystemLiveHost(
+                    self.contract,
+                    persistent_rust_build_cache=True,
+                )
+                try:
+                    host.freeze_candidate = mock.Mock(return_value=candidate)
+                    host._run_build = build
+                    with mock.patch.object(
+                        host,
+                        "_validate_cargo_configuration",
+                        wraps=host._validate_cargo_configuration,
+                    ) as validate:
+                        host.build_cold_typokat(candidate)
+                    cargo_home = root / "target/wu6/session-batch-live/cargo-home"
+                    self.assertEqual(
+                        validate.call_args_list,
+                        [
+                            mock.call(host.live_root, cargo_home),
+                            mock.call(host.live_root, cargo_home),
+                        ],
+                    )
+                finally:
+                    shutil.rmtree(host.live_root)
+
+    def test_default_go_build_environment_is_private_to_live_root(self) -> None:
+        host = collect.SystemLiveHost(self.contract)
+        try:
+            environment = host._go_build_environment()
+            expected = {
+                "HOME": host.live_root / "go-home",
+                "GOCACHE": host.live_root / "go-cache",
+                "GOMODCACHE": host.live_root / "go-mod-cache",
+                "GOPATH": host.live_root / "go-path",
+            }
+            for name, path in expected.items():
+                self.assertEqual(Path(environment[name]), path)
+                self.assertTrue(path.is_relative_to(host.live_root))
+                self.assertTrue(path.is_dir())
+                self.assertFalse(path.is_symlink())
+            self.assertEqual(host.git_home, host.live_root / "git-home")
+            self.assertEqual(environment["GOENV"], "off")
+            self.assertEqual(environment["GOFLAGS"], "")
+            self.assertEqual(environment["GOTOOLCHAIN"], "go1.26.0")
+            self.assertEqual(environment["GOMAXPROCS"], "1")
+        finally:
+            shutil.rmtree(host.live_root)
+
+    def test_opt_in_build_cache_uses_persistent_go_paths_and_private_home(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with mock.patch.object(collect, "ROOT", root):
+                host = collect.SystemLiveHost(
+                    self.contract,
+                    persistent_rust_build_cache=True,
+                )
+                try:
+                    environment = host._go_build_environment()
+                    cache_root = root / "target/wu6/session-batch-live"
+                    expected = {
+                        "GOCACHE": cache_root / "go-cache",
+                        "GOMODCACHE": cache_root / "go-mod-cache",
+                        "GOPATH": cache_root / "go-path",
+                    }
+                    for name, path in expected.items():
+                        self.assertEqual(Path(environment[name]), path)
+                        self.assertFalse(path.is_relative_to(host.live_root))
+                        self.assertTrue(path.is_dir())
+                        self.assertFalse(path.is_symlink())
+                    self.assertEqual(
+                        Path(environment["HOME"]), host.live_root / "go-home"
+                    )
+                    self.assertEqual(host.git_home, host.live_root / "git-home")
+                    self.assertEqual(environment["GOENV"], "off")
+                    self.assertEqual(environment["GOFLAGS"], "")
+                    self.assertEqual(environment["GOTOOLCHAIN"], "go1.26.0")
+                    self.assertEqual(environment["GOMAXPROCS"], "1")
                 finally:
                     shutil.rmtree(host.live_root)
 
@@ -811,13 +917,15 @@ class SessionBatchLiveCollectorTests(unittest.TestCase):
                 host._validate_cargo_configuration(cwd, cargo_home)
             ancestor_config.unlink()
 
-            cargo_home_config = cargo_home / "config"
-            cargo_home_config.write_text("[build]\njobs = 99\n")
-            with self.assertRaisesRegex(
-                batch.BatchContractError,
-                "Cargo configuration",
-            ):
-                host._validate_cargo_configuration(cwd, cargo_home)
+            for name in ("config", "config.toml"):
+                cargo_home_config = cargo_home / name
+                cargo_home_config.write_text("[build]\njobs = 99\n")
+                with self.subTest(name=name), self.assertRaisesRegex(
+                    batch.BatchContractError,
+                    "Cargo configuration",
+                ):
+                    host._validate_cargo_configuration(cwd, cargo_home)
+                cargo_home_config.unlink()
 
     def test_live_preflight_owns_build_protocol_process_and_fault_sequence(self) -> None:
         host = FakeLiveHost(self.contract)
