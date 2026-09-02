@@ -821,3 +821,15 @@ numbers are invalid without `--no-smt`.
   diagnostics and dropped no matched diagnostics. Its exact false-positive and incomplete removals
   are now pre-authenticated against the unchanged scoreboard; gained precise incompletes remain
   explicit progress evidence.
+- **2026-09-02 — WU6 deterministic optimization pass.** Dependency reconstruction, namespace
+  product indexing, ordered placement sorting, direct function-storage indexing, singleton merge
+  classification, and contextual type-recipe visitation now avoid work that cannot affect the
+  project result. Their accepted implementation commits are `532b1245`, `8b199ff3`, `c57ad275`,
+  `9c2e608e`, `ce861bc8`, and `daf965bc`; capacity reservation and inline placement-row experiments
+  regressed the route and were removed. The last quieter comparable sample, at `8b199ff3`, remains
+  `13.935799903 s` against the strict `12.946437 s` historical gate. Later user-space profiles are
+  diagnostic only because concurrent host load left the leased CPU pair about 42% idle: singleton
+  classification fell from about 1.57% to 0.58% of sampled cycles, and contextual ordered-tree
+  insertion disappeared from the top report. Current `daf965bc` has a rebuilt release runner and
+  clean focused tests/reviews, but no decision-quality 687-frame timing; WU6 remains `NO-GO` until a
+  quiet authenticated rerun passes the historical wall gate and the live progressive collector.
