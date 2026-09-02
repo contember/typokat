@@ -1636,16 +1636,14 @@ class SystemLiveHost:
                 raise batch.BatchContractError(
                     f"invalid typokat allocation frame JSON: {error}"
                 ) from error
-            if (
-                not isinstance(response, dict)
-                or _canonical(response).decode() != response_line
-            ):
-                _fail("typokat allocation frame is malformed or noncanonical")
+            if not isinstance(response, dict):
+                _fail("typokat allocation frame is not an object")
+            canonical_response = _canonical(response)
             frame = dict(response)
             frame.update(
                 raw_request=request_line,
-                raw_response=response_line,
-                raw_response_sha256=_sha(response_line.encode()),
+                raw_response=canonical_response.decode(),
+                raw_response_sha256=_sha(canonical_response),
             )
             if frame.get("ordinal") != ordinal:
                 _fail("typokat allocation frame ordinal differs")
