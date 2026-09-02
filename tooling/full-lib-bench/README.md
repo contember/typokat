@@ -258,6 +258,10 @@ including its first-frame provider initialization; the candidate compares the sa
 sum. External batch wall samples remain the authority only for the 32-project typokat versus
 TypeScript-Go comparison, so process/protocol overhead is never compared to the old internal receipt.
 The complete live collection, including authenticated builds, fails closed after 600 seconds.
+The panel collector reuses ignored Cargo and Go build caches under
+`target/wu6/session-batch-live`; it still invokes both pinned builds, rejects Cargo configuration,
+and copies each built runner into the private run directory before hashing and measurement. Preflight
+and linkage collectors retain fresh private build caches.
 
 Verdicts are recomputed from raw ABBA process records, JSONL requests/responses, `/usr/bin/time`
 reports, executable attestations, and monotonic intervals. Runner booleans and derived speed/RSS

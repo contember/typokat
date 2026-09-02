@@ -844,3 +844,11 @@ numbers are invalid without `--no-smt`.
   32-frame panel remains the statistical cross-tool speed/RSS authority; the 687-frame closure retains
   the full candidate semantic/lifecycle and historical wall/RSS gates. A global 600-second deadline
   fails closed across builds and subprocesses.
+- **2026-09-02 — WU6 build-cache correction.** The first bounded live run spent about 505 seconds in
+  a fresh one-job Rust release build and left only 95 seconds for TypeScript-Go. Reusing only
+  `CARGO_TARGET_DIR` did not help: a fresh `CARGO_HOME` changed registry source paths, so the next run
+  rebuilt for about 454 seconds and again reached the deadline during the Go build. The panel
+  collector now reuses dedicated ignored Cargo target/home and Go build/module caches, while build
+  homes, runner copies, executable hashes, config rejection, and final attestations remain private to
+  each run. The 65 focused verifier/collector tests pass; no authenticated live rerun has exercised
+  the completed cache yet.

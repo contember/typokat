@@ -923,8 +923,9 @@ class SystemLiveHost:
         self.live_root = Path(tempfile.mkdtemp(prefix="typokat-wu6-", dir="/tmp"))
         self.live_root.chmod(0o700)
         self.system_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
-        self.git_home = self.live_root / "git-home"
-        self.git_home.mkdir(parents=True, exist_ok=True)
+        self.git_home = self._ensure_real_directory(
+            self.live_root, "git-home", label="private Git home"
+        )
         self._tsgo_checkout_tree: str | None = None
         self._go_toolchain_identity: str | None = None
         self._rust_build: tuple[Path, Path, dict[str, str]] | None = None
@@ -1538,10 +1539,14 @@ class SystemLiveHost:
         rustup_home = self.system_home / ".rustup"
         if not os.access(cargo, os.X_OK) or not rustup_home.is_dir():
             _fail("cargo is unavailable")
-        cargo_home = self.live_root / "cargo-home"
-        build_home = self.live_root / "rust-home"
-        cargo_home.mkdir(parents=True, exist_ok=True)
-        build_home.mkdir(parents=True, exist_ok=True)
+        cargo_home = self._ensure_real_directory(
+            target if self.persistent_rust_build_cache else self.live_root,
+            "cargo-home",
+            label="Cargo home",
+        )
+        build_home = self._ensure_real_directory(
+            self.live_root, "rust-home", label="private Rust build home"
+        )
         environment = {
             "PATH": f"{cargo.parent}:/usr/bin:/bin",
             "HOME": str(build_home),
@@ -1561,14 +1566,25 @@ class SystemLiveHost:
         return self._rust_build
 
     def _ensure_persistent_rust_target(self) -> Path:
-        target = ROOT / "target/wu6/session-batch-live"
+        return self._ensure_real_directory(
+            ROOT,
+            "target",
+            "wu6",
+            "session-batch-live",
+            label="persistent build cache",
+        )
+
+    def _ensure_real_directory(
+        self, root: Path, *components: str, label: str
+    ) -> Path:
+        directory = root
         descriptor = None
         try:
             descriptor = os.open(
-                ROOT,
+                root,
                 os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
             )
-            for component in ("target", "wu6", "session-batch-live"):
+            for component in components:
                 try:
                     os.mkdir(component, mode=0o700, dir_fd=descriptor)
                 except FileExistsError:
@@ -1580,14 +1596,15 @@ class SystemLiveHost:
                 )
                 os.close(descriptor)
                 descriptor = next_descriptor
+                directory /= component
         except OSError as error:
             raise batch.BatchContractError(
-                f"persistent Rust target is not a safely creatable real directory: {error}"
+                f"{label} is not a safely creatable real directory: {error}"
             ) from error
         finally:
             if descriptor is not None:
                 os.close(descriptor)
-        return target
+        return directory
 
     def _acquire_persistent_rust_build_lock(self, target: Path) -> int:
         lock = target / ".session-batch-build.lock"
@@ -1660,9 +1677,9 @@ class SystemLiveHost:
         self._tsgo_checkout_tree = installed_state["tree"]
 
         cold_binary = ROOT / self.contract["tsgo"]["cold_binary_relative_path"]
-        output = cold_binary.parent / f"typokat-wu6-batch-{self.live_root.name}"
+        output = self.live_root / "tsgo-runner"
         descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{output.name}.", dir=output.parent
+            prefix=f".{output.name}.", dir=self.live_root
         )
         os.close(descriptor)
         temporary = Path(temporary_name)
@@ -1785,12 +1802,23 @@ class SystemLiveHost:
         go = Path("/usr/bin/go")
         if not os.access(go, os.X_OK):
             _fail("Go bootstrap executable is unavailable")
-        go_home = self.live_root / "go-home"
-        go_cache = self.live_root / "go-cache"
-        go_path = self.live_root / "go-path"
-        go_mod_cache = self.live_root / "go-mod-cache"
-        for directory in (go_home, go_cache, go_path, go_mod_cache):
-            directory.mkdir(mode=0o700)
+        go_home = self._ensure_real_directory(
+            self.live_root, "go-home", label="private Go build home"
+        )
+        cache_root = (
+            self._ensure_persistent_rust_target()
+            if self.persistent_rust_build_cache
+            else self.live_root
+        )
+        go_cache = self._ensure_real_directory(
+            cache_root, "go-cache", label="Go build cache"
+        )
+        go_path = self._ensure_real_directory(
+            cache_root, "go-path", label="Go path"
+        )
+        go_mod_cache = self._ensure_real_directory(
+            cache_root, "go-mod-cache", label="Go module cache"
+        )
         return {
             "PATH": f"{go.parent}:/usr/bin:/bin",
             "HOME": str(go_home),
