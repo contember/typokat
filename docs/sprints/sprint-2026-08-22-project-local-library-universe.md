@@ -852,3 +852,17 @@ numbers are invalid without `--no-smt`.
   homes, runner copies, executable hashes, config rejection, and final attestations remain private to
   each run. The 65 focused verifier/collector tests pass; no authenticated live rerun has exercised
   the completed cache yet.
+- **2026-09-02 — WU6 bounded live panel failed the historical wall gate.** The first cache-complete
+  retry exposed that the private TypeScript-Go runner copy had no adjacent libraries; RED commit
+  `fc07e777` and fix `34f1beb7` now pass the authenticated staged library directory explicitly, and
+  the focused verifier/collector suite passes `66/66`. The clean `34f1beb7` collector then completed
+  in `210.30 s`, within the global `600 s` deadline, and retained
+  `target/wu6/session-panels-34f1beb7.json` (file SHA-256
+  `9db9b358274efbe7792c1ce82be2d81bb138f3ffec9c09f05c7d726896f8ad19`, canonical evidence
+  SHA-256 `e432b1f7ccd1dc811b023624e4c3f60868b10593eadc15392e1f69ba29945260`).
+  The 1-frame smoke passed. The 32-frame ABBA panel passed with median speedup `8.102789`, p95
+  ratio `8.130940`, bootstrap lower bound `7.788355`, and median RSS `75,454 KiB` versus
+  `167,804 KiB`. The semantic/lifecycle-valid 687-frame closure used `75,456 KiB`
+  (`77,266,944 bytes`) peak RSS, below the `144,109,568-byte` historical gate, but took
+  `20.472754830 s` route time versus the strict `12.946437 s` gate. Verdict: `PANEL-FAIL`.
+  Concurrency and counting-allocation collection therefore did not run; WU6 remains `NO-GO`.
