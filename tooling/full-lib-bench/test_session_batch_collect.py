@@ -621,6 +621,12 @@ class FakePostPanelHost:
                 returncode=0,
                 tool="typokat",
                 stderr="",
+                environment={
+                    "LANG": "C",
+                    "LC_ALL": "C",
+                    "TZ": "UTC",
+                    "MALLOC_ARENA_MAX": "2",
+                },
                 address_space_limit_bytes=contract[
                     "child_address_space_limit_bytes"
                 ],
@@ -2315,6 +2321,15 @@ class SessionBatchLiveConcurrencyCollectorTests(unittest.TestCase):
                 hashlib.sha256(record["request_stream"].encode()).hexdigest(),
                 record["request_stream_sha256"],
             )
+            self.assertEqual(
+                record["environment"],
+                {
+                    "LANG": "C",
+                    "LC_ALL": "C",
+                    "TZ": "UTC",
+                    "MALLOC_ARENA_MAX": "2",
+                },
+            )
             self.assertTrue(
                 all(
                     session["semantic"] == expected_semantic
@@ -2348,7 +2363,7 @@ class SessionBatchLiveConcurrencyCollectorTests(unittest.TestCase):
         )
         self.assertEqual(repeated, result)
 
-    def test_concurrency_fails_closed_on_source_semantic_binary_and_attestation_drift(
+    def test_concurrency_fails_closed_on_source_semantic_environment_binary_and_attestation_drift(
         self,
     ) -> None:
         source = FakePostPanelHost(self.contract)
@@ -2371,6 +2386,9 @@ class SessionBatchLiveConcurrencyCollectorTests(unittest.TestCase):
         binary = FakePostPanelHost(self.contract)
         binary.concurrency["2"]["executable_after_sha256"] = "9" * 64
 
+        environment = FakePostPanelHost(self.contract)
+        environment.concurrency["2"]["environment"]["MALLOC_ARENA_MAX"] = "8"
+
         candidate_attestation = FakePostPanelHost(self.contract)
         candidate_attestation.final_attestation_mutation = lambda value: value[
             "candidate"
@@ -2385,6 +2403,7 @@ class SessionBatchLiveConcurrencyCollectorTests(unittest.TestCase):
             ("source", source),
             ("semantic", semantic),
             ("binary", binary),
+            ("environment", environment),
             ("candidate-attestation", candidate_attestation),
             ("runner-attestation", runner_attestation),
         ):

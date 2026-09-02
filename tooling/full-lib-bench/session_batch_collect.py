@@ -916,6 +916,7 @@ def _collect_live_concurrency(
             "peak_rss_kib",
             "time_report",
             "stdout_sha256",
+            "environment",
         }
         if not isinstance(record, dict) or not required <= set(record):
             _fail(f"{label} process evidence is incomplete")
@@ -932,6 +933,13 @@ def _collect_live_concurrency(
             or record["address_space_limit_bytes"] != limit
         ):
             _fail(f"{label} process boundary differs")
+        if record["environment"] != {
+            "LANG": "C",
+            "LC_ALL": "C",
+            "TZ": "UTC",
+            "MALLOC_ARENA_MAX": "2",
+        }:
+            _fail(f"{label} process environment differs")
         if (
             record["request_stream"] != request_stream
             or record["request_stream_sha256"] != _sha(request_stream.encode())
@@ -1363,6 +1371,12 @@ class SystemLiveHost:
         before = _sha_file(binary, "typokat concurrency runner")
         if before != runner.get("binary_sha256"):
             _fail("typokat concurrency runner changed before launch")
+        environment = {
+            "LANG": "C",
+            "LC_ALL": "C",
+            "TZ": "UTC",
+            "MALLOC_ARENA_MAX": "2",
+        }
         measurement = self._run_runner(
             "typokat",
             runner,
@@ -1371,6 +1385,7 @@ class SystemLiveHost:
             timeout_seconds=timeout_seconds,
             address_space_limit_bytes=address_space_limit_bytes,
             measured=True,
+            environment_overrides={"MALLOC_ARENA_MAX": "2"},
         )
         after = _sha_file(binary, "typokat concurrency runner")
         if after != before:
@@ -1491,6 +1506,7 @@ class SystemLiveHost:
             "tool": "typokat",
             "stderr": measurement.stderr,
             "address_space_limit_bytes": address_space_limit_bytes,
+            "environment": environment,
         }
 
 
@@ -2552,6 +2568,7 @@ class SystemLiveHost:
         timeout_seconds: int,
         address_space_limit_bytes: int,
         measured: bool,
+        environment_overrides: dict[str, str] | None = None,
     ) -> _ProcessMeasurement:
         environment = {"LANG": "C", "LC_ALL": "C", "TZ": "UTC"}
         if tool == "tsgo":
@@ -2565,6 +2582,18 @@ class SystemLiveHost:
                 ),
                 *arguments,
             ]
+        if environment_overrides is not None:
+            collisions = set(environment) & set(environment_overrides)
+            if collisions:
+                _fail("runner environment override collides with fixed environment")
+            if (
+                tool != "typokat"
+                or len(arguments) != 2
+                or arguments[0] != "--concurrency"
+                or environment_overrides != {"MALLOC_ARENA_MAX": "2"}
+            ):
+                _fail("runner environment overrides differ from concurrency boundary")
+            environment.update(environment_overrides)
         return _supervise(
             [runner["path"], *arguments],
             stdin,
