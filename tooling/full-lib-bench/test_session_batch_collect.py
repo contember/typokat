@@ -955,6 +955,64 @@ class SessionBatchLiveCollectorTests(unittest.TestCase):
         )
         self.assertEqual(record["allocation_receipt"], receipt)
 
+    def test_system_concurrency_host_bounds_glibc_arenas_and_records_environment(
+        self,
+    ) -> None:
+        concurrency = concurrency_evidence()["1"]
+        request_stream = json.dumps(
+            {"case_id": "case", "schema": 1, "source": "const value = 1;"},
+            sort_keys=True,
+            separators=(",", ":"),
+        ) + "\n"
+        measurement = collect._ProcessMeasurement(
+            pid=456,
+            start_ns=10,
+            end_ns=20,
+            returncode=0,
+            stdout=concurrency["stdout"],
+            stderr="",
+            process_group_empty=True,
+            time_report="Maximum resident set size (kbytes): 189528\n",
+            rss_kib=189_528,
+        )
+        effective_environment = {
+            "LANG": "C",
+            "LC_ALL": "C",
+            "TZ": "UTC",
+            "MALLOC_ARENA_MAX": "2",
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "concurrency-runner"
+            executable_bytes = b"concurrency runner"
+            executable.write_bytes(executable_bytes)
+            runner = {
+                "path": str(executable),
+                "binary_sha256": hashlib.sha256(executable_bytes).hexdigest(),
+            }
+            host = object.__new__(collect.SystemLiveHost)
+            host.contract = self.contract
+            host._run_runner = mock.Mock(return_value=measurement)
+            record = host.run_concurrency(
+                runner,
+                request_stream,
+                1,
+                timeout_seconds=10,
+                address_space_limit_bytes=1 << 30,
+            )
+
+        host._run_runner.assert_called_once_with(
+            "typokat",
+            runner,
+            ["--concurrency", "1"],
+            request_stream,
+            timeout_seconds=10,
+            address_space_limit_bytes=1 << 30,
+            measured=True,
+            environment_overrides={"MALLOC_ARENA_MAX": "2"},
+        )
+        self.assertEqual(record["environment"], effective_environment)
+
     def test_tsgo_runner_receives_authenticated_staged_library_directory(self) -> None:
         arguments = ["--batch", "--protocol-version", "1"]
         stdin = '{"case_id":"case"}\n'
