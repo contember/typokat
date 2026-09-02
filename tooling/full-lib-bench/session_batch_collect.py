@@ -6,6 +6,7 @@ from __future__ import annotations
 import copy
 from dataclasses import asdict, dataclass
 import errno
+import fcntl
 import hashlib
 import json
 import math
@@ -17,6 +18,7 @@ import resource
 import selectors
 import shutil
 import signal
+import stat
 import struct
 import subprocess
 import tempfile
@@ -894,7 +896,11 @@ def collect_live_panels(*, output: Path) -> dict[str, Any]:
         _fail(f"output already exists: {output}")
     contract = batch.verify_contract()
     deadline = time.monotonic() + contract["sampling"]["max_collection_wall_seconds"]
-    host = SystemLiveHost(contract, collection_deadline=deadline)
+    host = SystemLiveHost(
+        contract,
+        collection_deadline=deadline,
+        persistent_rust_build_cache=True,
+    )
     result = _collect_live_panels(host, host.contract)
     _bounded_timeout(contract["sampling"]["max_collection_wall_seconds"], deadline)
     _atomic_write_new(output, _canonical(result) + b"\n")
@@ -905,10 +911,15 @@ class SystemLiveHost:
     """Real build and process boundary used only by the public collector."""
 
     def __init__(
-        self, contract: dict[str, Any], *, collection_deadline: float | None = None
+        self,
+        contract: dict[str, Any],
+        *,
+        collection_deadline: float | None = None,
+        persistent_rust_build_cache: bool = False,
     ) -> None:
         self.contract = contract
         self.collection_deadline = collection_deadline
+        self.persistent_rust_build_cache = persistent_rust_build_cache
         self.live_root = Path(tempfile.mkdtemp(prefix="typokat-wu6-", dir="/tmp"))
         self.live_root.chmod(0o700)
         self.system_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
@@ -1465,15 +1476,43 @@ class SystemLiveHost:
             "--manifest-path",
             str(ROOT / "Cargo.toml"),
         ]
-        self._validate_cargo_configuration(self.live_root, cargo_home)
+        lock_descriptor = None
+        if self.persistent_rust_build_cache:
+            lock_descriptor = self._acquire_persistent_rust_build_lock(target)
         try:
-            self._run_build(argv, self.live_root, environment)
-        finally:
             self._validate_cargo_configuration(self.live_root, cargo_home)
-        if self.freeze_candidate() != candidate:
-            _fail("candidate changed during typokat build")
-        built = target / "release" / self.contract["typokat"]["runner_binary"]
-        binary_sha = _sha_file(built, "built typokat runner")
+            try:
+                self._run_build(argv, self.live_root, environment)
+            finally:
+                self._validate_cargo_configuration(self.live_root, cargo_home)
+            if self.freeze_candidate() != candidate:
+                _fail("candidate changed during typokat build")
+            built = target / "release" / self.contract["typokat"]["runner_binary"]
+            if self.persistent_rust_build_cache:
+                built_data = _read_regular(built, "built typokat runner")
+                descriptor, private_name = tempfile.mkstemp(
+                    prefix="typokat-runner-", dir=self.live_root
+                )
+                private = Path(private_name)
+                try:
+                    with os.fdopen(descriptor, "wb") as output:
+                        output.write(built_data)
+                        output.flush()
+                        os.fsync(output.fileno())
+                        os.fchmod(output.fileno(), 0o700)
+                except OSError as error:
+                    try:
+                        private.unlink()
+                    except FileNotFoundError:
+                        pass
+                    raise batch.BatchContractError(
+                        f"cannot copy built typokat runner: {error}"
+                    ) from error
+                built = private
+            binary_sha = _sha_file(built, "built typokat runner")
+        finally:
+            if lock_descriptor is not None:
+                os.close(lock_descriptor)
         return {
             "tool": "typokat",
             "path": str(built.resolve()),
@@ -1490,7 +1529,11 @@ class SystemLiveHost:
             if environment["TYPOKAT_CANDIDATE_COMMIT"] != candidate["commit"]:
                 _fail("Rust build candidate identity changed")
             return self._rust_build
-        target = self.live_root / "rust-target"
+        target = (
+            self._ensure_persistent_rust_target()
+            if self.persistent_rust_build_cache
+            else self.live_root / "rust-target"
+        )
         cargo = self.system_home / ".cargo/bin/cargo"
         rustup_home = self.system_home / ".rustup"
         if not os.access(cargo, os.X_OK) or not rustup_home.is_dir():
@@ -1516,6 +1559,70 @@ class SystemLiveHost:
         }
         self._rust_build = (target, cargo_home, environment)
         return self._rust_build
+
+    def _ensure_persistent_rust_target(self) -> Path:
+        target = ROOT / "target/wu6/session-batch-live"
+        descriptor = None
+        try:
+            descriptor = os.open(
+                ROOT,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            )
+            for component in ("target", "wu6", "session-batch-live"):
+                try:
+                    os.mkdir(component, mode=0o700, dir_fd=descriptor)
+                except FileExistsError:
+                    pass
+                next_descriptor = os.open(
+                    component,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                    dir_fd=descriptor,
+                )
+                os.close(descriptor)
+                descriptor = next_descriptor
+        except OSError as error:
+            raise batch.BatchContractError(
+                f"persistent Rust target is not a safely creatable real directory: {error}"
+            ) from error
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+        return target
+
+    def _acquire_persistent_rust_build_lock(self, target: Path) -> int:
+        lock = target / ".session-batch-build.lock"
+        try:
+            descriptor = os.open(
+                lock,
+                os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW,
+                0o600,
+            )
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                os.close(descriptor)
+                _fail("persistent Rust build lock is not a regular file")
+        except OSError as error:
+            raise batch.BatchContractError(
+                f"cannot open persistent Rust build lock: {error}"
+            ) from error
+
+        deadline = self.collection_deadline
+        if deadline is None:
+            deadline = time.monotonic() + BUILD_TIMEOUT_SECONDS
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return descriptor
+            except BlockingIOError:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    os.close(descriptor)
+                    _fail("collection wall-time budget reached its deadline")
+                time.sleep(min(0.05, remaining))
+            except OSError as error:
+                os.close(descriptor)
+                raise batch.BatchContractError(
+                    f"cannot acquire persistent Rust build lock: {error}"
+                ) from error
 
     def _validate_cargo_configuration(self, cwd: Path, cargo_home: Path) -> None:
         candidates = [cargo_home / "config", cargo_home / "config.toml"]
