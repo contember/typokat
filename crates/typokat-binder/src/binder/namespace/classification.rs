@@ -563,30 +563,42 @@ impl NamespaceTable {
             // Leave each group in the total order classification reads it in, so the merge
             // record can share this vector rather than sort a copy of it. Declaration ids are
             // unique, so the order is total and sorting is idempotent.
-            #[cfg(any(test, feature = "test-utils"))]
-            let before = participants.clone();
-            #[cfg(any(test, feature = "test-utils"))]
-            record_placement_sort_call();
             if library_order {
-                participants.sort_by_key(|participant| {
+                let key = |participant: &MergeParticipant| {
                     (
                         participant.origin,
                         participant.span.start,
                         participant.declaration.0,
                     )
-                });
+                };
+                if participants
+                    .windows(2)
+                    .any(|pair| key(&pair[0]) > key(&pair[1]))
+                {
+                    #[cfg(any(test, feature = "test-utils"))]
+                    record_placement_sort_call();
+                    participants.sort_by_key(key);
+                    #[cfg(any(test, feature = "test-utils"))]
+                    record_placement_row_reorder();
+                }
             } else {
-                participants.sort_by_key(|participant| {
+                let key = |participant: &MergeParticipant| {
                     (
                         participant.source,
                         participant.span.start,
                         participant.declaration.0,
                     )
-                });
-            }
-            #[cfg(any(test, feature = "test-utils"))]
-            if before != *participants {
-                record_placement_row_reorder();
+                };
+                if participants
+                    .windows(2)
+                    .any(|pair| key(&pair[0]) > key(&pair[1]))
+                {
+                    #[cfg(any(test, feature = "test-utils"))]
+                    record_placement_sort_call();
+                    participants.sort_by_key(key);
+                    #[cfg(any(test, feature = "test-utils"))]
+                    record_placement_row_reorder();
+                }
             }
         }
     }
