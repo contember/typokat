@@ -333,6 +333,7 @@ thread_local! {
     static MERGE_KEY_NAME_ALLOCATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static MERGE_KEY_NAME_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static NON_MERGING_PARTICIPANT_ROWS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static FIRST_PARTICIPANT_HEAP_ALLOCATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static NON_MERGING_MERGE_RECORDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static PLACEMENT_ORDER_GROUPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static PLACEMENT_ROW_REORDERS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -352,6 +353,7 @@ pub struct MergeSubstrateWorkForTest {
     /// `MergeParticipant` rows the substrate retains for a group holding one declaration —
     /// a declaration that, by the time classification runs, merged with nothing.
     pub(crate) non_merging_participant_rows: u64,
+    pub(crate) first_participant_heap_allocations: u64,
     /// Merge records built for such a group: a classification of one declaration against
     /// itself, plus its `merge_indices` key.
     pub(crate) non_merging_merge_records: u64,
@@ -369,6 +371,7 @@ fn merge_substrate_work_for_test() -> MergeSubstrateWorkForTest {
         merge_key_name_allocations: MERGE_KEY_NAME_ALLOCATIONS.get(),
         merge_key_name_bytes: MERGE_KEY_NAME_BYTES.get(),
         non_merging_participant_rows: NON_MERGING_PARTICIPANT_ROWS.get(),
+        first_participant_heap_allocations: FIRST_PARTICIPANT_HEAP_ALLOCATIONS.get(),
         non_merging_merge_records: NON_MERGING_MERGE_RECORDS.get(),
         placement_order_groups: PLACEMENT_ORDER_GROUPS.get(),
         placement_row_reorders: PLACEMENT_ROW_REORDERS.get(),
@@ -405,6 +408,11 @@ pub(super) fn record_non_merging_participant_rows(rows: usize) {
 }
 
 #[cfg(any(test, feature = "test-utils"))]
+pub(super) fn record_first_participant_heap_allocation() {
+    FIRST_PARTICIPANT_HEAP_ALLOCATIONS.set(FIRST_PARTICIPANT_HEAP_ALLOCATIONS.get() + 1);
+}
+
+#[cfg(any(test, feature = "test-utils"))]
 pub(super) fn record_non_merging_merge_record() {
     NON_MERGING_MERGE_RECORDS.set(NON_MERGING_MERGE_RECORDS.get() + 1);
 }
@@ -430,6 +438,9 @@ impl MergeSubstrateWorkScopeForTest {
             non_merging_participant_rows: end
                 .non_merging_participant_rows
                 .saturating_sub(self.0.non_merging_participant_rows),
+            first_participant_heap_allocations: end
+                .first_participant_heap_allocations
+                .saturating_sub(self.0.first_participant_heap_allocations),
             non_merging_merge_records: end
                 .non_merging_merge_records
                 .saturating_sub(self.0.non_merging_merge_records),

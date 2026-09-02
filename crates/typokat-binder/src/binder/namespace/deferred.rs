@@ -538,6 +538,10 @@ pub(super) fn push_placement<'state>(
         }) {
             Some(index) => index,
             None => {
+                #[cfg(any(test, feature = "test-utils"))]
+                if entries.is_empty() {
+                    record_first_participant_heap_allocation();
+                }
                 entries.push(participant);
                 entries.len() - 1
             }

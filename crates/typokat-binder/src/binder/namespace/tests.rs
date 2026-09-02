@@ -822,6 +822,12 @@ fn declarations_that_merge_with_nothing_are_never_copied_into_merge_substrate() 
             work.non_merging_participant_rows
         );
         assert_eq!(
+            work.first_participant_heap_allocations, 0,
+            "{declarations} singleton placement groups allocated {} first-row heap buffers \
+                 ({work:?}) — the first participant must stay inline",
+            work.first_participant_heap_allocations
+        );
+        assert_eq!(
             work.non_merging_merge_records, declarations,
             "{declarations} declarations that merge with nothing built {} merge records \
                  ({work:?}) — the deferred one-per-group cost moved",
