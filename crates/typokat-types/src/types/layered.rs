@@ -390,6 +390,10 @@ impl<T> LayeredVec<T> {
         self.local.len()
     }
 
+    pub fn reserve_local(&mut self, additional: usize) {
+        self.local.reserve(additional);
+    }
+
     #[cfg(any(test, feature = "test-utils"))]
     pub fn replacement_len(&self) -> usize {
         self.overrides.len()

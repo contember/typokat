@@ -89,6 +89,10 @@ impl SymbolTable {
         SymbolTable::default()
     }
 
+    pub(crate) fn reserve_local(&mut self, additional: usize) {
+        self.symbols.reserve_local(additional);
+    }
+
     /// Append a symbol and return its id.
     pub fn push(&mut self, symbol: Symbol) -> SymbolId {
         let id = SymbolId(self.symbols.len() as u32);

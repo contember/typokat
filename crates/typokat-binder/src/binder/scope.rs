@@ -103,6 +103,10 @@ impl ScopeGraph {
         ScopeGraph::default()
     }
 
+    pub(crate) fn reserve_local(&mut self, additional: usize) {
+        self.scopes.reserve_local(additional);
+    }
+
     /// Append a scope and return its id.
     pub fn push(&mut self, scope: Scope) -> ScopeId {
         let id = ScopeId(self.scopes.len() as u32);
