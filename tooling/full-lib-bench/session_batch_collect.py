@@ -1888,6 +1888,15 @@ class SystemLiveHost:
         environment = {"LANG": "C", "LC_ALL": "C", "TZ": "UTC"}
         if tool == "tsgo":
             environment["GOMAXPROCS"] = "1"
+            arguments = [
+                "--lib-dir",
+                str(
+                    (
+                        ROOT / self.contract["tsgo"]["cold_binary_relative_path"]
+                    ).resolve().parent
+                ),
+                *arguments,
+            ]
         return _supervise(
             [runner["path"], *arguments],
             stdin,
