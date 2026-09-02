@@ -828,6 +828,11 @@ fn declarations_that_merge_with_nothing_are_never_copied_into_merge_substrate() 
             work.non_merging_merge_records
         );
         assert_eq!(
+            work.placement_sort_calls, 0,
+            "already ordered placement groups still invoked {} sorts ({work:?})",
+            work.placement_sort_calls
+        );
+        assert_eq!(
             work.placement_row_reorders, 0,
             "the canonical-order pass reordered {} placement groups ({work:?}) — rows are \
                  appended in ascending source order, and only that makes sorting them where \

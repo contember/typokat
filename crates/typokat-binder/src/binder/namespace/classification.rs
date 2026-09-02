@@ -565,6 +565,8 @@ impl NamespaceTable {
             // unique, so the order is total and sorting is idempotent.
             #[cfg(any(test, feature = "test-utils"))]
             let before = participants.clone();
+            #[cfg(any(test, feature = "test-utils"))]
+            record_placement_sort_call();
             if library_order {
                 participants.sort_by_key(|participant| {
                     (

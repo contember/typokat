@@ -335,6 +335,7 @@ thread_local! {
     static NON_MERGING_PARTICIPANT_ROWS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static NON_MERGING_MERGE_RECORDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static PLACEMENT_ORDER_GROUPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static PLACEMENT_SORT_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static PLACEMENT_ROW_REORDERS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
@@ -357,6 +358,7 @@ pub struct MergeSubstrateWorkForTest {
     pub(crate) non_merging_merge_records: u64,
     /// Placement groups visited by the one-shot instance-state and canonical-order pass.
     pub(crate) placement_order_groups: u64,
+    pub(crate) placement_sort_calls: u64,
     /// Placement groups the canonical-order pass actually reordered. The rows are appended in
     /// ascending `(source, span)` order, so this stays zero — it is the witness that sorting
     /// them where they live cannot move the canonical row order.
@@ -371,6 +373,7 @@ fn merge_substrate_work_for_test() -> MergeSubstrateWorkForTest {
         non_merging_participant_rows: NON_MERGING_PARTICIPANT_ROWS.get(),
         non_merging_merge_records: NON_MERGING_MERGE_RECORDS.get(),
         placement_order_groups: PLACEMENT_ORDER_GROUPS.get(),
+        placement_sort_calls: PLACEMENT_SORT_CALLS.get(),
         placement_row_reorders: PLACEMENT_ROW_REORDERS.get(),
     }
 }
@@ -383,6 +386,11 @@ pub(super) fn record_placement_row_reorder() {
 #[cfg(any(test, feature = "test-utils"))]
 pub(super) fn record_placement_order_group() {
     PLACEMENT_ORDER_GROUPS.set(PLACEMENT_ORDER_GROUPS.get() + 1);
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub(super) fn record_placement_sort_call() {
+    PLACEMENT_SORT_CALLS.set(PLACEMENT_SORT_CALLS.get() + 1);
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -436,6 +444,9 @@ impl MergeSubstrateWorkScopeForTest {
             placement_order_groups: end
                 .placement_order_groups
                 .saturating_sub(self.0.placement_order_groups),
+            placement_sort_calls: end
+                .placement_sort_calls
+                .saturating_sub(self.0.placement_sort_calls),
             placement_row_reorders: end
                 .placement_row_reorders
                 .saturating_sub(self.0.placement_row_reorders),
