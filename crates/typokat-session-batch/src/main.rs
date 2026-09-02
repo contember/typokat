@@ -2,8 +2,12 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(feature = "counting-allocator")]
+use stats_alloc::{StatsAlloc, INSTRUMENTED_SYSTEM};
+#[cfg(feature = "counting-allocator")]
+use std::alloc::System;
 use std::io::{self, BufRead, Read, Write};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use typokat_check::check::checker::project_local::{
     CheckerSession, SessionBenchClock, SessionBenchFault, SessionBenchFaultReceipt,
     SessionBenchFaultSeam,
@@ -13,6 +17,9 @@ use typokat_frontend::frontend::{
     run_prepared_project_frontend_with_parse_work, FileInput, PreparedProjectParseWork,
 };
 use typokat_library::{embedded_library_profile_metadata, LibraryBaseProvider};
+#[cfg(feature = "counting-allocator")]
+#[global_allocator]
+static GLOBAL_ALLOCATOR: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
 
 const COMPILER_FLAGS: [&str; 9] = [
     "--strict",
@@ -49,7 +56,7 @@ struct ProtocolInfo {
     compiler_flags: [&'static str; 9],
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FrameRequest {
     schema: u8,
@@ -135,6 +142,34 @@ struct FrameReceipt {
     session_weak_alive_after: Option<bool>,
     cache_weak_alive_after: Option<bool>,
     phases: FramePhases,
+}
+#[derive(Serialize)]
+struct ConcurrentSessionReceipt {
+    barrier_ns: u64,
+    cache_identity: String,
+    cache_weak_alive_after: bool,
+    end_ns: u64,
+    identity: String,
+    publisher_identity: String,
+    raw_output_sha256: String,
+    semantic: FrameSemantic,
+    session_weak_alive_after: bool,
+    start_ns: u64,
+}
+
+struct ConcurrentStart {
+    ready: usize,
+    barrier_ns: Option<u64>,
+}
+
+#[cfg(feature = "counting-allocator")]
+#[derive(Serialize)]
+struct AllocationReceipt {
+    allocation_count: u64,
+    binary_sha256: String,
+    instrumentation: &'static str,
+    timed: bool,
+    tool: &'static str,
 }
 
 #[derive(Serialize)]
@@ -655,27 +690,7 @@ fn run_frame(
     })
 }
 
-fn run() -> Result<RunDisposition, String> {
-    let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
-    match arguments.as_slice() {
-        [] => {}
-        [argument] if argument == std::ffi::OsStr::new("--protocol-info") => {
-            println!(
-                "{}",
-                serde_json::to_string(&protocol_info()?).map_err(|error| error.to_string())?
-            );
-            return Ok(RunDisposition::Complete);
-        }
-        [argument] if argument == std::ffi::OsStr::new("--single-project") => {
-            run_single_project()?;
-            return Ok(RunDisposition::Complete);
-        }
-        _ => {
-            return Err(
-                "usage: typokat-session-batch [--protocol-info|--single-project]".to_owned(),
-            );
-        }
-    }
+fn run_batch() -> Result<RunDisposition, String> {
     let clock = SessionBenchClock::start();
     let initialization_start_ns = clock.elapsed_ns();
     let product = LibraryBaseProvider::new().declaration_product_for_session_bench()?;
@@ -730,6 +745,276 @@ fn run() -> Result<RunDisposition, String> {
         stdout.flush().map_err(|error| error.to_string())?;
     }
     Ok(RunDisposition::Complete)
+}
+
+fn parse_concurrent_request(input: &str) -> Result<FrameRequest, String> {
+    let Some(line) = input.strip_suffix('\n') else {
+        return Err("concurrency mode requires exactly one canonical JSON request".to_owned());
+    };
+    if line.is_empty() || line.contains(['\n', '\r']) {
+        return Err("concurrency mode requires exactly one canonical JSON request".to_owned());
+    }
+    let value: serde_json::Value = serde_json::from_str(line)
+        .map_err(|error| format!("invalid concurrency request: {error}"))?;
+    if canonical_json(&value)? != line {
+        return Err("concurrency request is not canonical".to_owned());
+    }
+    let request: FrameRequest = serde_json::from_value(value)
+        .map_err(|error| format!("invalid concurrency request: {error}"))?;
+    if request.schema != 1 || request.case_id.is_empty() {
+        return Err("invalid frame request schema or case identity".to_owned());
+    }
+    Ok(request)
+}
+
+fn concurrent_receipt(
+    frame: FrameReceipt,
+    start_ns: u64,
+    barrier_ns: u64,
+    clock: &SessionBenchClock,
+) -> Result<ConcurrentSessionReceipt, String> {
+    if !matches!(&frame.lifecycle_disposition, LifecycleDisposition::Semantic) {
+        return Err("concurrency request did not produce a real session receipt".to_owned());
+    }
+    let identity = frame
+        .program_identity
+        .ok_or_else(|| "concurrency receipt omitted the project identity".to_owned())?;
+    let publisher_identity = frame
+        .checker_identity
+        .ok_or_else(|| "concurrency receipt omitted the publisher identity".to_owned())?;
+    let cache_identity = frame
+        .semantic_identity
+        .ok_or_else(|| "concurrency receipt omitted the cache identity".to_owned())?;
+    let session_weak_alive_after = frame
+        .session_weak_alive_after
+        .ok_or_else(|| "concurrency receipt omitted session teardown evidence".to_owned())?;
+    let cache_weak_alive_after = frame
+        .cache_weak_alive_after
+        .ok_or_else(|| "concurrency receipt omitted cache teardown evidence".to_owned())?;
+    let semantic_value =
+        serde_json::to_value(&frame.semantic).map_err(|error| error.to_string())?;
+    let raw_output_sha256 = sha256(canonical_json(&semantic_value)?.as_bytes());
+    let end_ns = clock.elapsed_ns();
+    Ok(ConcurrentSessionReceipt {
+        barrier_ns,
+        cache_identity,
+        cache_weak_alive_after,
+        end_ns,
+        identity,
+        publisher_identity,
+        raw_output_sha256,
+        semantic: frame.semantic,
+        session_weak_alive_after,
+        start_ns,
+    })
+}
+
+fn run_concurrent(count: usize) -> Result<(), String> {
+    let mut input = String::new();
+    io::stdin()
+        .read_to_string(&mut input)
+        .map_err(|error| error.to_string())?;
+    let request = parse_concurrent_request(&input)?;
+
+    let clock = Arc::new(SessionBenchClock::start());
+    let product = LibraryBaseProvider::new().declaration_product_for_session_bench()?;
+    let shared_product_identity = product.profile_identity().to_owned();
+    let start = Arc::new((
+        Mutex::new(ConcurrentStart {
+            ready: 0,
+            barrier_ns: None,
+        }),
+        Condvar::new(),
+    ));
+    let mut workers: Vec<std::thread::JoinHandle<Result<ConcurrentSessionReceipt, String>>> =
+        Vec::with_capacity(count);
+
+    for ordinal in 0..count {
+        let worker_clock = Arc::clone(&clock);
+        let worker_product = Arc::clone(&product);
+        let worker_request = request.clone();
+        let worker_product_identity = shared_product_identity.clone();
+        let worker_start = Arc::clone(&start);
+        let worker_result = std::thread::Builder::new()
+            .name(format!("typokat-session-{ordinal}"))
+            .spawn(move || -> Result<ConcurrentSessionReceipt, String> {
+                let start_ns = worker_clock.elapsed_ns();
+                let barrier_ns = {
+                    let (lock, ready) = &*worker_start;
+                    let mut state = lock
+                        .lock()
+                        .map_err(|_| "concurrency start barrier was poisoned".to_owned())?;
+                    state.ready += 1;
+                    ready.notify_all();
+                    while state.barrier_ns.is_none() {
+                        state = ready
+                            .wait(state)
+                            .map_err(|_| "concurrency start barrier was poisoned".to_owned())?;
+                    }
+                    state
+                        .barrier_ns
+                        .ok_or_else(|| "concurrency start barrier was not set".to_owned())?
+                };
+                let receipt = run_frame(
+                    &worker_clock,
+                    worker_product,
+                    &worker_product_identity,
+                    worker_request,
+                    ordinal,
+                    Interval {
+                        start_ns: barrier_ns,
+                        end_ns: barrier_ns,
+                    },
+                )?;
+                concurrent_receipt(receipt, start_ns, barrier_ns, &worker_clock)
+            });
+        let worker = match worker_result {
+            Ok(worker) => worker,
+            Err(error) => {
+                let (lock, ready) = &*start;
+                if let Ok(mut state) = lock.lock() {
+                    state.barrier_ns = Some(clock.elapsed_ns());
+                    ready.notify_all();
+                }
+                for worker in workers {
+                    let _ = worker.join();
+                }
+                return Err(format!("failed to launch concurrency worker: {error}"));
+            }
+        };
+        workers.push(worker);
+    }
+
+    let barrier_ns = {
+        let (lock, ready) = &*start;
+        let mut state = lock
+            .lock()
+            .map_err(|_| "concurrency start barrier was poisoned".to_owned())?;
+        while state.ready != count {
+            state = ready
+                .wait(state)
+                .map_err(|_| "concurrency start barrier was poisoned".to_owned())?;
+        }
+        let barrier_ns = clock.elapsed_ns();
+        state.barrier_ns = Some(barrier_ns);
+        ready.notify_all();
+        barrier_ns
+    };
+
+    let mut receipts = Vec::with_capacity(count);
+    let mut failure = None;
+    for worker in workers {
+        match worker.join() {
+            Ok(Ok(receipt)) => receipts.push(receipt),
+            Ok(Err(error)) => {
+                if failure.is_none() {
+                    failure = Some(error);
+                }
+            }
+            Err(_) => {
+                if failure.is_none() {
+                    failure = Some("concurrency worker panicked".to_owned());
+                }
+            }
+        }
+    }
+    if let Some(error) = failure {
+        return Err(error);
+    }
+    if receipts
+        .iter()
+        .any(|receipt| receipt.barrier_ns != barrier_ns)
+    {
+        return Err("concurrency workers observed different barriers".to_owned());
+    }
+
+    let value = serde_json::to_value(receipts).map_err(|error| error.to_string())?;
+    let mut stdout = io::BufWriter::new(io::stdout().lock());
+    stdout
+        .write_all(canonical_json(&value)?.as_bytes())
+        .map_err(|error| error.to_string())?;
+    stdout.write_all(b"\n").map_err(|error| error.to_string())?;
+    stdout.flush().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[cfg(feature = "counting-allocator")]
+fn write_allocation_receipt() -> Result<(), String> {
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let binary = std::fs::read(executable).map_err(|error| error.to_string())?;
+    let binary_sha256 = sha256(&binary);
+    let stats = GLOBAL_ALLOCATOR.stats();
+    let allocations =
+        u64::try_from(stats.allocations).map_err(|_| "allocation count exceeds u64".to_owned())?;
+    let reallocations = u64::try_from(stats.reallocations)
+        .map_err(|_| "reallocation count exceeds u64".to_owned())?;
+    let allocation_count = allocations
+        .checked_add(reallocations)
+        .ok_or_else(|| "allocation count exceeds u64".to_owned())?;
+    let receipt = AllocationReceipt {
+        allocation_count,
+        binary_sha256,
+        instrumentation: "counting-allocator",
+        timed: false,
+        tool: "typokat",
+    };
+    let value = serde_json::to_value(receipt).map_err(|error| error.to_string())?;
+    let mut stdout = io::BufWriter::new(io::stdout().lock());
+    stdout
+        .write_all(canonical_json(&value)?.as_bytes())
+        .map_err(|error| error.to_string())?;
+    stdout.write_all(b"\n").map_err(|error| error.to_string())?;
+    stdout.flush().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn usage() -> &'static str {
+    #[cfg(feature = "counting-allocator")]
+    {
+        "usage: typokat-session-batch [--protocol-info|--single-project|--concurrency <count>|--allocation-probe]"
+    }
+    #[cfg(not(feature = "counting-allocator"))]
+    {
+        "usage: typokat-session-batch [--protocol-info|--single-project|--concurrency <count>]"
+    }
+}
+
+fn run() -> Result<RunDisposition, String> {
+    let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
+    match arguments.as_slice() {
+        [] => run_batch(),
+        [argument] if argument == std::ffi::OsStr::new("--protocol-info") => {
+            println!(
+                "{}",
+                serde_json::to_string(&protocol_info()?).map_err(|error| error.to_string())?
+            );
+            Ok(RunDisposition::Complete)
+        }
+        [argument] if argument == std::ffi::OsStr::new("--single-project") => {
+            run_single_project()?;
+            Ok(RunDisposition::Complete)
+        }
+        [argument, count] if argument == std::ffi::OsStr::new("--concurrency") => {
+            let count = count
+                .to_str()
+                .and_then(|count| count.parse::<usize>().ok())
+                .filter(|count| (1..=32).contains(count))
+                .ok_or_else(|| {
+                    "concurrency count must be an integer from 1 through 32".to_owned()
+                })?;
+            run_concurrent(count)?;
+            Ok(RunDisposition::Complete)
+        }
+        #[cfg(feature = "counting-allocator")]
+        [argument] if argument == std::ffi::OsStr::new("--allocation-probe") => {
+            let disposition = run_batch()?;
+            if matches!(&disposition, RunDisposition::Complete) {
+                write_allocation_receipt()?;
+            }
+            Ok(disposition)
+        }
+        _ => Err(usage().to_owned()),
+    }
 }
 
 fn main() {
