@@ -101,11 +101,6 @@ fn record_namespace_instance_declaration_row_probe() {
 }
 
 #[cfg(test)]
-fn record_function_callable_scope_probe() {
-    FUNCTION_CALLABLE_SCOPE_PROBES.set(FUNCTION_CALLABLE_SCOPE_PROBES.get().saturating_add(1));
-}
-
-#[cfg(test)]
 pub(crate) struct NamespaceRegionLookupWorkScopeForTest(NamespaceRegionLookupWorkForTest);
 
 #[cfg(test)]
@@ -1218,18 +1213,7 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
             continue;
         };
         let module = source_modules[declaration.site.source.index()];
-        let start = declaration_product
-            .callable_scopes()
-            .iter()
-            .find(|scope| {
-                #[cfg(test)]
-                record_function_callable_scope_probe();
-                scope.site.source == declaration.site.source
-                    && scope.site.start == declaration.site.start
-                    && scope.site.end == declaration.site.end
-            })
-            .map_or(declaration.site.start, |scope| scope.site.start);
-        fn_decl_ids.insert((module, start), storage);
+        fn_decl_ids.insert((module, declaration.site.start), storage);
     }
 
     let final_module = source_modules

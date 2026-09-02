@@ -139,10 +139,7 @@ fn namespace_region_lookup_work_scales_with_product_rows() {
             small_work.declaration_row_probes,
             scaled_work.declaration_row_probes,
         ),
-        (
-            small_product_rows,
-            scaled_product_rows,
-        ),
+        (small_product_rows, scaled_product_rows,),
         "namespace-instance reconstruction must preserve orphan value declarations"
     );
     assert_eq!(
