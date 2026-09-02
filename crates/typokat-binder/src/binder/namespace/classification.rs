@@ -804,6 +804,38 @@ pub(super) fn enum_group_semantics(
 }
 
 fn classify_group(declarations: &[MergeParticipant]) -> MergeClassification {
+    if let [declaration] = declarations {
+        let slot = |occupied| MergeSlotState {
+            declarations: usize::from(occupied),
+            disposition: if occupied {
+                MergeSlotDisposition::Single
+            } else {
+                MergeSlotDisposition::Empty
+            },
+        };
+        let disposition = if declaration.kind == MergeDeclarationKind::Enum
+            && matches!(
+                enum_group_semantics(declarations),
+                Some((EnumGroupBuildability::RejectedFutureTk2567, _))
+            ) {
+            MergeDisposition::RejectedFutureTk2567
+        } else {
+            MergeDisposition::Admitted
+        };
+        return MergeClassification {
+            slots: MergeSlotSummary {
+                value: slot(declaration.spaces.value),
+                r#type: slot(declaration.spaces.r#type),
+                namespace: slot(declaration.spaces.namespace),
+            },
+            compositions: Vec::new(),
+            disposition,
+        };
+    }
+    classify_group_general(declarations)
+}
+
+fn classify_group_general(declarations: &[MergeParticipant]) -> MergeClassification {
     #[cfg(any(test, feature = "test-utils"))]
     if declarations.len() == 1 {
         record_singleton_general_classification();
@@ -1048,4 +1080,80 @@ fn placement_issues(declarations: &[MergeParticipant]) -> Vec<PlacementIssue> {
             span: item.binding_span,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::binder::declaration::DeclId;
+    use crate::source::OriginalModuleOrdinal;
+    use crate::span::Span;
+
+    #[test]
+    fn singleton_fast_path_matches_general_classifier_for_every_model_combination() {
+        use ImportBindingForm::{Default, ImportEquals, Named, Namespace};
+        use MergeDeclarationKind::{
+            Class, DeferredExport, Enum, Function, ImportAlias, Interface,
+            Namespace as KindNamespace, TypeAlias, Variable,
+        };
+        use VariableKind::{AwaitUsing, Const, Let, Using, Var};
+
+        let kinds = [
+            Variable,
+            Function,
+            Class,
+            TypeAlias,
+            Interface,
+            Enum,
+            KindNamespace,
+            ImportAlias,
+            DeferredExport,
+        ];
+        let mut syntaxes = vec![DeclarationSyntaxFacts::None];
+        syntaxes.extend([Var, Let, Const, Using, AwaitUsing].map(DeclarationSyntaxFacts::Variable));
+        syntaxes.extend([
+            DeclarationSyntaxFacts::Enum { constant: false },
+            DeclarationSyntaxFacts::Enum { constant: true },
+        ]);
+        for form in [Named, Default, Namespace, ImportEquals] {
+            for bits in 0_u8..16 {
+                syntaxes.push(DeclarationSyntaxFacts::Import(ImportSyntaxFacts {
+                    form,
+                    outer_type_only: bits & 1 != 0,
+                    specifier_type_only: bits & 2 != 0,
+                    external_reference: bits & 4 != 0,
+                    exported: bits & 8 != 0,
+                }));
+            }
+        }
+
+        for kind in kinds {
+            for syntax in syntaxes.iter().copied() {
+                for spaces in 0_u8..8 {
+                    let participant = MergeParticipant {
+                        declaration: DeclId(0),
+                        kind,
+                        source: SourceUnitKey::SINGLE_SOURCE,
+                        origin: CompilationOrigin::User(OriginalModuleOrdinal::new(0)),
+                        span: Span::new(0, 1),
+                        ambient: false,
+                        spaces: DeclarationSpaces {
+                            value: spaces & 1 != 0,
+                            r#type: spaces & 2 != 0,
+                            namespace: spaces & 4 != 0,
+                        },
+                        syntax,
+                        namespace_fragment: None,
+                        namespace_instance: None,
+                        binding_span: Span::new(0, 1),
+                    };
+                    assert_eq!(
+                        classify_group(&[participant]),
+                        classify_group_general(&[participant]),
+                        "singleton classification differs for {kind:?}, {syntax:?}, {spaces:03b}"
+                    );
+                }
+            }
+        }
+    }
 }
