@@ -63,15 +63,6 @@ fn record_product_lowering_metadata_plan_construction_for_test() {
 }
 
 #[cfg(test)]
-fn record_product_lowering_member_target_snapshot_for_test() {
-    PRODUCT_LOWERING_MEMBER_TARGET_SNAPSHOTS.set(
-        PRODUCT_LOWERING_MEMBER_TARGET_SNAPSHOTS
-            .get()
-            .saturating_add(1),
-    );
-}
-
-#[cfg(test)]
 pub struct ProductLowererConstructionScopeForTest(u64);
 
 #[cfg(test)]
@@ -2722,22 +2713,18 @@ impl<'product, 'plan, 'interner> ProductLowerer<'product, 'plan, 'interner> {
         class_members: bool,
     ) -> Result<(), ProductLoweringError> {
         let owner = self.member_owner(key);
-        #[cfg(test)]
-        record_product_lowering_member_target_snapshot_for_test();
-        let mut draft = target.clone();
-        let object = &mut draft;
         match member.kind {
             MemberKind::Call => {
                 let signature = self.required_member_signature(key, member.signature)?;
-                object.call_signatures.push(
-                    self.with_indirection(|lowerer| lowerer.lower_signature(signature, owner))?,
-                );
+                let signature =
+                    self.with_indirection(|lowerer| lowerer.lower_signature(signature, owner))?;
+                target.call_signatures.push(signature);
             }
             MemberKind::Construct | MemberKind::Constructor => {
                 let signature = self.required_member_signature(key, member.signature)?;
-                object.construct_signatures.push(
-                    self.with_indirection(|lowerer| lowerer.lower_signature(signature, owner))?,
-                );
+                let signature =
+                    self.with_indirection(|lowerer| lowerer.lower_signature(signature, owner))?;
+                target.construct_signatures.push(signature);
             }
             MemberKind::Index => {
                 let signature = self.required_member_signature(key, member.signature)?;
@@ -2770,9 +2757,9 @@ impl<'product, 'plan, 'interner> ProductLowerer<'product, 'plan, 'interner> {
                 let value = value.expect("successful index value lowering");
                 let well_known = self.interner.well_known();
                 if key_type == well_known.string {
-                    object.string_index = Some(value);
+                    target.string_index = Some(value);
                 } else if key_type == well_known.number {
-                    object.number_index = Some(value);
+                    target.number_index = Some(value);
                 } else {
                     return self.unsupported_member(
                         key,
@@ -2795,7 +2782,7 @@ impl<'product, 'plan, 'interner> ProductLowerer<'product, 'plan, 'interner> {
                     );
                     return Err(ProductLoweringError::DeferredMember);
                 }
-                if let Some(existing) = object
+                if let Some(existing) = target
                     .properties
                     .iter_mut()
                     .find(|property| property.key == property_key)
@@ -2820,7 +2807,7 @@ impl<'product, 'plan, 'interner> ProductLowerer<'product, 'plan, 'interner> {
                         existing.ty = self.interner.intern_object(overloads);
                     }
                 } else {
-                    object.properties.push(PropertyType {
+                    target.properties.push(PropertyType {
                         key: property_key,
                         ty: signature,
                         write_ty: None,
@@ -2879,7 +2866,7 @@ impl<'product, 'plan, 'interner> ProductLowerer<'product, 'plan, 'interner> {
                         self.interner.well_known().any
                     }
                 };
-                if let Some(existing) = object
+                if let Some(existing) = target
                     .properties
                     .iter_mut()
                     .find(|property| property.key == property_key && property.is_accessor)
@@ -2891,7 +2878,7 @@ impl<'product, 'plan, 'interner> ProductLowerer<'product, 'plan, 'interner> {
                         existing.readonly = false;
                     }
                 } else {
-                    object.properties.push(PropertyType {
+                    target.properties.push(PropertyType {
                         key: property_key,
                         ty: accessor_ty,
                         write_ty: (member.kind == MemberKind::Setter).then_some(accessor_ty),
@@ -2923,7 +2910,7 @@ impl<'product, 'plan, 'interner> ProductLowerer<'product, 'plan, 'interner> {
                     Some(Accessibility::Private) => Visibility::Private,
                     Some(Accessibility::Public) | None => Visibility::Public,
                 };
-                object.properties.push(PropertyType {
+                target.properties.push(PropertyType {
                     key: property_key,
                     ty,
                     write_ty: None,
@@ -2935,7 +2922,6 @@ impl<'product, 'plan, 'interner> ProductLowerer<'product, 'plan, 'interner> {
                 });
             }
         }
-        *target = draft;
         Ok(())
     }
 
