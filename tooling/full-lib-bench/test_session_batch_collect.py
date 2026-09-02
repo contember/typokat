@@ -868,6 +868,93 @@ class SessionBatchLiveCollectorTests(unittest.TestCase):
             hashlib.sha256(b'{"case_id":"case","ordinal":0}').hexdigest(),
         )
 
+    def test_system_allocation_host_accepts_noncanonical_frame_and_preserves_raw_streams(
+        self,
+    ) -> None:
+        authority = batch.load_authenticated_batch_oracles(self.contract)
+        fixture = raw_panel_evidence(1, 1.0, 100_000, 100_000)
+        apply_real_oracle(fixture, authority)
+        sample = next(
+            row for row in fixture["samples"] if row["tool"] == "typokat"
+        )
+        sample["frames"][0]["shared_product_identity"] = self.contract["profile"][
+            "length_framed_sha256"
+        ]
+        refresh_responses(sample)
+        frame = json.loads(sample["frames"][0]["raw_response"])
+        canonical_frame = json.dumps(
+            frame, sort_keys=True, separators=(",", ":")
+        )
+        noncanonical_frame = json.dumps(
+            dict(reversed(tuple(frame.items()))), separators=(",", ":")
+        )
+        self.assertNotEqual(noncanonical_frame, canonical_frame)
+
+        executable_bytes = b"feature allocation runner"
+        binary_sha256 = hashlib.sha256(executable_bytes).hexdigest()
+        receipt = {
+            "allocation_count": 123,
+            "binary_sha256": binary_sha256,
+            "instrumentation": "counting-allocator",
+            "timed": False,
+            "tool": "typokat",
+        }
+        canonical_receipt = json.dumps(
+            receipt, sort_keys=True, separators=(",", ":")
+        )
+        response_stream = noncanonical_frame + "\n"
+        stdout = response_stream + canonical_receipt + "\n"
+        measurement = collect._ProcessMeasurement(
+            pid=321,
+            start_ns=10,
+            end_ns=20,
+            returncode=0,
+            stdout=stdout,
+            stderr="",
+            process_group_empty=True,
+            time_report="Maximum resident set size (kbytes): 2\n",
+            rss_kib=2,
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "allocation-runner"
+            executable.write_bytes(executable_bytes)
+            runner = {
+                "path": str(executable),
+                "binary_sha256": binary_sha256,
+            }
+            host = object.__new__(collect.SystemLiveHost)
+            host.contract = self.contract
+            host._run_runner = mock.Mock(return_value=measurement)
+            record = host.run_allocation_probe(
+                runner,
+                sample["request_stream"],
+                timeout_seconds=600,
+                address_space_limit_bytes=1 << 30,
+            )
+
+        host._run_runner.assert_called_once_with(
+            "typokat",
+            runner,
+            ["--allocation-probe"],
+            sample["request_stream"],
+            timeout_seconds=600,
+            address_space_limit_bytes=1 << 30,
+            measured=True,
+        )
+        self.assertEqual(record["stdout"], stdout)
+        self.assertEqual(record["response_stream"], response_stream)
+        self.assertEqual(
+            record["response_stream_sha256"],
+            hashlib.sha256(response_stream.encode()).hexdigest(),
+        )
+        self.assertEqual(record["frames"][0]["raw_response"], canonical_frame)
+        self.assertEqual(
+            record["frames"][0]["raw_response_sha256"],
+            hashlib.sha256(canonical_frame.encode()).hexdigest(),
+        )
+        self.assertEqual(record["allocation_receipt"], receipt)
+
     def test_tsgo_runner_receives_authenticated_staged_library_directory(self) -> None:
         arguments = ["--batch", "--protocol-version", "1"]
         stdin = '{"case_id":"case"}\n'
