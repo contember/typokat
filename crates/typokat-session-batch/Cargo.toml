@@ -3,6 +3,9 @@ name = "typokat-session-batch"
 version.workspace = true
 edition.workspace = true
 
+[features]
+counting-allocator = []
+
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json.workspace = true
