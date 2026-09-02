@@ -21,10 +21,12 @@ import session_batch_bench as batch
 import session_batch_collect as collect
 from test_session_batch_bench import (
     apply_real_oracle,
+    concurrency_evidence,
     make_cold_process,
     make_single_project_process,
     protocol_info,
     raw_panel_evidence,
+    refresh_concurrency_raw,
     refresh_sample_streams,
     refresh_single_project_response,
     single_project_evidence,
@@ -574,6 +576,237 @@ def refresh_responses(sample: dict[str, object]) -> None:
             frame["raw_response"].encode()
         ).hexdigest()
     refresh_sample_streams(sample)
+
+
+class FakePostPanelHost:
+    NORMAL_BINARY_SHA256 = "2" * 64
+    FEATURE_BINARY_SHA256 = "6" * 64
+    SOURCE_SHA256 = "4" * 64
+
+    def __init__(self, contract: dict[str, object]) -> None:
+        self.contract = contract
+        self.candidate = {"commit": "a" * 40, "tree": "b" * 40, "dirty": False}
+        self.authority = batch.load_authenticated_batch_oracles(contract)
+        self.calls: list[tuple[object, ...]] = []
+        self.final_attestation_mutation = None
+        self.normal_runner = self._runner(
+            "/tmp/typokat-post-panel-runner", self.NORMAL_BINARY_SHA256
+        )
+        self.feature_runner = self._runner(
+            "/tmp/typokat-allocation-runner", self.FEATURE_BINARY_SHA256
+        )
+
+        first = self.authority["frames"][0]
+        self.first_request_stream = self._request_stream([first])
+        first_semantic = {
+            key: copy.deepcopy(value)
+            for key, value in self.authority["typokat"][0].items()
+            if key != "case_id"
+        }
+        self.concurrency = concurrency_evidence()
+        for count in self.contract["concurrency"]["session_counts"]:
+            row = self.concurrency[str(count)]
+            for session in row["sessions"]:
+                session["semantic"] = copy.deepcopy(first_semantic)
+            row.update(
+                executable_before_sha256=self.NORMAL_BINARY_SHA256,
+                executable_after_sha256=self.NORMAL_BINARY_SHA256,
+                request_stream=self.first_request_stream,
+                request_stream_sha256=hashlib.sha256(
+                    self.first_request_stream.encode()
+                ).hexdigest(),
+                pid=50_000 + count,
+                start_ns=count * 1_000,
+                end_ns=count * 1_000 + 100,
+                returncode=0,
+                tool="typokat",
+                stderr="",
+                address_space_limit_bytes=contract[
+                    "child_address_space_limit_bytes"
+                ],
+            )
+            refresh_concurrency_raw(row)
+
+        allocation_panel = raw_panel_evidence(687, 1.0, 100_000, 100_000)
+        apply_real_oracle(allocation_panel, self.authority)
+        allocation_panel["derived"]["typokat_accepted_progress"] = (
+            batch.recompute_typokat_accepted_progress(
+                allocation_panel,
+                batch.oracle_panel(self.authority, 687),
+                contract,
+            )
+        )
+        self.allocation_record = allocation_panel["samples"][0]
+        for frame in self.allocation_record["frames"]:
+            frame["shared_product_identity"] = contract["profile"][
+                "length_framed_sha256"
+            ]
+        self.allocation_record.update(
+            timed=False,
+            executable_before_sha256=self.FEATURE_BINARY_SHA256,
+            executable_after_sha256=self.FEATURE_BINARY_SHA256,
+            allocation_receipt={
+                "tool": "typokat",
+                "timed": False,
+                "instrumentation": "counting-allocator",
+                "allocation_count": 123_456,
+                "binary_sha256": self.FEATURE_BINARY_SHA256,
+            },
+        )
+        refresh_responses(self.allocation_record)
+        self.allocation_request_stream = self._request_stream(self.authority["frames"])
+        if self.allocation_record["request_stream"] != self.allocation_request_stream:
+            raise AssertionError("allocation fixture lost authenticated request bytes")
+
+    def _runner(self, path: str, binary_sha256: str) -> dict[str, object]:
+        return {
+            "tool": "typokat",
+            "path": path,
+            "source_sha256": self.SOURCE_SHA256,
+            "binary_sha256": binary_sha256,
+            "commit": self.candidate["commit"],
+        }
+
+    @staticmethod
+    def _request_stream(frames: list[dict[str, object]]) -> str:
+        return "".join(
+            json.dumps(
+                {
+                    "schema": 1,
+                    "case_id": frame["case_id"],
+                    "source": frame["source"],
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+            for frame in frames
+        )
+
+    def freeze_candidate(self) -> dict[str, object]:
+        self.calls.append(("freeze_candidate",))
+        return copy.deepcopy(self.candidate)
+
+    def build_runner(
+        self, tool: str, candidate: dict[str, object]
+    ) -> dict[str, object]:
+        if tool != "typokat" or candidate != self.candidate:
+            raise AssertionError("collector changed the normal runner build identity")
+        self.calls.append(
+            ("build_runner", tool, candidate["commit"], candidate["tree"])
+        )
+        return copy.deepcopy(self.normal_runner)
+
+    def build_allocation_runner(
+        self, candidate: dict[str, object]
+    ) -> dict[str, object]:
+        if candidate != self.candidate:
+            raise AssertionError("collector changed the feature runner build identity")
+        self.calls.append(
+            ("build_allocation_runner", candidate["commit"], candidate["tree"])
+        )
+        return copy.deepcopy(self.feature_runner)
+
+    def protocol_info(
+        self, tool: str, runner: dict[str, object]
+    ) -> dict[str, object]:
+        if tool != "typokat" or runner not in (
+            self.normal_runner,
+            self.feature_runner,
+        ):
+            raise AssertionError("collector requested protocol from an unknown runner")
+        self.calls.append(("protocol_info", runner["path"], runner["binary_sha256"]))
+        info = protocol_info("typokat")
+        info.update(
+            source_sha256=runner["source_sha256"],
+            binary_sha256=runner["binary_sha256"],
+            upstream_revision=runner["commit"],
+        )
+        return info
+
+    def run_concurrency(
+        self,
+        runner: dict[str, object],
+        request_stream: str,
+        count: int,
+        *,
+        timeout_seconds: int,
+        address_space_limit_bytes: int,
+    ) -> dict[str, object]:
+        if runner != self.normal_runner:
+            raise AssertionError("collector changed the concurrency runner")
+        if request_stream != self.first_request_stream:
+            raise AssertionError("collector changed authenticated first-frame source bytes")
+        if count not in self.contract["concurrency"]["session_counts"]:
+            raise AssertionError("collector requested an unofficial concurrency count")
+        if timeout_seconds != 10:
+            raise AssertionError("collector changed the concurrency timeout")
+        if address_space_limit_bytes != self.contract[
+            "child_address_space_limit_bytes"
+        ]:
+            raise AssertionError("collector changed the child address-space limit")
+        self.calls.append(
+            (
+                "run_concurrency",
+                count,
+                timeout_seconds,
+                address_space_limit_bytes,
+            )
+        )
+        return copy.deepcopy(self.concurrency[str(count)])
+
+    def run_allocation_probe(
+        self,
+        runner: dict[str, object],
+        request_stream: str,
+        *,
+        timeout_seconds: int,
+        address_space_limit_bytes: int,
+    ) -> dict[str, object]:
+        if runner != self.feature_runner:
+            raise AssertionError("collector changed the allocation feature runner")
+        if request_stream != self.allocation_request_stream:
+            raise AssertionError("collector changed authenticated 687-frame source bytes")
+        if timeout_seconds != self.contract["sampling"]["panel_timeout_seconds"][-1]:
+            raise AssertionError("collector changed the allocation timeout")
+        if address_space_limit_bytes != self.contract[
+            "child_address_space_limit_bytes"
+        ]:
+            raise AssertionError("collector changed the child address-space limit")
+        self.calls.append(
+            (
+                "run_allocation_probe",
+                687,
+                timeout_seconds,
+                address_space_limit_bytes,
+            )
+        )
+        return copy.deepcopy(self.allocation_record)
+
+    def final_typokat_attestation(
+        self,
+        candidate: dict[str, object],
+        runner: dict[str, object],
+    ) -> dict[str, object]:
+        if candidate != self.candidate or runner not in (
+            self.normal_runner,
+            self.feature_runner,
+        ):
+            raise AssertionError("collector changed the final attestation identity")
+        self.calls.append(
+            (
+                "final_typokat_attestation",
+                candidate["commit"],
+                runner["binary_sha256"],
+            )
+        )
+        value = {
+            "candidate": copy.deepcopy(candidate),
+            "runner": copy.deepcopy(runner),
+        }
+        if self.final_attestation_mutation is not None:
+            self.final_attestation_mutation(value)
+        return value
 
 
 class SessionBatchLiveCollectorTests(unittest.TestCase):
@@ -1798,6 +2031,509 @@ class SessionBatchLiveLinkageCollectorTests(unittest.TestCase):
         refresh_single_project_response(record, response)
         with self.assertRaisesRegex(batch.BatchContractError, "session|state|alive"):
             collect._collect_live_linkage(retained, self.contract)
+
+
+class SessionBatchLiveConcurrencyCollectorTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.contract = batch.verify_contract()
+
+    def test_public_concurrency_collector_is_non_injectable_atomic_and_canonical(
+        self,
+    ) -> None:
+        signature = inspect.signature(collect.collect_live_concurrency)
+        self.assertEqual(list(signature.parameters), ["output"])
+        self.assertEqual(
+            signature.parameters["output"].kind,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
+        private = inspect.signature(collect._collect_live_concurrency)
+        self.assertEqual(list(private.parameters), ["host", "contract"])
+
+        host = FakePostPanelHost(self.contract)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "concurrency.json"
+            with mock.patch.object(
+                collect, "SystemLiveHost", return_value=host
+            ) as constructor:
+                result = collect.collect_live_concurrency(output=output)
+                self.assertEqual(json.loads(output.read_bytes()), result)
+                with self.assertRaisesRegex(batch.BatchContractError, "exists"):
+                    collect.collect_live_concurrency(output=output)
+            constructor.assert_called_once_with(self.contract)
+            self.assertEqual(
+                output.read_bytes(),
+                json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
+                + b"\n",
+            )
+            self.assertEqual(list(Path(directory).iterdir()), [output])
+
+        self.assertEqual(result["verdict"], "CONCURRENCY-PASS")
+        self.assertEqual(set(result), {"verdict", "evidence_sha256", "evidence"})
+
+        failed = FakePostPanelHost(self.contract)
+        failed.final_attestation_mutation = lambda value: value["candidate"].update(
+            dirty=True
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "failed-concurrency.json"
+            with mock.patch.object(collect, "SystemLiveHost", return_value=failed):
+                with self.assertRaises(batch.BatchContractError):
+                    collect.collect_live_concurrency(output=output)
+            self.assertFalse(output.exists())
+            self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_private_concurrency_flow_owns_authenticated_source_counts_and_verification(
+        self,
+    ) -> None:
+        host = FakePostPanelHost(self.contract)
+        with mock.patch.object(
+            batch, "verify_concurrency", wraps=batch.verify_concurrency
+        ) as verification:
+            result = collect._collect_live_concurrency(host, self.contract)
+
+        verification.assert_called_once()
+        self.assertEqual(verification.call_args.args, (host.concurrency, self.contract))
+        self.assertEqual(
+            host.calls,
+            [
+                ("freeze_candidate",),
+                ("build_runner", "typokat", "a" * 40, "b" * 40),
+                (
+                    "protocol_info",
+                    "/tmp/typokat-post-panel-runner",
+                    FakePostPanelHost.NORMAL_BINARY_SHA256,
+                ),
+                ("run_concurrency", 1, 10, 1 << 30),
+                ("run_concurrency", 2, 10, 1 << 30),
+                ("run_concurrency", 32, 10, 1 << 30),
+                (
+                    "final_typokat_attestation",
+                    "a" * 40,
+                    FakePostPanelHost.NORMAL_BINARY_SHA256,
+                ),
+            ],
+        )
+
+        evidence = result["evidence"]
+        self.assertEqual(evidence["schema"], 1)
+        self.assertEqual(evidence["candidate"], host.candidate)
+        self.assertEqual(evidence["runner"], host.normal_runner)
+        self.assertEqual(
+            evidence["protocol"]["source_sha256"],
+            host.normal_runner["source_sha256"],
+        )
+        self.assertEqual(
+            evidence["protocol"]["binary_sha256"],
+            host.normal_runner["binary_sha256"],
+        )
+        self.assertEqual(
+            evidence["final_attestation"],
+            {"candidate": host.candidate, "runner": host.normal_runner},
+        )
+        self.assertEqual(evidence["concurrency"], host.concurrency)
+        first = host.authority["frames"][0]
+        expected_request = {
+            "schema": 1,
+            "case_id": first["case_id"],
+            "source": first["source"],
+        }
+        first_source = first["source"].encode()
+        self.assertEqual(len(first_source), first["source_bytes"])
+        self.assertEqual(
+            hashlib.sha256(first_source).hexdigest(), first["source_sha256"]
+        )
+        expected_semantic = {
+            key: value
+            for key, value in host.authority["typokat"][0].items()
+            if key != "case_id"
+        }
+        for count in self.contract["concurrency"]["session_counts"]:
+            record = evidence["concurrency"][str(count)]
+            self.assertEqual(record["request_stream"], host.first_request_stream)
+            self.assertEqual(
+                json.loads(record["request_stream"]), expected_request
+            )
+            self.assertEqual(
+                hashlib.sha256(record["request_stream"].encode()).hexdigest(),
+                record["request_stream_sha256"],
+            )
+            self.assertTrue(
+                all(
+                    session["semantic"] == expected_semantic
+                    for session in record["sessions"]
+                )
+            )
+            for session in record["sessions"]:
+                semantic_bytes = json.dumps(
+                    session["semantic"], sort_keys=True, separators=(",", ":")
+                ).encode()
+                self.assertEqual(
+                    session["raw_output_sha256"],
+                    hashlib.sha256(semantic_bytes).hexdigest(),
+                )
+            self.assertEqual(
+                record["executable_before_sha256"],
+                host.normal_runner["binary_sha256"],
+            )
+            self.assertEqual(
+                record["executable_after_sha256"],
+                host.normal_runner["binary_sha256"],
+            )
+        self.assertEqual(
+            result["evidence_sha256"],
+            hashlib.sha256(
+                json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest(),
+        )
+        repeated = collect._collect_live_concurrency(
+            FakePostPanelHost(self.contract), self.contract
+        )
+        self.assertEqual(repeated, result)
+
+    def test_concurrency_fails_closed_on_source_semantic_binary_and_attestation_drift(
+        self,
+    ) -> None:
+        source = FakePostPanelHost(self.contract)
+        forged_request = json.dumps(
+            {"schema": 1, "case_id": "forged", "source": "const forged = true;"},
+            sort_keys=True,
+            separators=(",", ":"),
+        ) + "\n"
+        source.concurrency["1"].update(
+            request_stream=forged_request,
+            request_stream_sha256=hashlib.sha256(forged_request.encode()).hexdigest(),
+        )
+
+        semantic = FakePostPanelHost(self.contract)
+        semantic.concurrency["32"]["sessions"][-1]["semantic"]["diagnostics"].append(
+            "999:9999"
+        )
+        refresh_concurrency_raw(semantic.concurrency["32"])
+
+        binary = FakePostPanelHost(self.contract)
+        binary.concurrency["2"]["executable_after_sha256"] = "9" * 64
+
+        candidate_attestation = FakePostPanelHost(self.contract)
+        candidate_attestation.final_attestation_mutation = lambda value: value[
+            "candidate"
+        ].update(tree="9" * 40)
+
+        runner_attestation = FakePostPanelHost(self.contract)
+        runner_attestation.final_attestation_mutation = lambda value: value[
+            "runner"
+        ].update(source_sha256="9" * 64)
+
+        for label, host in (
+            ("source", source),
+            ("semantic", semantic),
+            ("binary", binary),
+            ("candidate-attestation", candidate_attestation),
+            ("runner-attestation", runner_attestation),
+        ):
+            with self.subTest(label=label), self.assertRaises(
+                batch.BatchContractError
+            ):
+                collect._collect_live_concurrency(host, self.contract)
+
+    def test_concurrency_authenticates_protocol_before_running_and_requires_clean_candidate(
+        self,
+    ) -> None:
+        dirty = FakePostPanelHost(self.contract)
+        dirty.candidate["dirty"] = True
+        with self.assertRaisesRegex(batch.BatchContractError, "candidate"):
+            collect._collect_live_concurrency(dirty, self.contract)
+        self.assertEqual(dirty.calls, [("freeze_candidate",)])
+
+        forged = FakePostPanelHost(self.contract)
+        original = forged.protocol_info
+
+        def wrong_source(tool, runner):
+            value = original(tool, runner)
+            value["source_sha256"] = "9" * 64
+            return value
+
+        forged.protocol_info = wrong_source
+        with self.assertRaises(batch.BatchContractError):
+            collect._collect_live_concurrency(forged, self.contract)
+        self.assertFalse(any(call[0] == "run_concurrency" for call in forged.calls))
+
+
+class SessionBatchLiveAllocationCollectorTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.contract = batch.verify_contract()
+
+    def test_public_allocation_collector_is_non_injectable_atomic_and_canonical(
+        self,
+    ) -> None:
+        signature = inspect.signature(collect.collect_live_allocation)
+        self.assertEqual(list(signature.parameters), ["output"])
+        self.assertEqual(
+            signature.parameters["output"].kind,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
+        private = inspect.signature(collect._collect_live_allocation)
+        self.assertEqual(list(private.parameters), ["host", "contract"])
+
+        host = FakePostPanelHost(self.contract)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "allocation.json"
+            with mock.patch.object(
+                collect, "SystemLiveHost", return_value=host
+            ) as constructor:
+                result = collect.collect_live_allocation(output=output)
+                self.assertEqual(json.loads(output.read_bytes()), result)
+                with self.assertRaisesRegex(batch.BatchContractError, "exists"):
+                    collect.collect_live_allocation(output=output)
+            constructor.assert_called_once_with(self.contract)
+            self.assertEqual(
+                output.read_bytes(),
+                json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
+                + b"\n",
+            )
+            self.assertEqual(list(Path(directory).iterdir()), [output])
+
+        self.assertEqual(result["verdict"], "ALLOCATION-PASS")
+        self.assertEqual(set(result), {"verdict", "evidence_sha256", "evidence"})
+
+        failed = FakePostPanelHost(self.contract)
+        failed.final_attestation_mutation = lambda value: value["runner"].update(
+            binary_sha256="9" * 64
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "failed-allocation.json"
+            with mock.patch.object(collect, "SystemLiveHost", return_value=failed):
+                with self.assertRaises(batch.BatchContractError):
+                    collect.collect_live_allocation(output=output)
+            self.assertFalse(output.exists())
+            self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_private_allocation_flow_owns_full_source_panel_and_all_verifiers(
+        self,
+    ) -> None:
+        host = FakePostPanelHost(self.contract)
+        with (
+            mock.patch.object(
+                batch, "verify_raw_oracles", wraps=batch.verify_raw_oracles
+            ) as raw_verification,
+            mock.patch.object(
+                batch,
+                "validate_lifecycle_receipts",
+                wraps=batch.validate_lifecycle_receipts,
+            ) as lifecycle_verification,
+            mock.patch.object(
+                batch, "verify_route_intervals", wraps=batch.verify_route_intervals
+            ) as route_verification,
+            mock.patch.object(
+                batch,
+                "recompute_typokat_accepted_progress",
+                wraps=batch.recompute_typokat_accepted_progress,
+            ) as ratchet_verification,
+            mock.patch.object(
+                batch, "verify_allocation_probe", wraps=batch.verify_allocation_probe
+            ) as allocation_verification,
+        ):
+            result = collect._collect_live_allocation(host, self.contract)
+
+        raw_verification.assert_called_once()
+        raw_input, raw_expected, raw_contract = raw_verification.call_args.args
+        self.assertEqual(raw_input["projects"], 687)
+        self.assertEqual(raw_input["samples"], [host.allocation_record])
+        self.assertEqual(raw_expected, batch.oracle_panel(host.authority, 687))
+        self.assertIs(raw_contract, self.contract)
+        lifecycle_verification.assert_called()
+        route_verification.assert_called_once_with(host.allocation_record, 687)
+        ratchet_verification.assert_called()
+        allocation_verification.assert_called_once_with(
+            host.allocation_record["allocation_receipt"], self.contract
+        )
+        self.assertEqual(
+            host.calls,
+            [
+                ("freeze_candidate",),
+                ("build_allocation_runner", "a" * 40, "b" * 40),
+                (
+                    "protocol_info",
+                    "/tmp/typokat-allocation-runner",
+                    FakePostPanelHost.FEATURE_BINARY_SHA256,
+                ),
+                ("run_allocation_probe", 687, 600, 1 << 30),
+                (
+                    "final_typokat_attestation",
+                    "a" * 40,
+                    FakePostPanelHost.FEATURE_BINARY_SHA256,
+                ),
+            ],
+        )
+
+        evidence = result["evidence"]
+        self.assertEqual(evidence["schema"], 1)
+        self.assertEqual(evidence["candidate"], host.candidate)
+        self.assertEqual(evidence["runner"], host.feature_runner)
+        self.assertEqual(
+            evidence["protocol"]["source_sha256"],
+            host.feature_runner["source_sha256"],
+        )
+        self.assertEqual(
+            evidence["protocol"]["binary_sha256"],
+            host.feature_runner["binary_sha256"],
+        )
+        self.assertEqual(evidence["process"], host.allocation_record)
+        self.assertEqual(
+            evidence["allocation_receipt"],
+            host.allocation_record["allocation_receipt"],
+        )
+        self.assertEqual(
+            evidence["final_attestation"],
+            {"candidate": host.candidate, "runner": host.feature_runner},
+        )
+        self.assertEqual(len(evidence["process"]["frames"]), 687)
+        self.assertEqual(
+            evidence["process"]["request_stream"], host.allocation_request_stream
+        )
+        for request, authority in zip(
+            evidence["process"]["request_stream"].splitlines(),
+            host.authority["frames"],
+            strict=True,
+        ):
+            self.assertEqual(
+                json.loads(request),
+                {
+                    "schema": 1,
+                    "case_id": authority["case_id"],
+                    "source": authority["source"],
+                },
+            )
+            source_bytes = authority["source"].encode()
+            self.assertEqual(len(source_bytes), authority["source_bytes"])
+            self.assertEqual(
+                hashlib.sha256(source_bytes).hexdigest(),
+                authority["source_sha256"],
+            )
+        receipt = evidence["allocation_receipt"]
+        self.assertEqual(
+            set(receipt),
+            {
+                "allocation_count",
+                "binary_sha256",
+                "instrumentation",
+                "timed",
+                "tool",
+            },
+        )
+        self.assertIs(evidence["process"]["timed"], False)
+        self.assertGreater(receipt["allocation_count"], 0)
+        self.assertIs(receipt["timed"], False)
+        self.assertEqual(receipt["instrumentation"], "counting-allocator")
+        self.assertEqual(
+            receipt["binary_sha256"], host.feature_runner["binary_sha256"]
+        )
+        self.assertEqual(
+            evidence["process"]["executable_before_sha256"],
+            host.feature_runner["binary_sha256"],
+        )
+        self.assertEqual(
+            evidence["process"]["executable_after_sha256"],
+            host.feature_runner["binary_sha256"],
+        )
+        self.assertEqual(
+            result["evidence_sha256"],
+            hashlib.sha256(
+                json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest(),
+        )
+        repeated = collect._collect_live_allocation(
+            FakePostPanelHost(self.contract), self.contract
+        )
+        self.assertEqual(repeated, result)
+
+    def test_allocation_fails_closed_on_frame_allocation_binary_and_attestation_drift(
+        self,
+    ) -> None:
+        source = FakePostPanelHost(self.contract)
+        source_request = json.loads(
+            source.allocation_record["frames"][0]["raw_request"]
+        )
+        source_request["source"] += "\nconst forged = true;"
+        source.allocation_record["frames"][0]["raw_request"] = json.dumps(
+            source_request, sort_keys=True, separators=(",", ":")
+        )
+        refresh_sample_streams(source.allocation_record)
+
+        semantic = FakePostPanelHost(self.contract)
+        semantic.allocation_record["frames"][0]["semantic"]["diagnostics"].append(
+            "999:9999"
+        )
+        refresh_responses(semantic.allocation_record)
+
+        lifecycle = FakePostPanelHost(self.contract)
+        lifecycle.allocation_record["frames"][0]["session_weak_alive_after"] = True
+        refresh_responses(lifecycle.allocation_record)
+
+        allocation = FakePostPanelHost(self.contract)
+        allocation.allocation_record["allocation_receipt"]["allocation_count"] = 0
+
+        allocation_shape = FakePostPanelHost(self.contract)
+        allocation_shape.allocation_record["allocation_receipt"]["claimed"] = True
+
+        receipt_binary = FakePostPanelHost(self.contract)
+        receipt_binary.allocation_record["allocation_receipt"][
+            "binary_sha256"
+        ] = FakePostPanelHost.NORMAL_BINARY_SHA256
+
+        process_binary = FakePostPanelHost(self.contract)
+        process_binary.allocation_record["executable_after_sha256"] = "9" * 64
+
+        candidate_attestation = FakePostPanelHost(self.contract)
+        candidate_attestation.final_attestation_mutation = lambda value: value[
+            "candidate"
+        ].update(commit="9" * 40)
+
+        runner_attestation = FakePostPanelHost(self.contract)
+        runner_attestation.final_attestation_mutation = lambda value: value[
+            "runner"
+        ].update(binary_sha256="9" * 64)
+
+        for label, host in (
+            ("source-frame", source),
+            ("semantic-frame", semantic),
+            ("lifecycle-frame", lifecycle),
+            ("allocation", allocation),
+            ("allocation-shape", allocation_shape),
+            ("allocation-binary", receipt_binary),
+            ("process-binary", process_binary),
+            ("candidate-attestation", candidate_attestation),
+            ("runner-attestation", runner_attestation),
+        ):
+            with self.subTest(label=label), self.assertRaises(
+                batch.BatchContractError
+            ):
+                collect._collect_live_allocation(host, self.contract)
+
+    def test_allocation_authenticates_feature_protocol_before_running_and_requires_clean_candidate(
+        self,
+    ) -> None:
+        dirty = FakePostPanelHost(self.contract)
+        dirty.candidate["dirty"] = True
+        with self.assertRaisesRegex(batch.BatchContractError, "candidate"):
+            collect._collect_live_allocation(dirty, self.contract)
+        self.assertEqual(dirty.calls, [("freeze_candidate",)])
+
+        forged = FakePostPanelHost(self.contract)
+        original = forged.protocol_info
+
+        def wrong_binary(tool, runner):
+            value = original(tool, runner)
+            value["binary_sha256"] = FakePostPanelHost.NORMAL_BINARY_SHA256
+            return value
+
+        forged.protocol_info = wrong_binary
+        with self.assertRaises(batch.BatchContractError):
+            collect._collect_live_allocation(forged, self.contract)
+        self.assertFalse(
+            any(call[0] == "run_allocation_probe" for call in forged.calls)
+        )
 
 
 if __name__ == "__main__":
