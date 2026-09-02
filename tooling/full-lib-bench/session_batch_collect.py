@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 import errno
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import pwd
@@ -75,6 +76,19 @@ def _sha(data: bytes) -> str:
 
 def _sha_file(path: Path, label: str) -> str:
     return _sha(_read_regular(path, label))
+
+
+def _bounded_timeout(requested_seconds: int, deadline: float | None) -> int | float:
+    if type(requested_seconds) is not int or requested_seconds <= 0:
+        _fail("requested process timeout is invalid")
+    if deadline is None:
+        return requested_seconds
+    if type(deadline) not in (int, float) or not math.isfinite(deadline):
+        _fail("collection deadline is invalid")
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        _fail("collection wall-time budget reached its deadline")
+    return min(requested_seconds, remaining)
 
 
 def _candidate_source_identity(tree: str) -> str:
@@ -696,14 +710,12 @@ def _collect_live_panels(host: Any, contract: dict[str, Any]) -> dict[str, Any]:
         return dict(record)
 
     def collect_panel(projects: int) -> dict[str, Any]:
-        try:
-            panel_index = contract["panel_project_counts"].index(projects)
-        except ValueError as error:
-            raise batch.BatchContractError("panel project count is not canonical") from error
-        timeout = contract["sampling"]["panel_timeout_seconds"][panel_index]
+        mode, warmup_count, blocks, _samples_per_tool, timeout = batch._panel_spec(
+            contract, projects
+        )
         request_stream = _panel_request_stream(authority, projects)
         warmups = []
-        for ordinal in range(contract["sampling"]["warmups_per_tool"]):
+        for ordinal in range(warmup_count):
             for tool in ("typokat", "tsgo"):
                 raw = host.run_batch(
                     tool,
@@ -719,23 +731,39 @@ def _collect_live_panels(host: Any, contract: dict[str, Any]) -> dict[str, Any]:
                 warmups.append(row)
 
         samples = []
-        schedule = ("typokat", "tsgo", "tsgo", "typokat")
-        for block in range(contract["sampling"]["blocks"]):
-            for slot, tool in enumerate(schedule):
-                raw = host.run_batch(
-                    tool,
-                    runners[tool],
-                    request_stream,
-                    timeout_seconds=timeout,
-                    address_space_limit_bytes=limit,
+        if mode == "paired-single":
+            sample_schedule = ((0, 0, "typokat"), (0, 1, "tsgo"))
+        elif mode == "candidate-single":
+            sample_schedule = ((0, 0, "typokat"),)
+        elif mode == "abba":
+            sample_schedule = tuple(
+                (block, slot, tool)
+                for block in range(blocks)
+                for slot, tool in enumerate(
+                    ("typokat", "tsgo", "tsgo", "typokat")
                 )
-                row = retain_process(
-                    raw, tool, f"{projects}-project {tool} sample", projects
-                )
-                row.update(block=block, slot=slot, tool=tool)
-                samples.append(row)
+            )
+        else:
+            _fail("panel mode is not canonical")
+        for block, slot, tool in sample_schedule:
+            raw = host.run_batch(
+                tool,
+                runners[tool],
+                request_stream,
+                timeout_seconds=timeout,
+                address_space_limit_bytes=limit,
+            )
+            row = retain_process(
+                raw, tool, f"{projects}-project {tool} sample", projects
+            )
+            row.update(block=block, slot=slot, tool=tool)
+            samples.append(row)
 
-        derived = batch.recompute_abba_statistics(samples, contract)
+        derived = (
+            batch.recompute_abba_statistics(samples, contract)
+            if mode == "abba"
+            else {}
+        )
         panel = {
             "projects": projects,
             "warmups": warmups,
@@ -865,8 +893,10 @@ def collect_live_panels(*, output: Path) -> dict[str, Any]:
     if output.exists() or output.is_symlink():
         _fail(f"output already exists: {output}")
     contract = batch.verify_contract()
-    host = SystemLiveHost(contract)
+    deadline = time.monotonic() + contract["sampling"]["max_collection_wall_seconds"]
+    host = SystemLiveHost(contract, collection_deadline=deadline)
     result = _collect_live_panels(host, host.contract)
+    _bounded_timeout(contract["sampling"]["max_collection_wall_seconds"], deadline)
     _atomic_write_new(output, _canonical(result) + b"\n")
     return result
 
@@ -874,8 +904,11 @@ def collect_live_panels(*, output: Path) -> dict[str, Any]:
 class SystemLiveHost:
     """Real build and process boundary used only by the public collector."""
 
-    def __init__(self, contract: dict[str, Any]) -> None:
+    def __init__(
+        self, contract: dict[str, Any], *, collection_deadline: float | None = None
+    ) -> None:
         self.contract = contract
+        self.collection_deadline = collection_deadline
         self.live_root = Path(tempfile.mkdtemp(prefix="typokat-wu6-", dir="/tmp"))
         self.live_root.chmod(0o700)
         self.system_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
@@ -1669,7 +1702,9 @@ class SystemLiveHost:
             "",
             cwd=ROOT / "target/wu6/typescript-go",
             environment=environment,
-            timeout_seconds=BUILD_TIMEOUT_SECONDS,
+            timeout_seconds=_bounded_timeout(
+                BUILD_TIMEOUT_SECONDS, getattr(self, "collection_deadline", None)
+            ),
             address_space_limit_bytes=BUILD_ADDRESS_SPACE_LIMIT_BYTES,
             measured=False,
         )
@@ -1694,7 +1729,9 @@ class SystemLiveHost:
             "",
             cwd=cwd,
             environment=environment,
-            timeout_seconds=BUILD_TIMEOUT_SECONDS,
+            timeout_seconds=_bounded_timeout(
+                BUILD_TIMEOUT_SECONDS, getattr(self, "collection_deadline", None)
+            ),
             address_space_limit_bytes=BUILD_ADDRESS_SPACE_LIMIT_BYTES,
             measured=False,
         )
@@ -1721,7 +1758,9 @@ class SystemLiveHost:
             stdin,
             cwd=ROOT,
             environment=environment,
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=_bounded_timeout(
+                timeout_seconds, getattr(self, "collection_deadline", None)
+            ),
             address_space_limit_bytes=address_space_limit_bytes,
             measured=measured,
         )
@@ -1754,7 +1793,9 @@ class SystemLiveHost:
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
-                timeout=10,
+                timeout=_bounded_timeout(
+                    10, getattr(self, "collection_deadline", None)
+                ),
                 check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as error:
@@ -1770,7 +1811,7 @@ def _supervise(
     *,
     cwd: Path,
     environment: dict[str, str],
-    timeout_seconds: int,
+    timeout_seconds: int | float,
     address_space_limit_bytes: int,
     measured: bool,
 ) -> _ProcessMeasurement:
@@ -1778,6 +1819,12 @@ def _supervise(
         _fail("live child command is invalid")
     if address_space_limit_bytes <= 0:
         _fail("live child address-space limit is invalid")
+    if (
+        type(timeout_seconds) not in (int, float)
+        or not math.isfinite(timeout_seconds)
+        or timeout_seconds <= 0
+    ):
+        _fail("live child timeout is invalid")
     command = ["/usr/bin/time", "-v", *argv] if measured else list(argv)
     child_environment = {
         "PATH": "/usr/bin:/bin",

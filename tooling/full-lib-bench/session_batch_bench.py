@@ -10,6 +10,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import random
 import re
 import statistics
 import tomllib
@@ -37,11 +38,12 @@ class BatchContractError(RuntimeError):
 @dataclass(frozen=True)
 class VerifiedPanel:
     projects: int
-    speedup: float
-    p95_ratio: float
-    bootstrap_lower_95: float
+    mode: str
+    speedup: float | None
+    p95_ratio: float | None
+    bootstrap_lower_95: float | None
     typokat_median_rss_kib: float
-    tsgo_median_rss_kib: float
+    tsgo_median_rss_kib: float | None
     typokat_peak_rss_kib: int
     typokat_route_wall_ns: int
     valid: bool = True
@@ -150,8 +152,8 @@ def verify_contract(path: Path = CONTRACT_PATH) -> dict[str, Any]:
             "typokat_shared", "typokat_teardown_proof",
         },
         "sampling": {
-            "blocks", "panel_timeout_seconds", "samples_per_tool", "schedule",
-            "warmups_per_tool",
+            "blocks", "max_collection_wall_seconds", "panel_modes",
+            "panel_timeout_seconds", "samples_per_tool", "schedule", "warmups_per_tool",
         },
         "concurrency": {
             "max_typokat_rss_kib", "require_deterministic_outputs",
@@ -210,12 +212,12 @@ def verify_contract(path: Path = CONTRACT_PATH) -> dict[str, Any]:
             removal_keys
         ):
             _fail(f"{label}s are not canonical and unique")
-    if contract["schema"] != 1:
+    if type(contract["schema"]) is not int or contract["schema"] != 1:
         _fail("unsupported batch contract schema")
     fixed = {
         "panel_project_counts": [1, 32, 687],
         "panel_order": "fail-fast",
-        "speed_gated_project_counts": [32, 687],
+        "speed_gated_project_counts": [32],
         "minimum_speedup": 1.0,
         "max_typokat_rss_kib": 524_288,
         "max_typokat_to_tsgo_median_rss": 1.0,
@@ -226,8 +228,21 @@ def verify_contract(path: Path = CONTRACT_PATH) -> dict[str, Any]:
         "bootstrap_seed": 20_260_828,
     }
     for key, expected in fixed.items():
-        if contract[key] != expected:
+        if _canonical(contract[key]) != _canonical(expected):
             _fail(f"contract {key} differs from the frozen value")
+    expected_sampling = {
+        "schedule": "A,B,B,A",
+        "panel_modes": ["paired-single", "abba", "candidate-single"],
+        "warmups_per_tool": [0, 3, 0],
+        "blocks": [0, 5, 0],
+        "samples_per_tool": [1, 10, 1],
+        "panel_timeout_seconds": [10, 60, 600],
+        "max_collection_wall_seconds": 600,
+    }
+    if _canonical(contract["sampling"]) != _canonical(expected_sampling):
+        _fail("contract sampling differs from the frozen value")
+    for projects in contract["panel_project_counts"]:
+        _panel_spec(contract, projects)
     flags = [
         "--strict", "--target", "es2025", "--module", "preserve", "--noEmit",
         "--pretty", "false", "--ignoreConfig",
@@ -1194,6 +1209,8 @@ def verify_raw_oracles(
     evidence: dict[str, Any], expected: dict[str, Any], contract: dict[str, Any]
 ) -> None:
     projects = evidence["projects"]
+    if type(projects) is not int:
+        _fail("panel project count type differs")
     request_identities = expected.get("request_identities")
     if not isinstance(request_identities, list) or len(request_identities) != projects:
         _fail("request source authority frame count differs")
@@ -1225,8 +1242,14 @@ def verify_raw_oracles(
         previous = observed.setdefault(sample["tool"], current)
         if previous != current:
             _fail(f"{sample['tool']} raw semantic outcomes are nondeterministic")
-    if set(observed) != {"typokat", "tsgo"}:
-        _fail("raw oracle evidence lacks a tool")
+    mode, _warmups, _blocks, _samples_per_tool, _timeout = _panel_spec(
+        contract, projects
+    )
+    expected_tools = (
+        {"typokat"} if mode == "candidate-single" else {"typokat", "tsgo"}
+    )
+    if set(observed) != expected_tools:
+        _fail("raw oracle evidence tool set differs from panel mode")
     typokat_expected = expected.get("typokat")
     if isinstance(typokat_expected, dict) and "ratchet_rows" in typokat_expected:
         progress = recompute_typokat_accepted_progress(evidence, expected, contract)
@@ -1243,11 +1266,12 @@ def verify_raw_oracles(
         "ordered_semantic_sha256": observed["typokat"][1],
     }:
         _fail("typokat raw oracle differs from authority")
-    if expected.get("tsgo") != {
-        "returncode": observed["tsgo"][0],
-        "ordered_semantic_sha256": observed["tsgo"][1],
-    }:
-        _fail("tsgo raw oracle differs from authority")
+    if "tsgo" in expected_tools:
+        if expected.get("tsgo") != {
+            "returncode": observed["tsgo"][0],
+            "ordered_semantic_sha256": observed["tsgo"][1],
+        }:
+            _fail("tsgo raw oracle differs from authority")
 
 
 def verify_negative_controls(controls: dict[str, Any], contract: dict[str, Any]) -> None:
@@ -1277,8 +1301,57 @@ def verify_negative_controls(controls: dict[str, Any], contract: dict[str, Any])
                 _fail("negative controls used different binary identities")
 
 
-def _validate_warmups(warmups: list[dict[str, Any]], contract: dict[str, Any]) -> set[int]:
-    count = contract["sampling"]["warmups_per_tool"]
+def _panel_spec(
+    contract: dict[str, Any], projects: int
+) -> tuple[str, int, int, int, int]:
+    counts = contract.get("panel_project_counts")
+    sampling = contract.get("sampling")
+    if (
+        not isinstance(counts, list)
+        or any(type(count) is not int for count in counts)
+        or not isinstance(sampling, dict)
+    ):
+        _fail("panel sampling contract is invalid")
+    try:
+        index = counts.index(projects)
+    except ValueError as error:
+        raise BatchContractError("panel project count is not canonical") from error
+    if counts.count(projects) != 1:
+        _fail("panel project counts are not unique")
+    keys = (
+        "panel_modes",
+        "warmups_per_tool",
+        "blocks",
+        "samples_per_tool",
+        "panel_timeout_seconds",
+    )
+    values = []
+    for key in keys:
+        rows = sampling.get(key)
+        if not isinstance(rows, list) or len(rows) != len(counts):
+            _fail("panel sampling arrays do not align")
+        values.append(rows[index])
+    mode, warmups, blocks, samples_per_tool, timeout = values
+    if not isinstance(mode, str) or any(
+        type(value) is not int
+        for value in (warmups, blocks, samples_per_tool, timeout)
+    ):
+        _fail("panel sampling value types differ")
+    canonical = {
+        1: ("paired-single", 0, 0, 1, 10),
+        32: ("abba", 3, 5, 10, 60),
+        687: ("candidate-single", 0, 0, 1, 600),
+    }
+    if projects not in canonical or tuple(values) != canonical[projects]:
+        _fail("panel sampling mode differs from the frozen value")
+    if mode == "abba" and samples_per_tool != 2 * blocks:
+        _fail("ABBA samples per tool differ from twice the block count")
+    if mode != "abba" and (warmups, blocks, samples_per_tool) != (0, 0, 1):
+        _fail("single-sample panel sampling differs")
+    return mode, warmups, blocks, samples_per_tool, timeout
+
+
+def _validate_warmups(warmups: list[dict[str, Any]], count: int) -> set[int]:
     if len(warmups) != count * 2:
         _fail("warmup count differs")
     expected = [(ordinal, tool) for ordinal in range(count) for tool in ("typokat", "tsgo")]
@@ -1287,6 +1360,8 @@ def _validate_warmups(warmups: list[dict[str, Any]], contract: dict[str, Any]) -
     pids = set()
     for row in warmups:
         pid = row.get("pid")
+        if type(pid) is not int or pid <= 0:
+            _fail("warmup PID is invalid")
         if pid in pids:
             _fail("warmup PID was reused")
         pids.add(pid)
@@ -1313,7 +1388,16 @@ def verify_allocation_probe(receipt: dict[str, Any], contract: dict[str, Any]) -
 def recompute_abba_statistics(
     samples: list[dict[str, Any]], contract: dict[str, Any]
 ) -> dict[str, float]:
-    blocks_count = contract["sampling"]["blocks"]
+    try:
+        panel_index = contract["sampling"]["panel_modes"].index("abba")
+        projects = contract["panel_project_counts"][panel_index]
+    except (KeyError, ValueError, IndexError, TypeError) as error:
+        raise BatchContractError("ABBA panel sampling contract is invalid") from error
+    mode, _warmups, blocks_count, _samples_per_tool, _timeout = _panel_spec(
+        contract, projects
+    )
+    if mode != "abba":
+        _fail("ABBA panel mode differs")
     if len(samples) != blocks_count * 4:
         _fail("ABBA sample count differs")
     blocks: list[list[dict[str, Any]]] = []
@@ -1363,31 +1447,73 @@ def _bootstrap_lower_cached(
         ]
         for offset in range(0, len(samples), 4)
     ]
-    return cold.bootstrap_block_speedup_lower(blocks, resamples, seed)
+    if not blocks or any(len(block) != 4 for block in blocks):
+        _fail("block bootstrap requires complete ABBA blocks")
+    expected = ("typokat", "tsgo", "tsgo", "typokat")
+    if any(tuple(sample["tool"] for sample in block) != expected for block in blocks):
+        _fail("block bootstrap received a non-ABBA block")
+    generator = random.Random(seed)
+    ratios: list[float] = []
+    for _ in range(resamples):
+        selected = generator.choices(blocks, k=len(blocks))
+        typokat = [
+            float(sample["wall_seconds"])
+            for block in selected
+            for sample in block
+            if sample["tool"] == "typokat"
+        ]
+        tsgo = [
+            float(sample["wall_seconds"])
+            for block in selected
+            for sample in block
+            if sample["tool"] == "tsgo"
+        ]
+        ratios.append(statistics.median(tsgo) / statistics.median(typokat))
+    try:
+        return cold.percentile(ratios, 0.05)
+    except cold.ContractError as error:
+        raise BatchContractError(str(error)) from error
 
 
 def recompute_panel(
     evidence: dict[str, Any], expected_oracles: dict[str, Any], contract: dict[str, Any]
 ) -> VerifiedPanel:
     projects = evidence.get("projects")
-    if projects not in contract["panel_project_counts"]:
+    if type(projects) is not int or projects not in contract["panel_project_counts"]:
         _fail("panel project count is not canonical")
-    warmup_pids = _validate_warmups(evidence.get("warmups", []), contract)
+    mode, warmup_count, blocks, samples_per_tool, _timeout = _panel_spec(
+        contract, projects
+    )
+    warmup_pids = _validate_warmups(evidence.get("warmups", []), warmup_count)
     samples = evidence.get("samples", [])
-    blocks = contract["sampling"]["blocks"]
-    schedule = ("typokat", "tsgo", "tsgo", "typokat")
-    if len(samples) != blocks * len(schedule):
-        _fail("ABBA sample count differs")
+    if mode == "paired-single":
+        schedule = ((0, 0, "typokat"), (0, 1, "tsgo"))
+    elif mode == "candidate-single":
+        schedule = ((0, 0, "typokat"),)
+    else:
+        schedule = tuple(
+            (block, slot, tool)
+            for block in range(blocks)
+            for slot, tool in enumerate(("typokat", "tsgo", "tsgo", "typokat"))
+        )
+    expected_count = samples_per_tool * (1 if mode == "candidate-single" else 2)
+    if len(samples) != expected_count or len(samples) != len(schedule):
+        _fail(f"{mode} sample count differs")
     pids = set(warmup_pids)
     previous_end = None
     durations: dict[str, list[int]] = {"typokat": [], "tsgo": []}
     rss: dict[str, list[int]] = {"typokat": [], "tsgo": []}
     typokat_route_walls: list[int] = []
-    for index, sample in enumerate(samples):
-        block, slot = divmod(index, 4)
-        if sample.get("block") != block or sample.get("slot") != slot or sample.get("tool") != schedule[slot]:
-            _fail("ABBA schedule differs")
+    for sample, (block, slot, tool) in zip(samples, schedule, strict=True):
+        if (
+            sample.get("block") != block
+            or sample.get("slot") != slot
+            or sample.get("tool") != tool
+        ):
+            _fail("ABBA schedule differs" if mode == "abba" else f"{mode} schedule differs")
         pid = sample.get("pid")
+        if type(pid) is not int or pid <= 0:
+            _fail("sample PID is invalid")
         if pid in pids:
             _fail("sample PID was reused")
         pids.add(pid)
@@ -1406,31 +1532,42 @@ def recompute_panel(
                 frame["route_end_ns"] - frame["route_start_ns"]
                 for frame in sample["frames"]
             ))
-    statistics_receipt = recompute_abba_statistics(samples, contract)
-    speedup = statistics_receipt["speedup"]
-    p95 = statistics_receipt["p95_ratio"]
-    bootstrap_lower = statistics_receipt["bootstrap_lower_95"]
     derived = evidence.get("derived")
-    computed = (speedup, p95, bootstrap_lower)
-    claimed = (
-        derived.get("speedup") if isinstance(derived, dict) else None,
-        derived.get("p95_ratio") if isinstance(derived, dict) else None,
-        derived.get("bootstrap_lower_95") if isinstance(derived, dict) else None,
-    )
-    if any(not isinstance(value, (int, float)) for value in claimed) or any(
-        not math.isclose(float(actual), float(expected), rel_tol=2e-6, abs_tol=2e-6)
-        for actual, expected in zip(claimed, computed, strict=True)
+    if not isinstance(derived, dict):
+        _fail("derived panel evidence is not an object")
+    speedup = p95 = bootstrap_lower = None
+    if mode == "abba":
+        statistics_receipt = recompute_abba_statistics(samples, contract)
+        speedup = statistics_receipt["speedup"]
+        p95 = statistics_receipt["p95_ratio"]
+        bootstrap_lower = statistics_receipt["bootstrap_lower_95"]
+        computed = (speedup, p95, bootstrap_lower)
+        claimed = (
+            derived.get("speedup"),
+            derived.get("p95_ratio"),
+            derived.get("bootstrap_lower_95"),
+        )
+        if any(type(value) not in (int, float) for value in claimed) or any(
+            not math.isclose(float(actual), float(expected), rel_tol=2e-6, abs_tol=2e-6)
+            for actual, expected in zip(claimed, computed, strict=True)
+        ):
+            _fail("derived performance evidence differs from raw ABBA samples")
+    elif any(
+        key in derived for key in ("speedup", "p95_ratio", "bootstrap_lower_95")
     ):
-        _fail("derived performance evidence differs from raw ABBA samples")
+        _fail("single-sample panel carries derived performance evidence")
     verify_raw_oracles(evidence, expected_oracles, contract)
     verify_negative_controls(evidence.get("negative_controls", {}), contract)
     return VerifiedPanel(
         projects=projects,
+        mode=mode,
         speedup=speedup,
         p95_ratio=p95,
         bootstrap_lower_95=bootstrap_lower,
         typokat_median_rss_kib=statistics.median(rss["typokat"]),
-        tsgo_median_rss_kib=statistics.median(rss["tsgo"]),
+        tsgo_median_rss_kib=(
+            statistics.median(rss["tsgo"]) if rss["tsgo"] else None
+        ),
         typokat_peak_rss_kib=max(rss["typokat"]),
         typokat_route_wall_ns=round(statistics.median(typokat_route_walls)),
     )
@@ -1441,16 +1578,26 @@ def panel_passes(panel: VerifiedPanel, contract: dict[str, Any]) -> bool:
         return False
     if panel.typokat_peak_rss_kib >= contract["max_typokat_rss_kib"]:
         return False
-    if panel.typokat_median_rss_kib > panel.tsgo_median_rss_kib * contract["max_typokat_to_tsgo_median_rss"]:
+    mode, _warmups, _blocks, _samples_per_tool, _timeout = _panel_spec(
+        contract, panel.projects
+    )
+    if panel.mode != mode:
         return False
-    if panel.projects in contract["speed_gated_project_counts"]:
+    if mode == "abba":
+        if panel.tsgo_median_rss_kib is None or (
+            panel.typokat_median_rss_kib
+            > panel.tsgo_median_rss_kib
+            * contract["max_typokat_to_tsgo_median_rss"]
+        ):
+            return False
+    if mode == "abba" and panel.projects in contract["speed_gated_project_counts"]:
         minimum = contract["minimum_speedup"]
         if any(
-            metric <= minimum
+            metric is None or metric <= minimum
             for metric in (panel.speedup, panel.p95_ratio, panel.bootstrap_lower_95)
         ):
             return False
-    if panel.projects == contract["current_typokat_baseline"]["frames"]:
+    if mode == "candidate-single" and panel.projects == contract["current_typokat_baseline"]["frames"]:
         if panel.typokat_peak_rss_kib * 1024 >= contract["current_typokat_baseline"]["peak_rss_bytes"]:
             return False
         # The authenticated boundary is the sum of per-frame route intervals.

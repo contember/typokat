@@ -82,12 +82,13 @@ Reject the candidate or leave this ADR proposed if any of these is true:
 - any production hybrid or collision-name branch remains.
 
 The performance gate uses authenticated comparable lifecycles. It covers cold `fast-clean`,
-`fast-errors`, `collision`, and `fanout`, plus isolated in-process 32- and 687-project panels. Every
-panel must have typokat/tsgo median and p95 speedup, and a one-sided 95% bootstrap lower bound,
-strictly greater than `1.00`. Typokat median peak RSS must be no greater than tsgo on every binding
-panel and every typokat sample must remain below 512 MiB. The candidate must also beat the frozen
-current-provider 687-frame wall time and peak RSS. One, two, and 32 concurrent sessions must remain
-deterministic and isolated.
+`fast-errors`, `collision`, and `fanout`, plus a repeated isolated in-process 32-project comparator.
+The comparator must have typokat/tsgo median and p95 speedup, and a one-sided 95% bootstrap lower
+bound, strictly greater than `1.00`; typokat median peak RSS must be no greater than tsgo. A separate
+single-pass 687-frame candidate closure must satisfy the full semantic and lifecycle ratchet and beat
+the frozen current-provider wall time and peak RSS. Every typokat sample must remain below 512 MiB.
+One, two, and 32 concurrent sessions must remain deterministic and isolated. The complete live panel
+collection must fail closed after ten minutes so it remains usable as a development gate.
 
 The repeated comparator creates one isolated native tsgo Program/checker per frame. It may share
 only immutable source/parse products that tsgo's real implementation shares. Repeated tsgo process

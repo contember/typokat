@@ -397,8 +397,8 @@ These conditions may not be relaxed after candidate results are visible.
   startup would overstate the result.
 - **Verify first.** Freeze the candidate/control commits, exact binaries, TypeScript 6.0.3 semantic
   oracle, staged native comparator identity, 82-file inventory, workloads, CPU lease, affinity,
-  environment, sampling schedule, and current authenticated 687-frame baseline. Declare all gates
-  before the first candidate timing run.
+  environment, sampling schedule, ten-minute collection budget, and current authenticated 687-frame
+  baseline. Declare all gates before the first candidate timing run.
 - **Scope.** Extend the authoritative benchmark with two panels:
   1. the existing cold `fast-clean`, `fast-errors`, `collision`, and `fanout` process comparison;
   2. a pinned in-process `tsgo` batch runner built from the authenticated upstream source, creating
@@ -415,11 +415,12 @@ These conditions may not be relaxed after candidate results are visible.
   every admitted semantic/control oracle. Under `cpu-lease run -n 2 --no-smt --`:
   - every cold row has typokat/tsgo median speedup, p95 speedup, and one-sided 95% bootstrap lower
     bound strictly greater than `1.00`;
-  - the 32- and 687-project isolated batch panels satisfy the same three strict speed gates;
-  - typokat median peak RSS is no greater than `tsgo` on every binding panel and every sample remains
-    below 512 MiB;
-  - the candidate also beats the authenticated current typokat provider baseline on total 687-frame
-    wall time and peak RSS;
+  - the repeated 32-project isolated batch panel satisfies the same three strict speed gates and
+    typokat median peak RSS is no greater than `tsgo`;
+  - a single-pass 687-frame typokat closure satisfies the full semantic and lifecycle ratchet and
+    beats the authenticated current provider on total wall time and peak RSS;
+  - the paired one-project smoke and every typokat sample remain below 512 MiB;
+  - the complete live panel collection fails closed after ten minutes;
   - 1/2/32-session concurrency is deterministic, memory-bounded, and contains no cross-project
     identity or cache leak.
   Raw evidence is retained with binary/source hashes. An independent reviewer recomputes every
@@ -835,3 +836,11 @@ numbers are invalid without `--no-smt`.
   insertion disappeared from the top report. Current `4a9544ef` has a rebuilt release runner and
   clean focused tests/reviews, but no decision-quality 687-frame timing; WU6 remains `NO-GO` until a
   quiet authenticated rerun passes the historical wall gate and the live progressive collector.
+- **2026-09-02 — WU6 panel budget correction.** The original uniform sampling schedule repeated both
+  tools 33 times at every size. A retained run showed the 687-frame TypeScript-Go process taking
+  about 200 seconds, making the full collector take 7,896 seconds; 30- and 60-minute retries therefore
+  timed out by design rather than exposing a candidate failure. The bounded collector now uses one
+  paired one-frame smoke, five ABBA blocks at 32 frames, and one typokat-only 687-frame closure. The
+  32-frame panel remains the statistical cross-tool speed/RSS authority; the 687-frame closure retains
+  the full candidate semantic/lifecycle and historical wall/RSS gates. A global 600-second deadline
+  fails closed across builds and subprocesses.

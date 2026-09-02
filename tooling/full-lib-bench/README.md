@@ -248,14 +248,16 @@ admitted three-way typokat/`tsc`/TypeScript-Go agreement set. See
 Panels run in strict order: 1, then 32, then 687 projects. The collector must stop after the first
 failed semantic, control, lifecycle, speed, or memory gate. This keeps an unoptimized candidate
 from turning the 687-frame acceptance into an unbounded run. Every child has a 1 GiB address-space
-limit; every retained sample must remain below 512 MiB RSS. The 32- and 687-project panels require
-all three speed ratios to be strictly greater than one, and typokat median RSS must not exceed
-TypeScript-Go median RSS. The 687-project candidate must also beat the authenticated current
-typokat baseline in both total wall time and peak RSS. The old wall receipt is the sum of its 687
-internally measured frame-route intervals, including its first-frame provider initialization; the
-candidate compares the same internal interval sum. The external batch wall samples remain the
-authority only for typokat versus TypeScript-Go, so process/protocol overhead is never compared to
-the old internal receipt.
+limit; every retained typokat sample must remain below 512 MiB RSS. The one-project panel is a single
+paired semantic/lifecycle smoke. The 32-project panel uses three warmups per tool and five ABBA blocks;
+it requires all three speed ratios to be strictly greater than one and typokat median RSS not to
+exceed TypeScript-Go median RSS. The 687-project panel is one typokat-only closure over every
+authenticated frame. It must beat the authenticated current typokat baseline in both total wall time
+and peak RSS. The old wall receipt is the sum of its 687 internally measured frame-route intervals,
+including its first-frame provider initialization; the candidate compares the same internal interval
+sum. External batch wall samples remain the authority only for the 32-project typokat versus
+TypeScript-Go comparison, so process/protocol overhead is never compared to the old internal receipt.
+The complete live collection, including authenticated builds, fails closed after 600 seconds.
 
 Verdicts are recomputed from raw ABBA process records, JSONL requests/responses, `/usr/bin/time`
 reports, executable attestations, and monotonic intervals. Runner booleans and derived speed/RSS
