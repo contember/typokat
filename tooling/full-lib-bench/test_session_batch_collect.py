@@ -654,6 +654,14 @@ class FakePostPanelHost:
             },
         )
         refresh_responses(self.allocation_record)
+        allocation_line = json.dumps(
+            self.allocation_record["allocation_receipt"],
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        self.allocation_record["stdout"] = (
+            self.allocation_record["response_stream"] + allocation_line + "\n"
+        )
         self.allocation_request_stream = self._request_stream(self.authority["frames"])
         if self.allocation_record["request_stream"] != self.allocation_request_stream:
             raise AssertionError("allocation fixture lost authenticated request bytes")
@@ -2060,7 +2068,11 @@ class SessionBatchLiveConcurrencyCollectorTests(unittest.TestCase):
                 self.assertEqual(json.loads(output.read_bytes()), result)
                 with self.assertRaisesRegex(batch.BatchContractError, "exists"):
                     collect.collect_live_concurrency(output=output)
-            constructor.assert_called_once_with(self.contract)
+            constructor.assert_called_once_with(
+                self.contract,
+                collection_deadline=mock.ANY,
+                persistent_rust_build_cache=True,
+            )
             self.assertEqual(
                 output.read_bytes(),
                 json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
@@ -2286,7 +2298,11 @@ class SessionBatchLiveAllocationCollectorTests(unittest.TestCase):
                 self.assertEqual(json.loads(output.read_bytes()), result)
                 with self.assertRaisesRegex(batch.BatchContractError, "exists"):
                     collect.collect_live_allocation(output=output)
-            constructor.assert_called_once_with(self.contract)
+            constructor.assert_called_once_with(
+                self.contract,
+                collection_deadline=mock.ANY,
+                persistent_rust_build_cache=True,
+            )
             self.assertEqual(
                 output.read_bytes(),
                 json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
@@ -2339,7 +2355,9 @@ class SessionBatchLiveAllocationCollectorTests(unittest.TestCase):
         raw_verification.assert_called_once()
         raw_input, raw_expected, raw_contract = raw_verification.call_args.args
         self.assertEqual(raw_input["projects"], 687)
-        self.assertEqual(raw_input["samples"], [host.allocation_record])
+        verification_record = copy.deepcopy(host.allocation_record)
+        verification_record["stdout"] = verification_record["response_stream"]
+        self.assertEqual(raw_input["samples"], [verification_record])
         self.assertEqual(raw_expected, batch.oracle_panel(host.authority, 687))
         self.assertIs(raw_contract, self.contract)
         lifecycle_verification.assert_called()

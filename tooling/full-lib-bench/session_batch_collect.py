@@ -839,6 +839,275 @@ def _collect_live_panels(host: Any, contract: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _validate_typokat_attestation(
+    attestation: Any,
+    candidate: dict[str, Any],
+    runner: dict[str, Any],
+) -> None:
+    _exact_keys(
+        attestation,
+        {"candidate", "runner"},
+        "final typokat attestation",
+    )
+    if attestation["candidate"] != candidate:
+        _fail("final candidate identity differs")
+    if attestation["runner"] != runner:
+        _fail("final typokat runner identity differs")
+
+
+def _collect_live_concurrency(
+    host: Any, contract: dict[str, Any]
+) -> dict[str, Any]:
+    candidate = host.freeze_candidate()
+    _validate_candidate(candidate)
+
+    runner = host.build_runner("typokat", candidate)
+    _validate_runner(runner, "typokat", candidate, contract)
+    protocol = host.protocol_info("typokat", runner)
+    batch.validate_protocol_info(protocol, "typokat", runner, contract)
+
+    request_stream, authority = _single_frame_request(contract)
+    if request_stream != _panel_request_stream(authority, 1):
+        _fail("authenticated concurrency request bytes differ")
+    try:
+        expected_semantic = {
+            key: copy.deepcopy(value)
+            for key, value in authority["typokat"][0].items()
+            if key != "case_id"
+        }
+    except (KeyError, IndexError, TypeError) as error:
+        raise batch.BatchContractError(
+            "authenticated concurrency semantic authority is incomplete"
+        ) from error
+
+    concurrency: dict[str, dict[str, Any]] = {}
+    limit = contract["child_address_space_limit_bytes"]
+    for count in contract["concurrency"]["session_counts"]:
+        record = host.run_concurrency(
+            runner,
+            request_stream,
+            count,
+            timeout_seconds=RUNTIME_TIMEOUT_SECONDS,
+            address_space_limit_bytes=limit,
+        )
+        label = f"typokat {count}-session concurrency"
+        _link_process_record(record, runner, label)
+        required = {
+            "tool",
+            "pid",
+            "start_ns",
+            "end_ns",
+            "returncode",
+            "stdout",
+            "stderr",
+            "process_group_empty",
+            "executable_before_sha256",
+            "executable_after_sha256",
+            "address_space_limit_bytes",
+            "request_stream",
+            "request_stream_sha256",
+            "sessions",
+            "session_identities",
+            "publisher_identities",
+            "cache_identities",
+            "output_sha256",
+            "retained_sessions",
+            "retained_caches",
+            "peak_rss_kib",
+            "time_report",
+            "stdout_sha256",
+        }
+        if not isinstance(record, dict) or not required <= set(record):
+            _fail(f"{label} process evidence is incomplete")
+        if (
+            record["tool"] != "typokat"
+            or type(record["pid"]) is not int
+            or record["pid"] <= 0
+            or type(record["start_ns"]) is not int
+            or type(record["end_ns"]) is not int
+            or record["start_ns"] >= record["end_ns"]
+            or record["returncode"] != 0
+            or record["stderr"] != ""
+            or record["process_group_empty"] is not True
+            or record["address_space_limit_bytes"] != limit
+        ):
+            _fail(f"{label} process boundary differs")
+        if (
+            record["request_stream"] != request_stream
+            or record["request_stream_sha256"] != _sha(request_stream.encode())
+        ):
+            _fail(f"{label} authenticated request source differs")
+        sessions = record["sessions"]
+        if not isinstance(sessions, list) or len(sessions) != count:
+            _fail(f"{label} session receipt count differs")
+        if any(
+            not isinstance(session, dict)
+            or session.get("semantic") != expected_semantic
+            for session in sessions
+        ):
+            _fail(f"{label} semantic output differs from authenticated authority")
+        if (
+            type(record["peak_rss_kib"]) is not int
+            or isinstance(record["peak_rss_kib"], bool)
+            or record["peak_rss_kib"] < 0
+        ):
+            _fail(f"{label} RSS evidence is invalid")
+        concurrency[str(count)] = record
+
+    batch.verify_concurrency(concurrency, contract)
+    attestation = host.final_typokat_attestation(candidate, runner)
+    _validate_typokat_attestation(attestation, candidate, runner)
+    evidence = {
+        "schema": 1,
+        "candidate": candidate,
+        "runner": runner,
+        "protocol": protocol,
+        "concurrency": concurrency,
+        "final_attestation": attestation,
+    }
+    return {
+        "verdict": "CONCURRENCY-PASS",
+        "evidence_sha256": _sha(_canonical(evidence)),
+        "evidence": evidence,
+    }
+
+
+def _collect_live_allocation(
+    host: Any, contract: dict[str, Any]
+) -> dict[str, Any]:
+    candidate = host.freeze_candidate()
+    _validate_candidate(candidate)
+
+    runner = host.build_allocation_runner(candidate)
+    _validate_runner(runner, "typokat", candidate, contract)
+    protocol = host.protocol_info("typokat", runner)
+    batch.validate_protocol_info(protocol, "typokat", runner, contract)
+
+    authority = batch.load_authenticated_batch_oracles(contract)
+    projects = contract["panel_project_counts"][-1]
+    request_stream = _panel_request_stream(authority, projects)
+    limit = contract["child_address_space_limit_bytes"]
+    timeout = contract["sampling"]["panel_timeout_seconds"][-1]
+    record = host.run_allocation_probe(
+        runner,
+        request_stream,
+        timeout_seconds=timeout,
+        address_space_limit_bytes=limit,
+    )
+    _link_process_record(record, runner, "typokat allocation probe")
+    required = {
+        "tool",
+        "pid",
+        "start_ns",
+        "end_ns",
+        "returncode",
+        "stdout",
+        "stderr",
+        "stdout_complete",
+        "stderr_complete",
+        "timed_out",
+        "process_group_empty",
+        "executable_before_sha256",
+        "executable_after_sha256",
+        "address_space_limit_bytes",
+        "request_stream",
+        "response_stream",
+        "request_stream_sha256",
+        "response_stream_sha256",
+        "time_report",
+        "rss_kib",
+        "frames",
+        "timed",
+        "allocation_receipt",
+    }
+    if not isinstance(record, dict) or not required <= set(record):
+        _fail("typokat allocation process evidence is incomplete")
+    if (
+        record["tool"] != "typokat"
+        or type(record["pid"]) is not int
+        or record["pid"] <= 0
+        or type(record["start_ns"]) is not int
+        or type(record["end_ns"]) is not int
+        or record["start_ns"] >= record["end_ns"]
+        or record["returncode"] != 0
+        or record["stderr"] != ""
+        or record["stdout_complete"] is not True
+        or record["stderr_complete"] is not True
+        or record["timed_out"] is not False
+        or record["process_group_empty"] is not True
+        or record["address_space_limit_bytes"] != limit
+        or record["timed"] is not False
+    ):
+        _fail("typokat allocation process boundary differs")
+    if (
+        record["request_stream"] != request_stream
+        or record["request_stream_sha256"] != _sha(request_stream.encode())
+    ):
+        _fail("typokat allocation authenticated request source differs")
+    frames = record["frames"]
+    if not isinstance(frames, list) or len(frames) != projects:
+        _fail("typokat allocation frame receipt count differs")
+    expected_product = contract["profile"]["length_framed_sha256"]
+    if any(
+        not isinstance(frame, dict)
+        or frame.get("shared_product_identity") != expected_product
+        for frame in frames
+    ):
+        _fail("typokat allocation shared product identity differs")
+
+    receipt = record["allocation_receipt"]
+    _exact_keys(
+        receipt,
+        {
+            "allocation_count",
+            "binary_sha256",
+            "instrumentation",
+            "timed",
+            "tool",
+        },
+        "allocation receipt",
+    )
+    batch.verify_allocation_probe(receipt, contract)
+    if receipt["binary_sha256"] != runner["binary_sha256"]:
+        _fail("allocation receipt binary differs from launched runner")
+    canonical_receipt_line = _canonical(receipt).decode() + "\n"
+    if record["stdout"] != record["response_stream"] + canonical_receipt_line:
+        _fail("allocation stdout does not authenticate frames and receipt")
+
+    verification_record = record
+    if record["stdout"] != record["response_stream"]:
+        verification_record = dict(record)
+        verification_record["stdout"] = record["response_stream"]
+    expected = batch.oracle_panel(authority, projects)
+    raw = {
+        "projects": projects,
+        "samples": [verification_record],
+        "derived": {},
+    }
+    raw["derived"]["typokat_accepted_progress"] = (
+        batch.recompute_typokat_accepted_progress(raw, expected, contract)
+    )
+    batch.verify_raw_oracles(raw, expected, contract)
+    batch.verify_route_intervals(record, projects)
+
+    attestation = host.final_typokat_attestation(candidate, runner)
+    _validate_typokat_attestation(attestation, candidate, runner)
+    evidence = {
+        "schema": 1,
+        "candidate": candidate,
+        "runner": runner,
+        "protocol": protocol,
+        "process": record,
+        "allocation_receipt": receipt,
+        "final_attestation": attestation,
+    }
+    return {
+        "verdict": "ALLOCATION-PASS",
+        "evidence_sha256": _sha(_canonical(evidence)),
+        "evidence": evidence,
+    }
+
+
 def _atomic_write_new(path: Path, data: bytes) -> None:
     parent = path.parent
     if parent.is_symlink() or not parent.is_dir():
@@ -907,6 +1176,40 @@ def collect_live_panels(*, output: Path) -> dict[str, Any]:
     return result
 
 
+def collect_live_concurrency(*, output: Path) -> dict[str, Any]:
+    output = Path(output)
+    if output.exists() or output.is_symlink():
+        _fail(f"output already exists: {output}")
+    contract = batch.verify_contract()
+    deadline = time.monotonic() + contract["sampling"]["max_collection_wall_seconds"]
+    host = SystemLiveHost(
+        contract,
+        collection_deadline=deadline,
+        persistent_rust_build_cache=True,
+    )
+    result = _collect_live_concurrency(host, host.contract)
+    _bounded_timeout(contract["sampling"]["max_collection_wall_seconds"], deadline)
+    _atomic_write_new(output, _canonical(result) + b"\n")
+    return result
+
+
+def collect_live_allocation(*, output: Path) -> dict[str, Any]:
+    output = Path(output)
+    if output.exists() or output.is_symlink():
+        _fail(f"output already exists: {output}")
+    contract = batch.verify_contract()
+    deadline = time.monotonic() + contract["sampling"]["max_collection_wall_seconds"]
+    host = SystemLiveHost(
+        contract,
+        collection_deadline=deadline,
+        persistent_rust_build_cache=True,
+    )
+    result = _collect_live_allocation(host, host.contract)
+    _bounded_timeout(contract["sampling"]["max_collection_wall_seconds"], deadline)
+    _atomic_write_new(output, _canonical(result) + b"\n")
+    return result
+
+
 class SystemLiveHost:
     """Real build and process boundary used only by the public collector."""
 
@@ -950,6 +1253,15 @@ class SystemLiveHost:
         if tool == "tsgo":
             return self._build_tsgo(candidate)
         _fail(f"unsupported live runner: {tool}")
+
+    def build_allocation_runner(
+        self, candidate: dict[str, Any]
+    ) -> dict[str, Any]:
+        return self._build_typokat(
+            candidate,
+            features=("counting-allocator",),
+            private_prefix="typokat-allocation-runner-",
+        )
 
     def build_cold_typokat(self, candidate: dict[str, Any]) -> dict[str, Any]:
         if self.freeze_candidate() != candidate:
@@ -1013,6 +1325,174 @@ class SystemLiveHost:
         if not isinstance(value, dict):
             _fail(f"{tool} protocol-info is not an object")
         return value
+
+    def run_concurrency(
+        self,
+        runner: dict[str, Any],
+        request_stream: str,
+        count: int,
+        *,
+        timeout_seconds: int,
+        address_space_limit_bytes: int,
+    ) -> dict[str, Any]:
+        if type(count) is not int or count not in self.contract["concurrency"][
+            "session_counts"
+        ]:
+            _fail("typokat concurrency count differs from the contract")
+        request_lines = request_stream.splitlines()
+        if len(request_lines) != 1 or request_stream != request_lines[0] + "\n":
+            _fail("typokat concurrency request is not exactly one complete frame")
+        try:
+            request = json.loads(request_lines[0])
+        except json.JSONDecodeError as error:
+            raise batch.BatchContractError(
+                f"invalid typokat concurrency request JSON: {error}"
+            ) from error
+        if (
+            not isinstance(request, dict)
+            or set(request) != {"schema", "case_id", "source"}
+            or request.get("schema") != 1
+            or not isinstance(request.get("case_id"), str)
+            or not request["case_id"]
+            or not isinstance(request.get("source"), str)
+            or _canonical(request).decode() != request_lines[0]
+        ):
+            _fail("typokat concurrency request frame is malformed or noncanonical")
+
+        binary = Path(runner["path"])
+        before = _sha_file(binary, "typokat concurrency runner")
+        if before != runner.get("binary_sha256"):
+            _fail("typokat concurrency runner changed before launch")
+        measurement = self._run_runner(
+            "typokat",
+            runner,
+            ["--concurrency", str(count)],
+            request_stream,
+            timeout_seconds=timeout_seconds,
+            address_space_limit_bytes=address_space_limit_bytes,
+            measured=True,
+        )
+        after = _sha_file(binary, "typokat concurrency runner")
+        if after != before:
+            _fail("typokat concurrency runner changed during execution")
+        if measurement.returncode != 0:
+            _fail("typokat concurrency process exited nonzero")
+        if measurement.stderr:
+            _fail("typokat concurrency stderr is not empty")
+        lines = measurement.stdout.splitlines()
+        if len(lines) != 1 or measurement.stdout != lines[0] + "\n":
+            _fail("typokat concurrency output is not one complete JSON array")
+        try:
+            sessions = json.loads(lines[0])
+        except json.JSONDecodeError as error:
+            raise batch.BatchContractError(
+                f"invalid typokat concurrency JSON: {error}"
+            ) from error
+        if not isinstance(sessions, list) or len(sessions) != count:
+            _fail("typokat concurrency session receipt count differs")
+        if _canonical(sessions).decode() != lines[0]:
+            _fail("typokat concurrency output is noncanonical")
+        session_keys = {
+            "barrier_ns",
+            "cache_identity",
+            "cache_weak_alive_after",
+            "end_ns",
+            "identity",
+            "publisher_identity",
+            "raw_output_sha256",
+            "semantic",
+            "session_weak_alive_after",
+            "start_ns",
+        }
+        semantic_keys = {
+            "exit_code",
+            "parse_errors",
+            "diagnostics",
+            "incompletes",
+        }
+        for session in sessions:
+            if not isinstance(session, dict) or set(session) != session_keys:
+                _fail("typokat concurrency session shape differs")
+            semantic = session.get("semantic")
+            if not isinstance(semantic, dict) or set(semantic) != semantic_keys:
+                _fail("typokat concurrency semantic receipt shape differs")
+            identities = (
+                session["identity"],
+                session["publisher_identity"],
+                session["cache_identity"],
+            )
+            boundaries = (
+                session["start_ns"],
+                session["barrier_ns"],
+                session["end_ns"],
+            )
+            if (
+                any(
+                    not isinstance(identity, str) or not identity
+                    for identity in identities
+                )
+                or any(
+                    type(boundary) is not int
+                    for boundary in boundaries
+                )
+                or not boundaries[0] <= boundaries[1] <= boundaries[2]
+                or session["session_weak_alive_after"] is not False
+                or session["cache_weak_alive_after"] is not False
+                or session["raw_output_sha256"]
+                != _sha(_canonical(semantic))
+                or type(semantic["exit_code"]) is not int
+                or any(
+                    not isinstance(semantic[key], list)
+                    for key in ("parse_errors", "diagnostics", "incompletes")
+                )
+            ):
+                _fail("typokat concurrency session receipt is malformed")
+        for identity_key in (
+            "identity",
+            "publisher_identity",
+            "cache_identity",
+        ):
+            identities = [session[identity_key] for session in sessions]
+            if len(set(identities)) != count:
+                _fail("typokat concurrency local identity is reused")
+        if count > 1:
+            barriers = {session["barrier_ns"] for session in sessions}
+            latest_start = max(session["start_ns"] for session in sessions)
+            earliest_end = min(session["end_ns"] for session in sessions)
+            if len(barriers) != 1 or latest_start >= earliest_end:
+                _fail("typokat concurrency sessions did not overlap")
+
+        semantic_rows = [session["semantic"] for session in sessions]
+        return {
+            "sessions": sessions,
+            "session_identities": [session["identity"] for session in sessions],
+            "publisher_identities": [
+                session["publisher_identity"] for session in sessions
+            ],
+            "cache_identities": [
+                session["cache_identity"] for session in sessions
+            ],
+            "output_sha256": _sha(_canonical(semantic_rows)),
+            "retained_sessions": 0,
+            "retained_caches": 0,
+            "peak_rss_kib": measurement.rss_kib,
+            "time_report": measurement.time_report,
+            "stdout": measurement.stdout,
+            "stdout_sha256": _sha(measurement.stdout.encode()),
+            "executable_before_sha256": before,
+            "executable_after_sha256": after,
+            "process_group_empty": measurement.process_group_empty,
+            "request_stream": request_stream,
+            "request_stream_sha256": _sha(request_stream.encode()),
+            "pid": measurement.pid,
+            "start_ns": measurement.start_ns,
+            "end_ns": measurement.end_ns,
+            "returncode": measurement.returncode,
+            "tool": "typokat",
+            "stderr": measurement.stderr,
+            "address_space_limit_bytes": address_space_limit_bytes,
+        }
+
 
     def run_batch(
         self,
@@ -1084,6 +1564,145 @@ class SystemLiveHost:
         }
         self._record_panel_process(record)
         return record
+
+    def run_allocation_probe(
+        self,
+        runner: dict[str, Any],
+        request_stream: str,
+        *,
+        timeout_seconds: int,
+        address_space_limit_bytes: int,
+    ) -> dict[str, Any]:
+        request_lines = request_stream.splitlines()
+        if (
+            not request_lines
+            or request_stream
+            != "".join(f"{line}\n" for line in request_lines)
+        ):
+            _fail("typokat allocation request stream is incomplete")
+        for line in request_lines:
+            try:
+                request = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise batch.BatchContractError(
+                    f"invalid typokat allocation request JSON: {error}"
+                ) from error
+            if (
+                not isinstance(request, dict)
+                or set(request) != {"schema", "case_id", "source"}
+                or request.get("schema") != 1
+                or not isinstance(request.get("case_id"), str)
+                or not request["case_id"]
+                or not isinstance(request.get("source"), str)
+                or _canonical(request).decode() != line
+            ):
+                _fail("typokat allocation request frame is malformed or noncanonical")
+
+        binary = Path(runner["path"])
+        before = _sha_file(binary, "typokat allocation runner")
+        if before != runner.get("binary_sha256"):
+            _fail("typokat allocation runner changed before launch")
+        measurement = self._run_runner(
+            "typokat",
+            runner,
+            ["--allocation-probe"],
+            request_stream,
+            timeout_seconds=timeout_seconds,
+            address_space_limit_bytes=address_space_limit_bytes,
+            measured=True,
+        )
+        after = _sha_file(binary, "typokat allocation runner")
+        if after != before:
+            _fail("typokat allocation runner changed during execution")
+        if measurement.returncode != 0:
+            _fail("typokat allocation process exited nonzero")
+        if measurement.stderr:
+            _fail("typokat allocation stderr is not empty")
+        output_lines = measurement.stdout.splitlines()
+        if (
+            len(output_lines) != len(request_lines) + 1
+            or measurement.stdout
+            != "".join(f"{line}\n" for line in output_lines)
+        ):
+            _fail("typokat allocation output frame or receipt count differs")
+
+        frames = []
+        for ordinal, (request_line, response_line) in enumerate(
+            zip(request_lines, output_lines[:-1], strict=True)
+        ):
+            try:
+                response = json.loads(response_line)
+            except json.JSONDecodeError as error:
+                raise batch.BatchContractError(
+                    f"invalid typokat allocation frame JSON: {error}"
+                ) from error
+            if (
+                not isinstance(response, dict)
+                or _canonical(response).decode() != response_line
+            ):
+                _fail("typokat allocation frame is malformed or noncanonical")
+            frame = dict(response)
+            frame.update(
+                raw_request=request_line,
+                raw_response=response_line,
+                raw_response_sha256=_sha(response_line.encode()),
+            )
+            if frame.get("ordinal") != ordinal:
+                _fail("typokat allocation frame ordinal differs")
+            frames.append(frame)
+
+        try:
+            receipt = json.loads(output_lines[-1])
+        except json.JSONDecodeError as error:
+            raise batch.BatchContractError(
+                f"invalid typokat allocation receipt JSON: {error}"
+            ) from error
+        _exact_keys(
+            receipt,
+            {
+                "allocation_count",
+                "binary_sha256",
+                "instrumentation",
+                "timed",
+                "tool",
+            },
+            "typokat allocation receipt",
+        )
+        if _canonical(receipt).decode() != output_lines[-1]:
+            _fail("typokat allocation receipt is noncanonical")
+        batch.verify_allocation_probe(receipt, self.contract)
+        if receipt["binary_sha256"] != before:
+            _fail("typokat allocation receipt binary differs from launched executable")
+
+        response_stream = "".join(f"{line}\n" for line in output_lines[:-1])
+        return {
+            "block": 0,
+            "slot": 0,
+            "tool": "typokat",
+            "pid": measurement.pid,
+            "start_ns": measurement.start_ns,
+            "end_ns": measurement.end_ns,
+            "returncode": measurement.returncode,
+            "stdout": measurement.stdout,
+            "stderr": measurement.stderr,
+            "stdout_complete": True,
+            "stderr_complete": True,
+            "timed_out": False,
+            "process_group_empty": measurement.process_group_empty,
+            "executable_before_sha256": before,
+            "executable_after_sha256": after,
+            "address_space_limit_bytes": address_space_limit_bytes,
+            "request_stream": request_stream,
+            "response_stream": response_stream,
+            "request_stream_sha256": _sha(request_stream.encode()),
+            "response_stream_sha256": _sha(response_stream.encode()),
+            "time_report": measurement.time_report,
+            "rss_kib": measurement.rss_kib,
+            "frames": frames,
+            "timed": False,
+            "allocation_receipt": receipt,
+        }
+
 
     def run_single_project(
         self,
@@ -1253,6 +1872,39 @@ class SystemLiveHost:
         }
         self._record_panel_process(record)
         return record
+
+    def final_typokat_attestation(
+        self,
+        candidate: dict[str, Any],
+        runner: dict[str, Any],
+    ) -> dict[str, Any]:
+        _validate_candidate(candidate)
+        _validate_runner(runner, "typokat", candidate, self.contract)
+        observed_candidate = self.freeze_candidate()
+        if observed_candidate != candidate:
+            _fail("candidate changed before final typokat attestation")
+        source = ROOT / self.contract["typokat"]["runner_source_relative_path"]
+        binary = Path(runner["path"])
+        source_before = _sha_file(source, "final typokat runner source")
+        binary_before = _sha_file(binary, "final typokat runner binary")
+        ending_candidate = self.freeze_candidate()
+        source_after = _sha_file(source, "final typokat runner source")
+        binary_after = _sha_file(binary, "final typokat runner binary")
+        if ending_candidate != observed_candidate:
+            _fail("candidate changed during final typokat attestation")
+        if source_after != source_before:
+            _fail("typokat runner source changed during final attestation")
+        if binary_after != binary_before:
+            _fail("typokat runner binary changed during final attestation")
+        return {
+            "candidate": ending_candidate,
+            "runner": {
+                **runner,
+                "source_sha256": source_after,
+                "binary_sha256": binary_after,
+            },
+        }
+
 
     def final_attestation(
         self,
@@ -1466,7 +2118,20 @@ class SystemLiveHost:
         ):
             _fail(f"{tool} {fault} rejection receipt differs")
 
-    def _build_typokat(self, candidate: dict[str, Any]) -> dict[str, Any]:
+    def _build_typokat(
+        self,
+        candidate: dict[str, Any],
+        *,
+        features: tuple[str, ...] = (),
+        private_prefix: str = "typokat-runner-",
+    ) -> dict[str, Any]:
+        if features not in ((), ("counting-allocator",)):
+            _fail("unsupported typokat runner feature set")
+        if private_prefix not in (
+            "typokat-runner-",
+            "typokat-allocation-runner-",
+        ):
+            _fail("unsupported typokat private runner identity")
         if self.freeze_candidate() != candidate:
             _fail("candidate changed before typokat build")
         source = ROOT / self.contract["typokat"]["runner_source_relative_path"]
@@ -1474,6 +2139,11 @@ class SystemLiveHost:
         target, cargo_home, environment = self._rust_build_context(candidate)
         argv = [
             *self.contract["typokat"]["build_argv"],
+            *(
+                ["--features", ",".join(features)]
+                if features
+                else []
+            ),
             "--manifest-path",
             str(ROOT / "Cargo.toml"),
         ]
@@ -1492,7 +2162,7 @@ class SystemLiveHost:
             if self.persistent_rust_build_cache:
                 built_data = _read_regular(built, "built typokat runner")
                 descriptor, private_name = tempfile.mkstemp(
-                    prefix="typokat-runner-", dir=self.live_root
+                    prefix=private_prefix, dir=self.live_root
                 )
                 private = Path(private_name)
                 try:
