@@ -45,6 +45,7 @@ use std::collections::{BTreeMap, BTreeSet};
 thread_local! {
     static PRODUCT_LOWERER_CONSTRUCTIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static PRODUCT_LOWERING_METADATA_PLAN_CONSTRUCTIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static PRODUCT_LOWERING_MEMBER_TARGET_SNAPSHOTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -56,6 +57,15 @@ fn record_product_lowerer_construction_for_test() {
 fn record_product_lowering_metadata_plan_construction_for_test() {
     PRODUCT_LOWERING_METADATA_PLAN_CONSTRUCTIONS.set(
         PRODUCT_LOWERING_METADATA_PLAN_CONSTRUCTIONS
+            .get()
+            .saturating_add(1),
+    );
+}
+
+#[cfg(test)]
+fn record_product_lowering_member_target_snapshot_for_test() {
+    PRODUCT_LOWERING_MEMBER_TARGET_SNAPSHOTS.set(
+        PRODUCT_LOWERING_MEMBER_TARGET_SNAPSHOTS
             .get()
             .saturating_add(1),
     );
@@ -86,6 +96,22 @@ impl ProductLoweringMetadataPlanConstructionScopeForTest {
 
     pub fn finish(self) -> u64 {
         PRODUCT_LOWERING_METADATA_PLAN_CONSTRUCTIONS
+            .get()
+            .saturating_sub(self.0)
+    }
+}
+
+#[cfg(test)]
+pub struct ProductLoweringMemberTargetSnapshotScopeForTest(u64);
+
+#[cfg(test)]
+impl ProductLoweringMemberTargetSnapshotScopeForTest {
+    pub fn start() -> Self {
+        Self(PRODUCT_LOWERING_MEMBER_TARGET_SNAPSHOTS.get())
+    }
+
+    pub fn finish(self) -> u64 {
+        PRODUCT_LOWERING_MEMBER_TARGET_SNAPSHOTS
             .get()
             .saturating_sub(self.0)
     }
@@ -2696,6 +2722,8 @@ impl<'product, 'plan, 'interner> ProductLowerer<'product, 'plan, 'interner> {
         class_members: bool,
     ) -> Result<(), ProductLoweringError> {
         let owner = self.member_owner(key);
+        #[cfg(test)]
+        record_product_lowering_member_target_snapshot_for_test();
         let mut draft = target.clone();
         let object = &mut draft;
         match member.kind {

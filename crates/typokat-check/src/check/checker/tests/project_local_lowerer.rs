@@ -6,6 +6,7 @@ use crate::binder::namespace::{
 use crate::binder::product::{project_library_declaration_product, LibraryProductSource};
 use crate::check::checker::project_local::{
     accumulate_product_library_records_for_test, lower_product_groups_for_test,
+    ProductLoweringMemberTargetSnapshotScopeForTest,
 };
 use crate::check::query::{PublishedClassLookup, SemanticQueryCoordinator, SemanticQueryState};
 use crate::class_semantics::{DemandOutcome, PublishedClassSurface, PublishedClasses};
@@ -461,6 +462,73 @@ fn mapped_alias_rejects_applied_parameters_and_visits_their_arguments() {
             .count(),
         2,
         "both rejected parameter applications still visit their unresolved argument"
+    );
+}
+
+#[test]
+fn ordinary_product_members_lower_without_whole_target_snapshots() {
+    let mut fixture = Fixture::new();
+    let number = fixture.keyword(KeywordKind::Number, 82);
+    let string = fixture.keyword(KeywordKind::String, 102);
+    let boolean = fixture.keyword(KeywordKind::Boolean, 122);
+    let count = fixture.property("count", number, 80);
+    let label = fixture.property("label", string, 100);
+    let enabled = fixture.property("enabled", boolean, 120);
+    let declaration = fixture.structural_declaration(
+        "OrdinaryProduct",
+        DeclarationPayload::Interface {
+            type_parameters: Box::new([]),
+            members: Box::new([count, label, enabled]),
+            heritage: Box::new([]),
+        },
+        TYPE_ONLY,
+        20,
+        &[
+            fixture.site(80, 88),
+            fixture.site(100, 108),
+            fixture.site(120, 128),
+        ],
+    );
+    let group = fixture.group("OrdinaryProduct", TYPE_ONLY, vec![declaration]);
+    let product = fixture.finish("ordinary-product-member-snapshots");
+    let mut interner = Interner::with_intrinsics();
+    let snapshots = ProductLoweringMemberTargetSnapshotScopeForTest::start();
+    let receipt = lower_product_groups_for_test(
+        &product,
+        &mut interner,
+        &[group.index()],
+        &BTreeMap::new(),
+        [None, None],
+        None,
+    );
+    let snapshots = snapshots.finish();
+
+    assert!(receipt.ready.contains(&group.index()));
+    let ty = receipt.group_types[group.index()].expect("ready product type");
+    let expected_members = vec![
+        (
+            PropertyKey::String("count".to_owned()),
+            interner.well_known().number,
+        ),
+        (
+            PropertyKey::String("enabled".to_owned()),
+            interner.well_known().boolean,
+        ),
+        (
+            PropertyKey::String("label".to_owned()),
+            interner.well_known().string,
+        ),
+    ];
+    let object = interner.store().object_type(ty).expect("product object");
+    let actual_members = object
+        .properties
+        .iter()
+        .map(|property| (property.key.clone(), property.ty))
+        .collect::<Vec<_>>();
+    assert_eq!(actual_members, expected_members);
+    assert_eq!(
+        snapshots, 0,
+        "successful ordinary member lowering must not snapshot the accumulated object"
     );
 }
 
