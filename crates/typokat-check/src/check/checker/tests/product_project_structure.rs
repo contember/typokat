@@ -592,10 +592,11 @@ fn mapped_query_group_dependency_is_directional() {
     .components_for_test();
     let mut expected_partition = product
         .dependency_sccs()
-        .into_iter()
+        .iter()
         .map(|component| {
             let mut members = component
-                .into_iter()
+                .iter()
+                .copied()
                 .map(|key| map.group(key).expect("mapped SCC member").symbol())
                 .collect::<Vec<_>>();
             members.sort_by_key(|symbol| symbol.index());
@@ -809,7 +810,7 @@ fn mapped_product_and_live_user_edges_form_one_atomic_component() {
     assert_eq!(publisher.begins, vec![expected]);
 
     let base_sccs = product.dependency_sccs();
-    let mut base_members = base_sccs.into_iter().flatten().collect::<Vec<_>>();
+    let mut base_members = base_sccs.iter().flatten().copied().collect::<Vec<_>>();
     base_members.sort_by_key(|key| key.index());
     base_members.dedup();
     assert_eq!(base_members.len(), product.group_count());

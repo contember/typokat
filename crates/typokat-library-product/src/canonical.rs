@@ -1,4 +1,5 @@
 use crate::schema::{DependencyTarget, LibraryDeclarationProduct};
+use crate::GroupKey;
 use std::fmt::Write;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -203,16 +204,8 @@ impl LibraryDeclarationProduct {
     }
 
     /// Canonical dependency SCCs over immutable product group keys.
-    pub fn dependency_sccs(&self) -> Vec<Vec<crate::GroupKey>> {
-        dependency_scc_indices(self)
-            .into_iter()
-            .map(|component| {
-                component
-                    .into_iter()
-                    .map(|index| crate::GroupKey::new(index).expect("validated group index"))
-                    .collect()
-            })
-            .collect()
+    pub fn dependency_sccs(&self) -> &[Vec<GroupKey>] {
+        &self.dependency_sccs
     }
 }
 
@@ -242,10 +235,16 @@ fn digest_rows<T: std::fmt::Debug>(rows: &[T]) -> String {
 }
 
 fn dependency_scc_rows(product: &LibraryDeclarationProduct) -> String {
-    let components = dependency_scc_indices(product);
     let mut output = String::new();
-    for component in components {
-        let _ = writeln!(output, "{component:?}");
+    for component in product.dependency_sccs() {
+        let _ = write!(output, "[");
+        for (member_index, member) in component.iter().enumerate() {
+            if member_index != 0 {
+                let _ = write!(output, ", ");
+            }
+            let _ = write!(output, "{}", member.index());
+        }
+        let _ = writeln!(output, "]");
     }
     output
 }
@@ -261,10 +260,27 @@ fn dependency_scc_computation_count() -> usize {
     DEPENDENCY_SCC_COMPUTATION_COUNT.get()
 }
 
+pub(crate) fn canonical_dependency_sccs(
+    product: &LibraryDeclarationProduct,
+) -> Box<[Vec<GroupKey>]> {
+    dependency_scc_indices(product)
+        .into_iter()
+        .map(|component| {
+            component
+                .into_iter()
+                .map(|index| GroupKey::new(index).expect("validated group index"))
+                .collect()
+        })
+        .collect()
+}
+
 fn dependency_scc_indices(product: &LibraryDeclarationProduct) -> Vec<Vec<usize>> {
     #[cfg(test)]
-    DEPENDENCY_SCC_COMPUTATION_COUNT
-        .set(dependency_scc_computation_count().checked_add(1).expect("SCC computation count"));
+    DEPENDENCY_SCC_COMPUTATION_COUNT.set(
+        dependency_scc_computation_count()
+            .checked_add(1)
+            .expect("SCC computation count"),
+    );
 
     let mut edges = vec![Vec::new(); product.groups.len()];
     for dependency in &product.dependencies {
@@ -501,11 +517,7 @@ mod tests {
         let second = product.dependency_sccs();
         let first: &[Vec<GroupKey>] = first.as_ref();
         let second: &[Vec<GroupKey>] = second.as_ref();
-        let expected = [
-            vec![groups[0]],
-            vec![groups[1]],
-            vec![groups[2]],
-        ];
+        let expected = [vec![groups[0]], vec![groups[1]], vec![groups[2]]];
 
         assert_eq!(first, expected.as_slice());
         assert_eq!(second, expected.as_slice());

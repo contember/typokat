@@ -264,8 +264,8 @@ pub(super) fn product_dependency_scc_indices(
     PRODUCT_DEPENDENCY_SCC_PROJECTIONS.set(PRODUCT_DEPENDENCY_SCC_PROJECTIONS.get() + 1);
     product
         .dependency_sccs()
-        .into_iter()
-        .map(|members| members.into_iter().map(|key| key.index()).collect())
+        .iter()
+        .map(|members| members.iter().map(|key| key.index()).collect())
         .collect()
 }
 

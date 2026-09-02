@@ -206,7 +206,7 @@ impl ProductAssembly {
                 key
             }
         };
-        let product = LibraryDeclarationProduct {
+        let mut product = LibraryDeclarationProduct {
             profile,
             strings: strings.into_boxed_slice(),
             sources: self.sources.into_boxed_slice(),
@@ -225,9 +225,11 @@ impl ProductAssembly {
             signatures: self.signatures.into_boxed_slice(),
             members: self.members.into_boxed_slice(),
             dependencies: self.dependencies.into_boxed_slice(),
+            dependency_sccs: Box::new([]),
             lexical_steps: self.lexical_steps.into_boxed_slice(),
         };
         product.validate().map_err(ProductBuildError::Validation)?;
+        product.dependency_sccs = canonical::canonical_dependency_sccs(&product);
         Ok(product)
     }
 }

@@ -554,6 +554,7 @@ pub struct LibraryDeclarationProduct {
     pub(crate) signatures: Box<[SignatureRecipe]>,
     pub(crate) members: Box<[MemberRecipe]>,
     pub(crate) dependencies: Box<[DependencyRecipe]>,
+    pub(crate) dependency_sccs: Box<[Vec<GroupKey>]>,
     pub(crate) lexical_steps: Box<[LexicalStepRecipe]>,
 }
 

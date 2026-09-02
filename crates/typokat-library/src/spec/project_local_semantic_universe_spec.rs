@@ -4007,10 +4007,10 @@ fn native_product_evidence(product: &LibraryDeclarationProduct) -> NativeProduct
     dependencies.sort();
     let publication_sccs = product
         .dependency_sccs()
-        .into_iter()
+        .iter()
         .map(|members| ProjectLocalProductSccForTest {
             members: members
-                .into_iter()
+                .iter()
                 .map(|key| groups[key.index()].clone())
                 .collect(),
         })

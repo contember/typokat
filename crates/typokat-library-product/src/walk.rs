@@ -39,6 +39,7 @@ impl LibraryDeclarationProduct {
             signatures,
             members,
             dependencies,
+            dependency_sccs: _dependency_sccs,
             lexical_steps,
         } = self;
         field(
