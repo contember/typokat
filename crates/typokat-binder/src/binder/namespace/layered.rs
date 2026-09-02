@@ -1,5 +1,5 @@
 use super::models_ids::*;
-use crate::binder::bind::{FrozenPrefixWrite, FrozenPrefixWriteSite, NamespaceLocalCapacity};
+use crate::binder::bind::{FrozenPrefixWrite, FrozenPrefixWriteSite};
 use crate::binder::declaration::{DeclId, ValueStorageId};
 use crate::binder::roots::{LibraryRootProjection, RootNameRow};
 use crate::binder::scope::{FrozenScopeWrite, ScopeGraph, ScopeId, ScopeKind};
@@ -133,24 +133,6 @@ pub(super) fn rebuild_canonical_suffix<T, LibraryKey: Ord, UserKey: Ord>(
 }
 
 impl NamespaceTable {
-    pub(crate) fn reserve_local(&mut self, capacity: NamespaceLocalCapacity) {
-        self.namespaces.reserve_local(capacity.namespaces);
-        self.aggregate_instance_states
-            .reserve_local(capacity.namespaces);
-        self.standalone_value_storages
-            .reserve_local(capacity.namespaces);
-        self.fragments.reserve_local(capacity.fragments);
-        self.members.reserve_local(capacity.members);
-        self.canonical_namespaces.reserve_local(capacity.namespaces);
-        self.names.reserve_local(capacity.names);
-        self.merges.reserve_local(capacity.merges);
-        self.globals.reserve_local(capacity.globals);
-        self.source_units.reserve_local(capacity.source_units);
-        self.canonical_source_units
-            .reserve_local(capacity.source_units);
-        self.canonical_globals.reserve_local(capacity.globals);
-    }
-
     #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn perturb_product_identity_rows_for_test(
         &mut self,

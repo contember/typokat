@@ -31,7 +31,6 @@ use oxc_ast::ast::{
 };
 use rustc_hash::FxHashMap;
 use std::fmt;
-use typokat_library_product as library_product;
 
 #[cfg(any(test, feature = "test-utils"))]
 thread_local! {
@@ -1159,137 +1158,6 @@ pub(crate) struct BindState {
     frozen_prefix_writes: Vec<FrozenPrefixWrite>,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct NamespaceLocalCapacity {
-    pub(crate) namespaces: usize,
-    pub(crate) fragments: usize,
-    pub(crate) members: usize,
-    pub(crate) names: usize,
-    pub(crate) merges: usize,
-    pub(crate) globals: usize,
-    pub(crate) source_units: usize,
-}
-
-struct LibraryProductLocalCapacity {
-    scopes: usize,
-    symbols: usize,
-    declarations: usize,
-    type_groups: usize,
-    namespaces: NamespaceLocalCapacity,
-}
-
-impl LibraryProductLocalCapacity {
-    fn from_product(
-        product: &library_product::LibraryDeclarationProduct,
-        perturb_local_ids: usize,
-        fully_perturb_local_ids: bool,
-    ) -> Self {
-        let perturb_rows = if fully_perturb_local_ids {
-            perturb_local_ids
-        } else {
-            0
-        };
-        let namespace_containers = product.containers().iter().fold(0, |count, container| {
-            count + usize::from(container.kind == library_product::ContainerKind::Namespace)
-        });
-        let (namespace_regions, global_regions) =
-            product
-                .regions()
-                .iter()
-                .fold((0, 0), |(namespaces, globals), region| match region.kind {
-                    library_product::RegionKind::Namespace => (namespaces + 1, globals),
-                    library_product::RegionKind::GlobalAugmentation => (namespaces, globals + 1),
-                    library_product::RegionKind::Source
-                    | library_product::RegionKind::AmbientExternalModule => (namespaces, globals),
-                });
-        let (global_payloads, member_rows) =
-            product
-                .declarations()
-                .iter()
-                .fold((0, 0), |(globals, members), declaration| {
-                    let global_payload = matches!(
-                        declaration.payload,
-                        library_product::DeclarationPayload::Global { .. }
-                    );
-                    let skipped = matches!(
-                        declaration.payload,
-                        library_product::DeclarationPayload::Parameter { .. }
-                            | library_product::DeclarationPayload::CatchParameter { .. }
-                    );
-                    let member = !skipped
-                        && match product.regions()[declaration.region.index()].kind {
-                            library_product::RegionKind::Namespace => !matches!(
-                                declaration.payload,
-                                library_product::DeclarationPayload::Namespace { .. }
-                            ),
-                            library_product::RegionKind::GlobalAugmentation => !global_payload,
-                            library_product::RegionKind::Source
-                            | library_product::RegionKind::AmbientExternalModule => false,
-                        };
-                    (
-                        globals + usize::from(global_payload),
-                        members + usize::from(member),
-                    )
-                });
-        let (mut type_groups, mut merge_rows) = (0, 0);
-        for group in product.groups() {
-            let (mut has_type_fragment, mut has_merge_row) = (false, false);
-            for declaration in &group.fragments {
-                let declaration = &product.declarations()[declaration.index()];
-                has_type_fragment |= matches!(
-                    declaration.payload,
-                    library_product::DeclarationPayload::TypeAlias { .. }
-                        | library_product::DeclarationPayload::Interface { .. }
-                        | library_product::DeclarationPayload::Class { .. }
-                        | library_product::DeclarationPayload::Enum { .. }
-                );
-                let parameter = matches!(
-                    declaration.payload,
-                    library_product::DeclarationPayload::Parameter { .. }
-                        | library_product::DeclarationPayload::CatchParameter { .. }
-                );
-                has_merge_row |= !parameter;
-            }
-            type_groups += usize::from(group.slots.r#type && has_type_fragment);
-            merge_rows += usize::from(has_merge_row);
-        }
-
-        Self {
-            scopes: product_capacity_sum([
-                5,
-                perturb_rows,
-                product.sources().len(),
-                namespace_containers,
-                namespace_regions,
-                global_regions,
-                product.callable_scopes().len(),
-            ]),
-            symbols: product_capacity_sum([perturb_local_ids, product.groups().len(), member_rows]),
-            declarations: product_capacity_sum([perturb_rows, product.declarations().len()]),
-            type_groups: product_capacity_sum([perturb_rows, type_groups]),
-            namespaces: NamespaceLocalCapacity {
-                namespaces: product_capacity_sum([perturb_rows, namespace_containers]),
-                fragments: product_capacity_sum([
-                    perturb_rows,
-                    product.namespace_attachment_rows().len(),
-                ]),
-                members: member_rows,
-                names: product.groups().len(),
-                merges: merge_rows,
-                globals: global_payloads,
-                source_units: product.sources().len(),
-            },
-        }
-    }
-}
-
-fn product_capacity_sum(parts: impl IntoIterator<Item = usize>) -> usize {
-    parts
-        .into_iter()
-        .try_fold(0usize, usize::checked_add)
-        .expect("product local capacity fits usize")
-}
-
 /// One binder write refused by the frozen library prefix (ADR-0011 forbids mutating a base row).
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct FrozenPrefixWrite {
@@ -1747,16 +1615,6 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             continuation_publication: None,
             frozen_prefix_writes: Vec::new(),
         };
-        let capacity = LibraryProductLocalCapacity::from_product(
-            product,
-            perturb_local_ids,
-            fully_perturb_local_ids,
-        );
-        state.graph.reserve_local(capacity.scopes);
-        state.symbols.reserve_local(capacity.symbols);
-        state.declarations.reserve_local(capacity.declarations);
-        state.type_groups.reserve_local(capacity.type_groups);
-        state.namespaces.reserve_local(capacity.namespaces);
         #[cfg(any(test, feature = "test-utils"))]
         let perturbation_scopes = (0..if fully_perturb_local_ids {
             perturb_local_ids

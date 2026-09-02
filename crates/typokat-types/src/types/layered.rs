@@ -38,7 +38,6 @@ thread_local! {
 #[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 thread_local! {
     static LOCAL_ROW_ALLOCATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-    static LOCAL_VECTOR_GROWTHS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
@@ -57,25 +56,6 @@ impl LocalRowAllocationScopeForTest {
 
     pub fn finish(self) -> u64 {
         LOCAL_ROW_ALLOCATIONS.get().saturating_sub(self.0)
-    }
-}
-
-#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
-fn record_local_vector_growth_for_test() {
-    LOCAL_VECTOR_GROWTHS.set(LOCAL_VECTOR_GROWTHS.get().saturating_add(1));
-}
-
-#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
-pub struct LocalVectorGrowthScopeForTest(u64);
-
-#[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
-impl LocalVectorGrowthScopeForTest {
-    pub fn start() -> Self {
-        Self(LOCAL_VECTOR_GROWTHS.get())
-    }
-
-    pub fn finish(self) -> u64 {
-        LOCAL_VECTOR_GROWTHS.get().saturating_sub(self.0)
     }
 }
 
@@ -390,10 +370,6 @@ impl<T> LayeredVec<T> {
         self.local.len()
     }
 
-    pub fn reserve_local(&mut self, additional: usize) {
-        self.local.reserve(additional);
-    }
-
     #[cfg(any(test, feature = "test-utils"))]
     pub fn replacement_len(&self) -> usize {
         self.overrides.len()
@@ -467,10 +443,6 @@ impl<T> LayeredVec<T> {
 
     pub fn push_local(&mut self, value: T) -> usize {
         let index = self.len();
-        #[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
-        if self.local.len() == self.local.capacity() {
-            record_local_vector_growth_for_test();
-        }
         self.local.push(value);
         #[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
         record_local_row_allocation_for_test();

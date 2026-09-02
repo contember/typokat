@@ -87,17 +87,14 @@ fn measure(
 ) -> (
     NamespaceRegionLookupWorkForTest,
     ProductInstantiationLookupWorkForTest,
-    u64,
 ) {
     let product = declaration_product(namespace_regions);
     let scope = NamespaceRegionLookupWorkScopeForTest::start();
     let instantiation_scope = ProductInstantiationLookupWorkScopeForTest::start();
-    let growth_scope = crate::types::layered::LocalVectorGrowthScopeForTest::start();
     let (builder, units) = ProjectBinderBuilder::from_library_declaration_product(&product)
         .expect("synthetic declaration product instantiates");
     let work = scope.finish();
     let instantiation_work = instantiation_scope.finish();
-    let vector_growths = growth_scope.finish();
     assert_eq!(units.len(), 1);
 
     let (binder, _) = builder
@@ -121,7 +118,7 @@ fn measure(
         assert!(scope.lookup_local(&format!("Type{index}")).is_some());
         assert!(scope.lookup_local(&format!("value{index}")).is_some());
     }
-    (work, instantiation_work, vector_growths)
+    (work, instantiation_work)
 }
 
 #[test]
@@ -129,8 +126,8 @@ fn namespace_region_lookup_work_scales_with_product_rows() {
     let small_product_rows = u64::try_from(DECLARATIONS_PER_REGION * SMALL).unwrap_or(u64::MAX);
     let scaled_product_rows = u64::try_from(DECLARATIONS_PER_REGION * SCALED).unwrap_or(u64::MAX);
     let step = scaled_product_rows / small_product_rows;
-    let (small_work, small_instantiation_work, small_vector_growths) = measure(SMALL);
-    let (scaled_work, scaled_instantiation_work, scaled_vector_growths) = measure(SCALED);
+    let (small_work, small_instantiation_work) = measure(SMALL);
+    let (scaled_work, scaled_instantiation_work) = measure(SCALED);
     assert_eq!(
         (small_work.index_probes, scaled_work.index_probes),
         (small_product_rows, scaled_product_rows),
@@ -170,10 +167,5 @@ fn namespace_region_lookup_work_scales_with_product_rows() {
         ),
         (0, 0, 0, 0),
         "product instantiation must retain dense keys instead of copying names or probing trees"
-    );
-    assert_eq!(
-        (small_vector_growths, scaled_vector_growths),
-        (0, 0),
-        "product instantiation must reserve its local binder vectors before reconstruction"
     );
 }

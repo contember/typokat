@@ -1227,10 +1227,6 @@ pub struct DeclarationTable {
 }
 
 impl DeclarationTable {
-    pub(crate) fn reserve_local(&mut self, additional: usize) {
-        self.declarations.reserve_local(additional);
-    }
-
     pub(crate) fn push(&mut self, kind: DeclarationKind, site: DeclarationSite) -> DeclId {
         let id = DeclId(
             u32::try_from(self.declarations.len()).expect("declaration table length fits u32"),
@@ -1398,10 +1394,6 @@ pub(crate) struct AppendedFragment {
 }
 
 impl TypeGroupTable {
-    pub(crate) fn reserve_local(&mut self, additional: usize) {
-        self.groups.reserve_local(additional);
-    }
-
     fn push_with_fragment(&mut self, name: &str, fragment: TypeGroupFragment) -> TypeGroupId {
         let id = TypeGroupId(
             u32::try_from(self.groups.len()).expect("type group table length fits u32"),
