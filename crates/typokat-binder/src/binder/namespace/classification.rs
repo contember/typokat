@@ -88,9 +88,8 @@ impl NamespaceTable {
                     record_non_merging_participant_rows(participants.len());
                     record_non_merging_merge_record();
                 }
-                // Already in the canonical order the instance-state pass left them in, so the
-                // record shares the vector instead of sorting a copy of it.
-                let declarations = Arc::clone(participants);
+                // Already in canonical order, so the record can reuse the placement storage.
+                let declarations = participants.clone();
                 let classification = classify_group(&declarations);
                 let placement_issues = placement_issues(&declarations);
                 (
@@ -551,9 +550,6 @@ impl NamespaceTable {
         for participants in self.placements.changed_values_mut() {
             #[cfg(any(test, feature = "test-utils"))]
             record_placement_order_group();
-            // Binding still owns every group here — the merge records that share these vectors
-            // are rebuilt after this pass — so `make_mut` never copies.
-            let participants = Arc::make_mut(participants);
             for participant in participants.iter_mut() {
                 participant.namespace_instance = participant
                     .namespace_fragment
@@ -564,7 +560,15 @@ impl NamespaceTable {
             // record can share this vector rather than sort a copy of it. Declaration ids are
             // unique, so the order is total and sorting is idempotent.
             #[cfg(any(test, feature = "test-utils"))]
-            let before = participants.clone();
+            let reordered = participants.windows(2).any(|pair| {
+                if library_order {
+                    (pair[0].origin, pair[0].span.start, pair[0].declaration.0)
+                        > (pair[1].origin, pair[1].span.start, pair[1].declaration.0)
+                } else {
+                    (pair[0].source, pair[0].span.start, pair[0].declaration.0)
+                        > (pair[1].source, pair[1].span.start, pair[1].declaration.0)
+                }
+            });
             if library_order {
                 participants.sort_by_key(|participant| {
                     (
@@ -583,7 +587,7 @@ impl NamespaceTable {
                 });
             }
             #[cfg(any(test, feature = "test-utils"))]
-            if before != *participants {
+            if reordered {
                 record_placement_row_reorder();
             }
         }

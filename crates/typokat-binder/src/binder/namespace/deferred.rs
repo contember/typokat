@@ -12,7 +12,6 @@ use oxc_ast::ast::{
     TSModuleDeclarationBody, TSModuleDeclarationName,
 };
 use oxc_span::GetSpan;
-use std::sync::Arc;
 
 pub(super) fn bind_deferred_module(
     state: &mut BindState,
@@ -519,13 +518,10 @@ pub(super) fn push_placement<'state>(
     let Ok(entries) = state
         .namespaces
         .placements
-        .get_or_insert_local_with(key, Arc::default)
+        .get_or_insert_local_with(key, PlacementRows::default)
     else {
         return None;
     };
-    // Binding owns the vector outright, so `make_mut` never copies here; classification only
-    // starts sharing it once the last placement has landed.
-    let entries = Arc::make_mut(entries);
     // A merge group holds one row per declaration sharing the name, never the project — and the
     // overwhelming majority hold one or two, which is cheaper to compare than to index. Only a
     // group that outgrows the scan takes a by-declaration index, and once it has one a miss in
@@ -537,14 +533,7 @@ pub(super) fn push_placement<'state>(
             entry.declaration == declaration
         }) {
             Some(index) => index,
-            None => {
-                #[cfg(any(test, feature = "test-utils"))]
-                if entries.is_empty() {
-                    record_first_participant_heap_allocation();
-                }
-                entries.push(participant);
-                entries.len() - 1
-            }
+            None => entries.push(participant),
         }
     } else {
         // Fold in every row the index does not cover yet — once per row over the whole build,
@@ -572,8 +561,7 @@ pub(super) fn push_placement<'state>(
         {
             Some(index) => index,
             None => {
-                let index = entries.len();
-                entries.push(participant);
+                let index = entries.push(participant);
                 state
                     .namespaces
                     .placement_rows

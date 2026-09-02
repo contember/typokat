@@ -408,11 +408,6 @@ pub(super) fn record_non_merging_participant_rows(rows: usize) {
 }
 
 #[cfg(any(test, feature = "test-utils"))]
-pub(super) fn record_first_participant_heap_allocation() {
-    FIRST_PARTICIPANT_HEAP_ALLOCATIONS.set(FIRST_PARTICIPANT_HEAP_ALLOCATIONS.get() + 1);
-}
-
-#[cfg(any(test, feature = "test-utils"))]
 pub(super) fn record_non_merging_merge_record() {
     NON_MERGING_MERGE_RECORDS.set(NON_MERGING_MERGE_RECORDS.get() + 1);
 }
@@ -1194,14 +1189,100 @@ pub struct MergeParticipant {
     pub binding_span: Span,
 }
 
+#[derive(PartialEq, Eq, Debug)]
+enum PlacementRowStorage {
+    Empty,
+    One(MergeParticipant),
+    Many(Arc<Vec<MergeParticipant>>),
+}
+
+/// Slice-like participant rows with the singleton case stored inline.
+#[doc(hidden)]
+#[derive(PartialEq, Eq, Debug)]
+pub struct PlacementRows(PlacementRowStorage);
+
+impl Clone for PlacementRows {
+    fn clone(&self) -> Self {
+        Self(match &self.0 {
+            PlacementRowStorage::Empty => PlacementRowStorage::Empty,
+            PlacementRowStorage::One(participant) => PlacementRowStorage::One(*participant),
+            PlacementRowStorage::Many(participants) => {
+                PlacementRowStorage::Many(Arc::clone(participants))
+            }
+        })
+    }
+}
+
+impl Default for PlacementRows {
+    fn default() -> Self {
+        Self(PlacementRowStorage::Empty)
+    }
+}
+
+impl std::ops::Deref for PlacementRows {
+    type Target = [MergeParticipant];
+
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
+}
+
+impl PlacementRows {
+    pub fn as_slice(&self) -> &[MergeParticipant] {
+        match &self.0 {
+            PlacementRowStorage::Empty => &[],
+            PlacementRowStorage::One(participant) => std::slice::from_ref(participant),
+            PlacementRowStorage::Many(participants) => participants.as_slice(),
+        }
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [MergeParticipant] {
+        match &mut self.0 {
+            PlacementRowStorage::Empty => &mut [],
+            PlacementRowStorage::One(participant) => std::slice::from_mut(participant),
+            PlacementRowStorage::Many(participants) => Arc::make_mut(participants).as_mut_slice(),
+        }
+    }
+
+    pub(super) fn push(&mut self, participant: MergeParticipant) -> usize {
+        match &mut self.0 {
+            PlacementRowStorage::Empty => {
+                self.0 = PlacementRowStorage::One(participant);
+                0
+            }
+            PlacementRowStorage::One(first) => {
+                let first = *first;
+                self.0 = PlacementRowStorage::Many(Arc::new(vec![first, participant]));
+                1
+            }
+            PlacementRowStorage::Many(participants) => {
+                let participants = Arc::make_mut(participants);
+                participants.push(participant);
+                participants.len() - 1
+            }
+        }
+    }
+
+    pub(super) fn get_mut(&mut self, index: usize) -> Option<&mut MergeParticipant> {
+        self.as_mut_slice().get_mut(index)
+    }
+
+    pub(super) fn iter_mut(&mut self) -> std::slice::IterMut<'_, MergeParticipant> {
+        self.as_mut_slice().iter_mut()
+    }
+
+    pub(super) fn sort_by_key<K: Ord>(&mut self, mut key: impl FnMut(&MergeParticipant) -> K) {
+        self.as_mut_slice().sort_by_key(&mut key);
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MergeRecord {
     pub owner: DeclarationOwner,
     /// Shares the interned allocation behind the group's [`NameId`]; derefs as `&str`.
     pub name: Arc<str>,
-    /// Shares the placement map's participant vector — classification reads the rows the
-    /// placement lane already owns instead of copying them.
-    pub declarations: Arc<Vec<MergeParticipant>>,
+    /// Shares multi-row placement storage while keeping a singleton declaration inline.
+    pub declarations: PlacementRows,
     pub classification: MergeClassification,
     pub placement_issues: Vec<PlacementIssue>,
 }
