@@ -10,7 +10,6 @@ use crate::binder::symbol::Symbol;
 use crate::source::{CompilationOrigin, LibraryFileOrdinal};
 use crate::span::Span;
 use rustc_hash::FxHashMap;
-use std::collections::BTreeMap;
 use typokat_library_product as product;
 
 #[cfg(test)]
@@ -42,17 +41,6 @@ fn product_instantiation_lookup_work_for_test() -> ProductInstantiationLookupWor
         group_identity_name_copies: PRODUCT_GROUP_IDENTITY_NAME_COPIES.get(),
         dense_key_tree_probes: PRODUCT_DENSE_KEY_TREE_PROBES.get(),
     }
-}
-
-#[cfg(test)]
-fn record_product_group_identity_name_copy() {
-    PRODUCT_GROUP_IDENTITY_NAME_COPIES
-        .set(PRODUCT_GROUP_IDENTITY_NAME_COPIES.get().saturating_add(1));
-}
-
-#[cfg(test)]
-fn record_product_dense_key_tree_probe() {
-    PRODUCT_DENSE_KEY_TREE_PROBES.set(PRODUCT_DENSE_KEY_TREE_PROBES.get().saturating_add(1));
 }
 
 #[cfg(test)]
@@ -174,7 +162,7 @@ pub struct LibraryProductBinderMap {
 
 struct LibraryProductGroupLocation {
     scope: ScopeId,
-    name: Box<str>,
+    name: NameId,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -261,7 +249,9 @@ impl LibraryProductBinderMap {
             let final_symbol = binder
                 .graph
                 .get(location.scope)
-                .and_then(|scope| scope.lookup_local(&location.name))
+                .and_then(|scope| {
+                    scope.lookup_local(binder.namespaces.name_text(location.name).as_ref())
+                })
                 .ok_or(LibraryProductBinderMapError::MissingGroup(index))?;
             let symbol = binder
                 .symbols
@@ -617,9 +607,13 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
 
     let mut group_symbols = Vec::with_capacity(declaration_product.groups().len());
     let mut group_locations = Vec::with_capacity(declaration_product.groups().len());
-    let mut symbol_by_container_name = BTreeMap::new();
+    let mut symbol_by_container_name: FxHashMap<
+        (ScopeId, product::StringKey),
+        crate::binder::symbol::SymbolId,
+    > = FxHashMap::with_capacity_and_hasher(declaration_product.groups().len(), Default::default());
     for (group_index, group) in declaration_product.groups().iter().enumerate() {
         let name = string(group.name)?;
+        let name_id = state.namespaces.intern_name(name);
         let container_scope = container_scopes
             .get(group.container.index())
             .copied()
@@ -680,40 +674,20 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
             }
         }
         let scope = local_scope.unwrap_or(container_scope);
-        let mut symbol = Symbol::new(name);
-        symbol.ty = group_type_ids[group_index];
-        symbol.owns_type_group = symbol.ty.is_some();
-        symbol.value = group
+        let symbol_ty = group_type_ids[group_index];
+        let symbol_value = group
             .fragments
             .iter()
             .rev()
             .find_map(|key| declaration_values.get(key.index()).copied().flatten());
-        symbol.function_values = group
-            .fragments
-            .iter()
-            .filter(|key| {
-                declaration_product.declarations()[key.index()].kind()
-                    == product::DeclarationKind::Function
-            })
-            .filter_map(|key| declaration_values.get(key.index()).copied().flatten())
-            .collect();
-        symbol.declarations = group
-            .fragments
-            .iter()
-            .filter_map(|key| declaration_ids.get(key.index()).copied())
-            .collect();
-        #[cfg(test)]
-        record_product_group_identity_name_copy();
-        let key = (scope.0, name.to_owned());
-        #[cfg(test)]
-        record_product_dense_key_tree_probe();
+        let key = (scope, group.name);
         let symbol_id = if let Some(existing) = symbol_by_container_name.get(&key).copied() {
             let row = state
                 .symbols
                 .get_mut(existing)
                 .ok_or(LibraryProductInstantiationError::MissingGroup(group_index))?;
-            if row.ty.is_some() && symbol.ty.is_some()
-                || row.value.is_some() && symbol.value.is_some()
+            if row.ty.is_some() && symbol_ty.is_some()
+                || row.value.is_some() && symbol_value.is_some()
             {
                 return Err(
                     LibraryProductInstantiationError::DuplicateScopeDeclaration {
@@ -722,13 +696,45 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
                     },
                 );
             }
-            row.ty = row.ty.or(symbol.ty);
-            row.owns_type_group |= symbol.owns_type_group;
-            row.value = row.value.or(symbol.value);
-            row.function_values.extend(symbol.function_values);
-            row.declarations.extend(symbol.declarations);
+            row.ty = row.ty.or(symbol_ty);
+            row.owns_type_group |= symbol_ty.is_some();
+            row.value = row.value.or(symbol_value);
+            row.function_values.extend(
+                group
+                    .fragments
+                    .iter()
+                    .filter(|key| {
+                        declaration_product.declarations()[key.index()].kind()
+                            == product::DeclarationKind::Function
+                    })
+                    .filter_map(|key| declaration_values.get(key.index()).copied().flatten()),
+            );
+            row.declarations.extend(
+                group
+                    .fragments
+                    .iter()
+                    .filter_map(|key| declaration_ids.get(key.index()).copied()),
+            );
             existing
         } else {
+            let mut symbol = Symbol::new(name);
+            symbol.ty = symbol_ty;
+            symbol.owns_type_group = symbol.ty.is_some();
+            symbol.value = symbol_value;
+            symbol.function_values = group
+                .fragments
+                .iter()
+                .filter(|key| {
+                    declaration_product.declarations()[key.index()].kind()
+                        == product::DeclarationKind::Function
+                })
+                .filter_map(|key| declaration_values.get(key.index()).copied().flatten())
+                .collect();
+            symbol.declarations = group
+                .fragments
+                .iter()
+                .filter_map(|key| declaration_ids.get(key.index()).copied())
+                .collect();
             let symbol_id = state.symbols.push(symbol);
             if state
                 .graph
@@ -748,8 +754,6 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
                     },
                 );
             }
-            #[cfg(test)]
-            record_product_dense_key_tree_probe();
             symbol_by_container_name.insert(key, symbol_id);
             symbol_id
         };
@@ -788,20 +792,12 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
             product::DeclarationLexicalScope::None
             | product::DeclarationLexicalScope::Region(_) => container_scope,
         };
-        #[cfg(test)]
-        record_product_group_identity_name_copy();
         group_locations.push(LibraryProductGroupLocation {
             scope: final_scope,
-            name: name.into(),
+            name: name_id,
         });
     }
 
-    let mut namespace_group_by_declaration = BTreeMap::new();
-    for row in declaration_product.namespace_attachment_rows() {
-        #[cfg(test)]
-        record_product_dense_key_tree_probe();
-        namespace_group_by_declaration.insert(row.declaration.index(), row.group.index());
-    }
     let mut namespace_instance_states =
         vec![NamespaceInstanceState::NonInstantiated; declaration_product.regions().len()];
     for declaration in declaration_product.declarations() {
@@ -812,17 +808,22 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
                 NamespaceInstanceState::Instantiated;
         }
     }
+    let mut namespace_group_by_declaration = vec![None; declaration_product.declarations().len()];
+    for row in declaration_product.namespace_attachment_rows() {
+        namespace_group_by_declaration[row.declaration.index()] = Some(row.group.index());
+    }
     let mut namespace_ids_by_container = vec![None; declaration_product.containers().len()];
-    let mut namespace_fragments_by_declaration = BTreeMap::new();
+    let mut namespace_fragments_by_declaration =
+        vec![None; declaration_product.declarations().len()];
     let mut namespace_fragments_by_region = vec![None; declaration_product.regions().len()];
     for (declaration_index, declaration) in declaration_product.declarations().iter().enumerate() {
         let product::DeclarationPayload::Namespace { child_region } = declaration.payload else {
             continue;
         };
-        #[cfg(test)]
-        record_product_dense_key_tree_probe();
-        let group_index = *namespace_group_by_declaration
-            .get(&declaration_index)
+        let group_index = namespace_group_by_declaration
+            .get(declaration_index)
+            .copied()
+            .flatten()
             .ok_or(LibraryProductInstantiationError::MissingNamespaceGroup(
                 declaration_index,
             ))?;
@@ -940,15 +941,13 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
                 declaration_index,
             ))?
             .namespace = Some(namespace);
-        #[cfg(test)]
-        record_product_dense_key_tree_probe();
-        namespace_fragments_by_declaration.insert(declaration_index, fragment_id);
+        namespace_fragments_by_declaration[declaration_index] = Some(fragment_id);
         if namespace_fragments_by_region[child_region.index()].is_none() {
             namespace_fragments_by_region[child_region.index()] = Some(fragment_id);
         }
     }
 
-    let mut global_by_region = BTreeMap::new();
+    let mut global_by_region = vec![None; declaration_product.regions().len()];
     for (declaration_index, declaration) in declaration_product.declarations().iter().enumerate() {
         let product::DeclarationPayload::Global { child_region } = declaration.payload else {
             continue;
@@ -1001,9 +1000,7 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
             declared: declaration.flags.ambient,
             members: Vec::new(),
         });
-        #[cfg(test)]
-        record_product_dense_key_tree_probe();
-        global_by_region.insert(child_region.index(), id);
+        global_by_region[child_region.index()] = Some(id);
     }
 
     for (group_index, group) in declaration_product.groups().iter().enumerate() {
@@ -1039,11 +1036,11 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
                     ),
                 },
             };
-            #[cfg(test)]
-            record_product_dense_key_tree_probe();
             let namespace_instance = namespace_fragments_by_declaration
-                .get(&declaration_index)
-                .and_then(|fragment| state.namespaces.fragment(*fragment))
+                .get(declaration_index)
+                .copied()
+                .flatten()
+                .and_then(|fragment| state.namespaces.fragment(fragment))
                 .map(|row| row.instance_state);
             let participant = push_placement(
                 state,
@@ -1057,24 +1054,17 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
                 syntax(declaration),
             )
             .ok_or(LibraryProductInstantiationError::MissingGroup(group_index))?;
-            #[cfg(test)]
-            record_product_dense_key_tree_probe();
-            if let Some(fragment) = namespace_fragments_by_declaration.get(&declaration_index) {
-                participant.namespace_fragment = Some(*fragment);
+            if let Some(fragment) = namespace_fragments_by_declaration[declaration_index] {
+                participant.namespace_fragment = Some(fragment);
                 participant.namespace_instance = namespace_instance;
             }
         }
     }
 
-    let regions_by_declaration = declaration_product
-        .declarations()
-        .iter()
-        .enumerate()
-        .map(|(index, declaration)| (index, declaration.region.index()))
-        .collect::<Vec<_>>();
-    for (declaration_index, region_index) in regions_by_declaration {
+    for (declaration_index, declaration) in declaration_product.declarations().iter().enumerate() {
         #[cfg(test)]
         record_namespace_region_index_probe();
+        let region_index = declaration.region.index();
         let Some(fragment) = namespace_fragments_by_region
             .get(region_index)
             .copied()
@@ -1082,12 +1072,9 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
         else {
             continue;
         };
-        #[cfg(test)]
-        record_product_dense_key_tree_probe();
-        if namespace_fragments_by_declaration.contains_key(&declaration_index) {
+        if namespace_fragments_by_declaration[declaration_index].is_some() {
             continue;
         }
-        let declaration = &declaration_product.declarations()[declaration_index];
         if matches!(
             declaration.kind(),
             product::DeclarationKind::Parameter | product::DeclarationKind::CatchParameter
@@ -1159,9 +1146,11 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
         ) {
             continue;
         }
-        #[cfg(test)]
-        record_product_dense_key_tree_probe();
-        let Some(global) = global_by_region.get(&declaration.region.index()).copied() else {
+        let Some(global) = global_by_region
+            .get(declaration.region.index())
+            .copied()
+            .flatten()
+        else {
             continue;
         };
         if matches!(
@@ -1267,7 +1256,7 @@ pub(in crate::binder) fn instantiate_library_declaration_product(
                 .map(|(index, declaration)| LibraryProductDeclarationBinding {
                     declaration,
                     value: declaration_values[index],
-                    namespace_fragment: namespace_fragments_by_declaration.get(&index).copied(),
+                    namespace_fragment: namespace_fragments_by_declaration[index],
                 })
                 .collect(),
             groups: group_symbols
