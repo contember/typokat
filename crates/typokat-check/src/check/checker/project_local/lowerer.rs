@@ -16,10 +16,12 @@ use super::project_local_pass_port::{
 use super::project_local_pass_port::{
     render_type, DemandOutcome, PublishedClasses, SemanticQueryCoordinator, SemanticQueryState,
 };
+#[cfg(test)]
+use super::recipe_primitives::product_dependency_scc_indices;
 use super::recipe_primitives::{
     build_contextual_type_parameter_index, group_has_runtime_value, has_unsupported_computed_name,
     is_type_parameter_reference, mapped_modifier, member_visibility, merge_object_surface,
-    product_dependency_scc_indices, property_key,
+    property_key,
 };
 use super::record_staging::{
     LibraryRecordAccumulator, LibraryRecordEventIdentity, LibraryRecordOwnerIdentity,
@@ -159,7 +161,7 @@ pub(super) struct ProductLoweringMetadataPlan {
 }
 
 impl ProductLoweringMetadataPlan {
-    pub(super) fn new(product: &LibraryDeclarationProduct) -> Self {
+    pub(super) fn new(product: &LibraryDeclarationProduct, dependency_sccs: &[Vec<usize>]) -> Self {
         #[cfg(test)]
         record_product_lowering_metadata_plan_construction_for_test();
         let intrinsic_declarations = product
@@ -220,8 +222,8 @@ impl ProductLoweringMetadataPlan {
             }
         }
         let mut group_scc_members = vec![Vec::new(); product.group_count()];
-        for members in product_dependency_scc_indices(product) {
-            for member in &members {
+        for members in dependency_sccs {
+            for member in members {
                 group_scc_members[*member] = members.clone();
             }
         }
@@ -3594,7 +3596,8 @@ pub fn lower_product_groups_for_test(
     seed: Option<()>,
 ) -> ProductLoweringForTest {
     debug_assert!(seed.is_none());
-    let metadata_plan = ProductLoweringMetadataPlan::new(product);
+    let dependency_sccs = product_dependency_scc_indices(product);
+    let metadata_plan = ProductLoweringMetadataPlan::new(product, &dependency_sccs);
     let receipt = lower_product_groups(
         product,
         &metadata_plan,

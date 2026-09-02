@@ -751,7 +751,8 @@ impl ProjectLocalSemanticCoordinator {
             return closure.into_iter().collect();
         }
         if self.product_lowering_metadata_plan.is_none() {
-            self.product_lowering_metadata_plan = Some(ProductLoweringMetadataPlan::new(product));
+            self.product_lowering_metadata_plan =
+                Some(ProductLoweringMetadataPlan::new(product, &self.sccs));
         }
         let lowering = loop {
             for product_group in &closure {
