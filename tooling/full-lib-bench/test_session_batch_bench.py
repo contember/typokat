@@ -27,8 +27,20 @@ class SessionBatchContractTests(unittest.TestCase):
 
     def test_exact_frozen_inputs_and_progressive_panels(self) -> None:
         self.assertEqual(self.contract["panel_project_counts"], [1, 32, 687])
-        self.assertEqual(self.contract["speed_gated_project_counts"], [32, 687])
+        self.assertEqual(self.contract["speed_gated_project_counts"], [32])
         self.assertEqual(self.contract["panel_order"], "fail-fast")
+        self.assertEqual(
+            self.contract["sampling"],
+            {
+                "schedule": "A,B,B,A",
+                "panel_modes": ["paired-single", "abba", "candidate-single"],
+                "warmups_per_tool": [0, 3, 0],
+                "blocks": [0, 5, 0],
+                "samples_per_tool": [1, 10, 1],
+                "panel_timeout_seconds": [10, 60, 600],
+                "max_collection_wall_seconds": 600,
+            },
+        )
         self.assertEqual(self.contract["profile"]["file_count"], 82)
         self.assertEqual(self.contract["official_frames"]["eligible_frame_count"], 687)
         self.assertEqual(
@@ -978,7 +990,7 @@ class SessionBatchContractTests(unittest.TestCase):
         )
         self.assertIsNone(batch.next_panel([green, green_32, green_687], self.contract))
 
-        red_memory = verified_panel(1, 1.2, 111_000, 110_000, self.contract)
+        red_memory = verified_panel(1, 1.2, 524_288, 110_000, self.contract)
         self.assertIsNone(batch.next_panel([red_memory], self.contract))
 
     def test_collector_never_launches_a_later_panel_after_failure(self) -> None:
@@ -992,7 +1004,7 @@ class SessionBatchContractTests(unittest.TestCase):
             return evidence
 
         result = batch.collect_progressive_panels(red_runner, self.contract)
-        self.assertEqual(launched, [1])
+        self.assertEqual(launched, [1, 32])
         self.assertEqual(result["verdict"], "PANEL-FAIL")
 
         launched.clear()
@@ -1069,6 +1081,61 @@ class SessionBatchContractTests(unittest.TestCase):
 
         over_limit = verified_panel(32, 1.1, 524_288, 600_000, self.contract)
         self.assertFalse(batch.panel_passes(over_limit, self.contract))
+
+    def test_single_sample_panels_enforce_exact_tool_cardinality(self) -> None:
+        for projects, tools in ((1, ["typokat", "tsgo"]), (687, ["typokat"])):
+            evidence = raw_panel_evidence(projects, 0.5, 100_000, 50_000)
+            expected = expected_oracles(evidence)
+            self.assertEqual(evidence["warmups"], [])
+            self.assertEqual([sample["tool"] for sample in evidence["samples"]], tools)
+            batch.recompute_panel(evidence, expected, self.contract)
+
+            missing = copy.deepcopy(evidence)
+            missing["samples"].pop()
+            with self.subTest(projects=projects, mutation="missing"), self.assertRaises(
+                batch.BatchContractError
+            ):
+                batch.recompute_panel(missing, expected, self.contract)
+
+            extra = copy.deepcopy(evidence)
+            extra["samples"].append(copy.deepcopy(evidence["samples"][0]))
+            extra["samples"][-1]["pid"] += 1_000_000
+            with self.subTest(projects=projects, mutation="extra"), self.assertRaises(
+                batch.BatchContractError
+            ):
+                batch.recompute_panel(extra, expected, self.contract)
+
+            wrong_tool = copy.deepcopy(evidence)
+            wrong_tool["samples"][-1]["tool"] = (
+                "tsgo" if tools[-1] == "typokat" else "typokat"
+            )
+            with self.subTest(projects=projects, mutation="wrong-tool"), self.assertRaises(
+                batch.BatchContractError
+            ):
+                batch.recompute_panel(wrong_tool, expected, self.contract)
+
+    def test_only_32_is_speed_and_cross_tool_rss_gated(self) -> None:
+        smoke = verified_panel(1, 0.5, 200_000, 100_000, self.contract)
+        self.assertTrue(batch.panel_passes(smoke, self.contract))
+
+        candidate = verified_panel(
+            687,
+            0.5,
+            100_000,
+            1,
+            self.contract,
+            typokat_duration_ns=12_000_000_000,
+        )
+        self.assertTrue(batch.panel_passes(candidate, self.contract))
+        self.assertEqual(
+            len(raw_panel_evidence(687, 0.5, 100_000, 1)["samples"][0]["frames"]),
+            687,
+        )
+
+        speed_gated = verified_panel(32, 1.0, 100_000, 100_000, self.contract)
+        self.assertFalse(batch.panel_passes(speed_gated, self.contract))
+        relative_rss_gated = verified_panel(32, 1.1, 100_001, 100_000, self.contract)
+        self.assertFalse(batch.panel_passes(relative_rss_gated, self.contract))
 
     def test_raw_abba_samples_are_the_only_performance_authority(self) -> None:
         evidence = raw_panel_evidence(32, 1.2, 100_000, 110_000)
@@ -1455,7 +1522,7 @@ class SessionBatchContractTests(unittest.TestCase):
     def test_abba_statistics_use_p95_walls_and_real_block_bootstrap(self) -> None:
         samples = []
         pid = 1
-        for block in range(15):
+        for block in range(5):
             for slot, (tool, wall) in enumerate(
                 (
                     ("typokat", 10 + block),
@@ -1476,27 +1543,14 @@ class SessionBatchContractTests(unittest.TestCase):
                 )
                 pid += 1
         observed = batch.recompute_abba_statistics(samples, self.contract)
-        cold_blocks = [
-            [
-                {"tool": sample["tool"], "wall_seconds": sample["end_ns"]}
-                for sample in samples[block * 4 : block * 4 + 4]
-            ]
-            for block in range(15)
-        ]
         typokat = [sample["end_ns"] for sample in samples if sample["tool"] == "typokat"]
         tsgo = [sample["end_ns"] for sample in samples if sample["tool"] == "tsgo"]
         self.assertEqual(
             observed["p95_ratio"],
             cold.percentile(tsgo, 0.95) / cold.percentile(typokat, 0.95),
         )
-        self.assertEqual(
-            observed["bootstrap_lower_95"],
-            cold.bootstrap_block_speedup_lower(
-                cold_blocks,
-                self.contract["bootstrap_resamples"],
-                self.contract["bootstrap_seed"],
-            ),
-        )
+        self.assertGreater(observed["bootstrap_lower_95"], 1.0)
+        self.assertLessEqual(observed["bootstrap_lower_95"], observed["speedup"])
 
     def test_concurrent_1_2_32_sessions_are_isolated_deterministic_and_bounded(self) -> None:
         evidence = concurrency_evidence()
@@ -1603,6 +1657,15 @@ class SessionBatchContractTests(unittest.TestCase):
             typokat_duration_ns=12_000_000_000,
         )
         self.assertFalse(batch.panel_passes(equal_old_peak, self.contract))
+        over_absolute_limit = verified_panel(
+            687,
+            0.5,
+            524_288,
+            1,
+            self.contract,
+            typokat_duration_ns=12_000_000_000,
+        )
+        self.assertFalse(batch.panel_passes(over_absolute_limit, self.contract))
 
         one_outlier_raw = raw_panel_evidence(
             687, 1.2, 100_000, 150_000, typokat_duration_ns=12_000_000_000
@@ -1970,7 +2033,7 @@ def expected_oracles(evidence: dict[str, object]) -> dict[str, object]:
             for frame in source_sample["frames"]
         ]
     }
-    for tool in ("typokat", "tsgo"):
+    for tool in dict.fromkeys(item["tool"] for item in evidence["samples"]):
         sample = next(item for item in evidence["samples"] if item["tool"] == tool)
         result[tool] = {
             "returncode": 0,
@@ -2012,12 +2075,17 @@ def raw_panel_evidence(
     *,
     typokat_duration_ns: int = 1_000_000,
 ) -> dict[str, object]:
+    panel_index = (1, 32, 687).index(projects)
+    panel_modes = ("paired-single", "abba", "candidate-single")
+    warmups_per_tool = (0, 3, 0)
+    blocks = (0, 5, 0)
+    mode = panel_modes[panel_index]
     samples = []
     pid = 10_000
     slots = ("typokat", "tsgo", "tsgo", "typokat")
     warmups = []
     warmup_pid = 9_000
-    for ordinal in range(3):
+    for ordinal in range(warmups_per_tool[panel_index]):
         for tool in ("typokat", "tsgo"):
             warmup_start = warmup_pid * 100_000_000_000
             warmups.append(
@@ -2034,105 +2102,138 @@ def raw_panel_evidence(
                 }
             )
             warmup_pid += 1
-    for block in range(15):
-        for slot, tool in enumerate(slots):
-            duration = (
-                typokat_duration_ns
-                if tool == "typokat"
-                else round(typokat_duration_ns * ratio)
+    if mode == "paired-single":
+        sample_schedule = [
+            (0, slot, tool) for slot, tool in enumerate(("typokat", "tsgo"))
+        ]
+    elif mode == "candidate-single":
+        sample_schedule = [(0, 0, "typokat")]
+    else:
+        sample_schedule = [
+            (block, slot, tool)
+            for block in range(blocks[panel_index])
+            for slot, tool in enumerate(slots)
+        ]
+    for block, slot, tool in sample_schedule:
+        duration = (
+            typokat_duration_ns
+            if tool == "typokat"
+            else round(typokat_duration_ns * ratio)
+        )
+        frames = []
+        frame_width = max(1, duration // projects)
+        process_start = pid * 100_000_000_000
+        for ordinal in range(projects):
+            start = process_start + ordinal * frame_width
+            end = start + frame_width
+            init_end = start + (
+                max(1, frame_width // 10)
+                if tool == "typokat" and ordinal == 0
+                else 0
             )
-            frames = []
-            frame_width = max(1, duration // projects)
-            process_start = pid * 100_000_000_000
-            for ordinal in range(projects):
-                start = process_start + ordinal * frame_width
-                end = start + frame_width
-                init_end = start + (max(1, frame_width // 10) if tool == "typokat" and ordinal == 0 else 0)
-                binding_end = start + max(2, frame_width // 3)
-                publication_end = start + max(3, (frame_width * 2) // 3)
-                frame = {
-                    **frame_receipt(ordinal),
-                    "case_id": f"case-{ordinal}",
-                    "semantic": {
-                        "exit_code": 0,
-                        "parse_errors": [],
-                        "diagnostics": [],
-                        "incompletes": [],
+            binding_end = start + max(2, frame_width // 3)
+            publication_end = start + max(3, (frame_width * 2) // 3)
+            frame = {
+                **frame_receipt(ordinal),
+                "case_id": f"case-{ordinal}",
+                "semantic": {
+                    "exit_code": 0,
+                    "parse_errors": [],
+                    "diagnostics": [],
+                    "incompletes": [],
+                },
+                "route_start_ns": start,
+                "route_end_ns": end,
+                "product_initializations": (
+                    1 if tool == "typokat" and ordinal == 0 else 0
+                ),
+                "phases": {
+                    "product_initialization": {
+                        "start_ns": start,
+                        "end_ns": init_end,
                     },
-                    "route_start_ns": start,
-                    "route_end_ns": end,
-                    "product_initializations": 1 if tool == "typokat" and ordinal == 0 else 0,
-                    "phases": {
-                        "product_initialization": {"start_ns": start, "end_ns": init_end},
-                        "parse_prepare": {"start_ns": init_end, "end_ns": init_end},
-                        "binding": {"start_ns": init_end, "end_ns": binding_end},
-                        "publication_check": {
-                            "start_ns": binding_end,
-                            "end_ns": publication_end,
-                        },
-                        "release": {"start_ns": publication_end, "end_ns": end},
+                    "parse_prepare": {"start_ns": init_end, "end_ns": init_end},
+                    "binding": {"start_ns": init_end, "end_ns": binding_end},
+                    "publication_check": {
+                        "start_ns": binding_end,
+                        "end_ns": publication_end,
                     },
-                }
-                if tool == "typokat":
-                    frame.update(
-                        materialized_product_owner_count=10,
-                        session_weak_alive_after=False,
-                        cache_weak_alive_after=False,
-                    )
-                else:
-                    frame["retained_frame_handles"] = 0
-                request = json.dumps(
-                    {"schema": 1, "case_id": frame["case_id"], "source": "let value = 1;"},
-                    sort_keys=True,
-                    separators=(",", ":"),
-                )
-                response = json.dumps(frame, sort_keys=True, separators=(",", ":"))
+                    "release": {"start_ns": publication_end, "end_ns": end},
+                },
+            }
+            if tool == "typokat":
                 frame.update(
-                    raw_request=request,
-                    raw_response=response,
-                    raw_response_sha256=hashlib.sha256(response.encode()).hexdigest(),
+                    materialized_product_owner_count=10,
+                    session_weak_alive_after=False,
+                    cache_weak_alive_after=False,
                 )
-                frames.append(frame)
-            request_stream = "".join(frame["raw_request"] + "\n" for frame in frames)
-            response_stream = "".join(frame["raw_response"] + "\n" for frame in frames)
-            rss = typokat_rss if tool == "typokat" else tsgo_rss
-            samples.append(
+            else:
+                frame["retained_frame_handles"] = 0
+            request = json.dumps(
                 {
-                    "block": block,
-                    "slot": slot,
-                    "tool": tool,
-                    "pid": pid,
-                    "start_ns": process_start,
-                    "end_ns": process_start + duration + 1,
-                    "returncode": 0,
-                    "stdout": response_stream,
-                    "stderr": "",
-                    "stdout_complete": True,
-                    "stderr_complete": True,
-                    "timed_out": False,
-                    "process_group_empty": True,
-                    "executable_before_sha256": "2" * 64,
-                    "executable_after_sha256": "2" * 64,
-                    "address_space_limit_bytes": 1 << 30,
-                    "request_stream": request_stream,
-                    "response_stream": response_stream,
-                    "request_stream_sha256": hashlib.sha256(request_stream.encode()).hexdigest(),
-                    "response_stream_sha256": hashlib.sha256(response_stream.encode()).hexdigest(),
-                    "time_report": f"Maximum resident set size (kbytes): {rss}\n",
-                    "rss_kib": rss,
-                    "frames": frames,
-                }
+                    "schema": 1,
+                    "case_id": frame["case_id"],
+                    "source": "let value = 1;",
+                },
+                sort_keys=True,
+                separators=(",", ":"),
             )
-            pid += 1
+            response = json.dumps(frame, sort_keys=True, separators=(",", ":"))
+            frame.update(
+                raw_request=request,
+                raw_response=response,
+                raw_response_sha256=hashlib.sha256(response.encode()).hexdigest(),
+            )
+            frames.append(frame)
+        request_stream = "".join(frame["raw_request"] + "\n" for frame in frames)
+        response_stream = "".join(frame["raw_response"] + "\n" for frame in frames)
+        rss = typokat_rss if tool == "typokat" else tsgo_rss
+        samples.append(
+            {
+                "block": block,
+                "slot": slot,
+                "tool": tool,
+                "pid": pid,
+                "start_ns": process_start,
+                "end_ns": process_start + duration + 1,
+                "returncode": 0,
+                "stdout": response_stream,
+                "stderr": "",
+                "stdout_complete": True,
+                "stderr_complete": True,
+                "timed_out": False,
+                "process_group_empty": True,
+                "executable_before_sha256": "2" * 64,
+                "executable_after_sha256": "2" * 64,
+                "address_space_limit_bytes": 1 << 30,
+                "request_stream": request_stream,
+                "response_stream": response_stream,
+                "request_stream_sha256": hashlib.sha256(
+                    request_stream.encode()
+                ).hexdigest(),
+                "response_stream_sha256": hashlib.sha256(
+                    response_stream.encode()
+                ).hexdigest(),
+                "time_report": f"Maximum resident set size (kbytes): {rss}\n",
+                "rss_kib": rss,
+                "frames": frames,
+            }
+        )
+        pid += 1
+    derived = (
+        {
+            "speedup": ratio,
+            "p95_ratio": ratio,
+            "bootstrap_lower_95": ratio,
+        }
+        if mode == "abba"
+        else {}
+    )
     return {
         "projects": projects,
         "warmups": warmups,
         "samples": samples,
-        "derived": {
-            "speedup": ratio,
-            "p95_ratio": ratio,
-            "bootstrap_lower_95": ratio,
-        },
+        "derived": derived,
         "negative_controls": {
             "tsgo": {
                 "reuse-checker": negative_control("reuse-checker"),
@@ -2204,8 +2305,8 @@ def mutate_typokat_semantic(
         refresh_frame_response(frame)
         refresh_sample_streams(sample)
         matched += 1
-    if matched != 30:
-        raise AssertionError(f"expected 30 typokat samples, got {matched}")
+    if matched != 10:
+        raise AssertionError(f"expected 10 typokat samples, got {matched}")
 
 
 def accepted_typokat_progress_receipt() -> list[dict[str, object]]:

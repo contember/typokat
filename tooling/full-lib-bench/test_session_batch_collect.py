@@ -270,7 +270,7 @@ class FakePanelHost:
                     if sample["tool"] == warmup["tool"]
                 )
                 warmup["frames"] = copy.deepcopy(source["frames"])
-            if self.profile_mutation == "warmup":
+            if self.profile_mutation == "warmup" and panel["warmups"]:
                 panel["warmups"][0]["frames"][0]["shared_product_identity"] = "0" * 64
             elif self.profile_mutation == "sample":
                 panel["samples"][0]["frames"][0]["shared_product_identity"] = "0" * 64
@@ -1035,7 +1035,14 @@ class SessionBatchLivePanelCollectorTests(unittest.TestCase):
         failure_contract = copy.deepcopy(self.contract)
         failure_contract["panel_project_counts"] = [1]
         failure_contract["speed_gated_project_counts"] = []
-        failure_contract["sampling"]["panel_timeout_seconds"] = [10]
+        for key in (
+            "panel_modes",
+            "warmups_per_tool",
+            "blocks",
+            "samples_per_tool",
+            "panel_timeout_seconds",
+        ):
+            failure_contract["sampling"][key] = failure_contract["sampling"][key][:1]
         failure_host = FakePanelHost(
             failure_contract,
             final_mutation=lambda row: row["candidate"].update(commit="c" * 40),
@@ -1072,25 +1079,33 @@ class SessionBatchLivePanelCollectorTests(unittest.TestCase):
         )
         self.assertEqual(host.calls[-2], ("observe_timing_boundary", 1))
         self.assertEqual(host.calls[-1], ("final_panel_attestation", "a" * 40))
-        for projects in (1, 32, 687):
-            runs = [
-                call
-                for call in host.calls
-                if call[0] == "run_batch" and call[1] == projects
-            ]
-            self.assertEqual(
-                [call[0] for call in runs],
-                ["run_batch"] * 66,
+        process_calls = [
+            call for call in host.calls if call[0] in {"run_fault", "run_batch"}
+        ]
+        expected_process_calls = [
+            ("run_fault", "typokat", "reuse-session"),
+            ("run_fault", "typokat", "retain-cache"),
+            ("run_fault", "tsgo", "reuse-checker"),
+            ("run_fault", "tsgo", "retain-frame"),
+            ("run_batch", 1, "sample", 0, "typokat"),
+            ("run_batch", 1, "sample", 1, "tsgo"),
+        ]
+        expected_process_calls.extend(
+            ("run_batch", 32, "warmup", ordinal, tool)
+            for ordinal, tool in enumerate(
+                ["typokat", "tsgo", "typokat", "tsgo", "typokat", "tsgo"]
             )
-            self.assertEqual(
-                [call[-1] for call in runs[:6]],
-                ["typokat", "tsgo", "typokat", "tsgo", "typokat", "tsgo"],
+        )
+        expected_process_calls.extend(
+            ("run_batch", 32, "sample", ordinal, tool)
+            for ordinal, tool in enumerate(
+                ["typokat", "tsgo", "tsgo", "typokat"] * 5,
+                start=6,
             )
-            self.assertEqual(
-                [call[-1] for call in runs[6:66]],
-                ["typokat", "tsgo", "tsgo", "typokat"] * 15,
-            )
-        self.assertEqual(len(host.process_receipts), 4 + 3 * (6 + 60))
+        )
+        expected_process_calls.append(("run_batch", 687, "sample", 0, "typokat"))
+        self.assertEqual(process_calls, expected_process_calls)
+        self.assertEqual(len(host.process_receipts), 4 + 2 + 26 + 1)
 
         evidence = result["evidence"]
         self.assertEqual(
@@ -1205,23 +1220,33 @@ class SessionBatchLivePanelCollectorTests(unittest.TestCase):
             )
 
     def test_live_panel_collector_authenticates_every_frame_product_identity(self) -> None:
-        contract = copy.deepcopy(self.contract)
-        contract["panel_project_counts"] = [1]
-        contract["speed_gated_project_counts"] = []
-        contract["sampling"]["panel_timeout_seconds"] = [10]
         for phase in ("warmup", "sample"):
-            host = FakePanelHost(contract, profile_mutation=phase)
+            host = FakePanelHost(self.contract, profile_mutation=phase)
             with self.subTest(phase=phase), self.assertRaisesRegex(
                 batch.BatchContractError,
                 "shared product identity",
             ):
-                collect._collect_live_panels(host, contract)
+                collect._collect_live_panels(host, self.contract)
+
+    def test_collection_timeout_is_clamped_to_the_global_deadline(self) -> None:
+        with mock.patch.object(collect.time, "monotonic", return_value=100.0):
+            self.assertEqual(collect._bounded_timeout(10, 150.0), 10)
+            self.assertEqual(collect._bounded_timeout(60, 150.0), 50.0)
+            with self.assertRaisesRegex(batch.BatchContractError, "budget|deadline"):
+                collect._bounded_timeout(10, 100.0)
 
     def test_live_panel_collector_rejects_every_final_attestation_drift(self) -> None:
         contract = copy.deepcopy(self.contract)
         contract["panel_project_counts"] = [1]
         contract["speed_gated_project_counts"] = []
-        contract["sampling"]["panel_timeout_seconds"] = [10]
+        for key in (
+            "panel_modes",
+            "warmups_per_tool",
+            "blocks",
+            "samples_per_tool",
+            "panel_timeout_seconds",
+        ):
+            contract["sampling"][key] = contract["sampling"][key][:1]
         mutations = {
             "candidate": lambda row: row["candidate"].update(commit="c" * 40),
             "runner": lambda row: row["runners"]["typokat"].update(
