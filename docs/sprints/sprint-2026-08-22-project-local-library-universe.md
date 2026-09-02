@@ -866,3 +866,39 @@ numbers are invalid without `--no-smt`.
   (`77,266,944 bytes`) peak RSS, below the `144,109,568-byte` historical gate, but took
   `20.472754830 s` route time versus the strict `12.946437 s` gate. Verdict: `PANEL-FAIL`.
   Concurrency and counting-allocation collection therefore did not run; WU6 remains `NO-GO`.
+- **2026-09-02 — WU6 target-model optimization passed the bounded panel.** RED/fix pairs
+  `3e53d2dc` / `2e782efe` removed the quadratic whole-target clone from member lowering, and
+  `d3877e78` / `6d9452b2` compute immutable declaration-product SCCs once at assembly. The clean
+  `6d9452b2` collection retained `target/wu6/session-panels-6d9452b2.json` (file SHA-256
+  `c99205d00f08452ed420a8121d95f49c7a0e140696c85913f8ade12aaff7672c`, canonical evidence
+  SHA-256 `612ceef6f046b5725687eaca4ed2238371a8ec5ecee7e9e2133a44a770fd2e94`)
+  with verdict `PANEL-PASS`. The 32-frame ABBA panel reported median speedup `9.610560`, p95
+  ratio `8.917486`, bootstrap lower bound `9.353801`, and typokat median/peak RSS
+  `75,562` / `75,728 KiB` versus TypeScript-Go median `173,278 KiB`. The semantic- and
+  lifecycle-valid 687-frame closure took `12.278047989 s` of route time, beating the strict
+  `12.946437 s` historical gate by `0.668389011 s`, with `75,620 KiB` peak RSS.
+- **2026-09-02 — WU6 standalone post-panel receipts passed.** The authenticated collectors and
+  runner modes landed in RED/fix sequences `eea07813` / `0fd5aea7`, `23b8b014` / `c735eced`,
+  `93f5b13c` / `8fe665eb`, and `f483a2a2` / `be2c7a05`; the focused benchmark verifier suite
+  passes `76/76`. Under the two-vCPU no-SMT lease, clean candidate `be2c7a05` retained
+  `target/wu6/session-concurrency-be2c7a05.json` (file SHA-256
+  `e84bd7b878ff078042c37a2179e6b7915aff403ad44b63264430ea2fccbe5ab0`, canonical evidence
+  SHA-256 `75ffe7755b87952bddb652535b2eb16b7051d51b4cde2dbdabe87c8823851ac7`)
+  with verdict `CONCURRENCY-PASS`. Its 1/2/32 isolated sessions were deterministic, used distinct
+  project/publisher/cache identities, retained no session/cache weak state, and peaked at
+  `80,684` / `80,980` / `148,624 KiB`. The concurrency-only process boundary records
+  `MALLOC_ARENA_MAX=2` to prevent glibc per-thread virtual arena reservations from violating the
+  required 1 GiB address-space limit; normal timed panels remain unchanged. The same candidate
+  retained `target/wu6/session-allocation-be2c7a05.json` (file SHA-256
+  `333b226b197020569f9bcf714f4d8a3a60c7f10d7968dc5378f4cc0f52117c80`, canonical evidence
+  SHA-256 `b8325dd22d7b3dfaf6f3fc53de1706e52e437ec210ed20d1c16dc6184682d86c`)
+  with verdict `ALLOCATION-PASS`: all 687 authenticated frames passed semantic/lifecycle ratchets,
+  and the separate untimed `counting-allocator` binary recorded exactly `36,097,909` allocation
+  and reallocation calls.
+- **2026-09-02 — WU6 remains `NO-GO` at the live-authority boundary.** The performance panel is
+  authenticated to `6d9452b2`, while the standalone concurrency/allocation receipts are
+  authenticated to `be2c7a05`. No live orchestrator has linked current-candidate cold,
+  single-project, batch-panel, concurrency, and allocation process receipts into the one
+  source/binary/candidate attestation required by the WU6 authority contract. The individual
+  performance, memory, concurrency, and allocation gates above pass; they do not compose into
+  `GO`.
