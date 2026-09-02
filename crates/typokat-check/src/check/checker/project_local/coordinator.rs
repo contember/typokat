@@ -14,6 +14,7 @@ use super::project_local_pass_port::{
     ContainerKind, Interner, IntrinsicKind, LiteralValue, PublishedAliasTerminal,
     PublishedAliasUnavailable, TypeId, TypeTag,
 };
+use super::recipe_primitives::product_dependency_scc_indices;
 use super::record_staging::LibraryRecordAccumulator;
 use super::session::SessionCore;
 use super::terminal::ProductTerminal;
@@ -515,16 +516,7 @@ impl ProjectLocalSemanticCoordinator {
                 (!children.is_empty()).then_some((owner, children))
             })
             .collect();
-        let sccs = product
-            .dependency_sccs()
-            .into_iter()
-            .map(|members| {
-                members
-                    .into_iter()
-                    .map(|key| key.index())
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
+        let sccs = product_dependency_scc_indices(product);
         let group_scc = sccs
             .iter()
             .enumerate()

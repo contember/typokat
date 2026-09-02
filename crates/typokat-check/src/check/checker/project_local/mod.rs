@@ -39,7 +39,9 @@ pub use observation::{
     ProjectLocalFaultSeamForTest, ProjectLocalSemanticPhaseForTest, WeakLivenessForTest,
 };
 #[cfg(test)]
-pub(super) use recipe_primitives::ContextualTypeParameterIndexWorkScopeForTest;
+pub(super) use recipe_primitives::{
+    ContextualTypeParameterIndexWorkScopeForTest, ProductDependencySccWorkScopeForTest,
+};
 pub use session::{CheckerSession, CheckerSessionError};
 #[cfg(feature = "session-bench")]
 pub use session::{

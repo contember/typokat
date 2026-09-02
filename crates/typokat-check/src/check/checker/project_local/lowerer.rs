@@ -19,7 +19,7 @@ use super::project_local_pass_port::{
 use super::recipe_primitives::{
     build_contextual_type_parameter_index, group_has_runtime_value, has_unsupported_computed_name,
     is_type_parameter_reference, mapped_modifier, member_visibility, merge_object_surface,
-    property_key,
+    product_dependency_scc_indices, property_key,
 };
 use super::record_staging::{
     LibraryRecordAccumulator, LibraryRecordEventIdentity, LibraryRecordOwnerIdentity,
@@ -220,11 +220,7 @@ impl ProductLoweringMetadataPlan {
             }
         }
         let mut group_scc_members = vec![Vec::new(); product.group_count()];
-        for component in product.dependency_sccs() {
-            let members = component
-                .into_iter()
-                .map(|group| group.index())
-                .collect::<Vec<_>>();
+        for members in product_dependency_scc_indices(product) {
             for member in &members {
                 group_scc_members[*member] = members.clone();
             }

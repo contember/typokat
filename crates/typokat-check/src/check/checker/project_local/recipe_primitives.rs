@@ -11,6 +11,7 @@ use super::project_local_pass_port::{
 #[cfg(test)]
 thread_local! {
     static CONTEXTUAL_DENSE_VISIT_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static PRODUCT_DEPENDENCY_SCC_PROJECTIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -24,6 +25,22 @@ impl ContextualTypeParameterIndexWorkScopeForTest {
 
     pub fn finish(self) -> u64 {
         CONTEXTUAL_DENSE_VISIT_PROBES.get().saturating_sub(self.0)
+    }
+}
+
+#[cfg(test)]
+pub struct ProductDependencySccWorkScopeForTest(u64);
+
+#[cfg(test)]
+impl ProductDependencySccWorkScopeForTest {
+    pub fn start() -> Self {
+        Self(PRODUCT_DEPENDENCY_SCC_PROJECTIONS.get())
+    }
+
+    pub fn finish(self) -> u64 {
+        PRODUCT_DEPENDENCY_SCC_PROJECTIONS
+            .get()
+            .saturating_sub(self.0)
     }
 }
 
@@ -238,6 +255,18 @@ pub(super) fn build_contextual_type_parameter_index(
         }
     }
     resolutions
+}
+
+pub(super) fn product_dependency_scc_indices(
+    product: &LibraryDeclarationProduct,
+) -> Vec<Vec<usize>> {
+    #[cfg(test)]
+    PRODUCT_DEPENDENCY_SCC_PROJECTIONS.set(PRODUCT_DEPENDENCY_SCC_PROJECTIONS.get() + 1);
+    product
+        .dependency_sccs()
+        .into_iter()
+        .map(|members| members.into_iter().map(|key| key.index()).collect())
+        .collect()
 }
 
 fn assign_signature_type_parameters(

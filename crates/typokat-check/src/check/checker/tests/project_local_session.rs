@@ -7,8 +7,8 @@ use crate::binder::product::{project_library_declaration_product, LibraryProduct
 use crate::check::checker::project_local::{
     observation_storage_counts_for_test, CheckerSession,
     ContextualTypeParameterIndexWorkScopeForTest, ObservationEventKindForTest,
-    ObservationScopeForTest, ProductLowererConstructionScopeForTest,
-    ProductLoweringMetadataPlanConstructionScopeForTest,
+    ObservationScopeForTest, ProductDependencySccWorkScopeForTest,
+    ProductLowererConstructionScopeForTest, ProductLoweringMetadataPlanConstructionScopeForTest,
 };
 use crate::frontend::{run_prepared_project_frontend, FileInput};
 use crate::source::{CompilationOrigin, LibraryFileOrdinal};
@@ -202,6 +202,7 @@ fn separate_generic_library_demands_reuse_one_metadata_plan_without_identity_col
     let lowerer_constructions = ProductLowererConstructionScopeForTest::start();
     let metadata_plan_constructions = ProductLoweringMetadataPlanConstructionScopeForTest::start();
     let contextual_index_work = ContextualTypeParameterIndexWorkScopeForTest::start();
+    let dependency_scc_work = ProductDependencySccWorkScopeForTest::start();
     let run = run_prepared_project_frontend(
         vec![FileInput {
             name: USER_PATH.to_owned(),
@@ -260,6 +261,11 @@ const after: number = identity(42);
         contextual_index_work.finish(),
         0,
         "the witness must observe the dense contextual traversal"
+    );
+    assert_eq!(
+        dependency_scc_work.finish(),
+        1,
+        "one session must project immutable product SCCs only once"
     );
 }
 
