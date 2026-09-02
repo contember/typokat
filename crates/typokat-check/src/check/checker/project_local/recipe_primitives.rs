@@ -7,11 +7,10 @@ use super::project_local_pass_port::{
     TypeParameterKey, TypeRecipeKey, TypeRecipeNode, TypeReferenceResolution,
     ValueReferenceResolution, Visibility,
 };
-use std::collections::BTreeSet;
 
 #[cfg(test)]
 thread_local! {
-    static CONTEXTUAL_ORDERED_SEEN_INSERTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static CONTEXTUAL_DENSE_VISIT_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -20,11 +19,29 @@ pub struct ContextualTypeParameterIndexWorkScopeForTest(u64);
 #[cfg(test)]
 impl ContextualTypeParameterIndexWorkScopeForTest {
     pub fn start() -> Self {
-        Self(CONTEXTUAL_ORDERED_SEEN_INSERTS.get())
+        Self(CONTEXTUAL_DENSE_VISIT_PROBES.get())
     }
 
     pub fn finish(self) -> u64 {
-        CONTEXTUAL_ORDERED_SEEN_INSERTS.get().saturating_sub(self.0)
+        CONTEXTUAL_DENSE_VISIT_PROBES.get().saturating_sub(self.0)
+    }
+}
+
+struct ContextualTypeRecipeVisits<'a> {
+    slots: &'a mut [usize],
+    generation: usize,
+}
+
+impl ContextualTypeRecipeVisits<'_> {
+    fn visit(&mut self, recipe: TypeRecipeKey) -> bool {
+        #[cfg(test)]
+        CONTEXTUAL_DENSE_VISIT_PROBES.set(CONTEXTUAL_DENSE_VISIT_PROBES.get() + 1);
+        let slot = &mut self.slots[recipe.index()];
+        if *slot == self.generation {
+            return false;
+        }
+        *slot = self.generation;
+        true
     }
 }
 
@@ -140,7 +157,12 @@ pub(super) fn build_contextual_type_parameter_index(
     product: &LibraryDeclarationProduct,
 ) -> Vec<Option<TypeParameterKey>> {
     let mut resolutions = vec![None; product.types().len()];
-    for declaration in product.declarations() {
+    let mut visit_slots = vec![usize::MAX; product.types().len()];
+    for (generation, declaration) in product.declarations().iter().enumerate() {
+        let mut visits = ContextualTypeRecipeVisits {
+            slots: &mut visit_slots,
+            generation,
+        };
         let mut parameters = Vec::new();
         match &declaration.payload {
             DeclarationPayload::Class {
@@ -154,14 +176,13 @@ pub(super) fn build_contextual_type_parameter_index(
                 heritage,
             } => {
                 parameters.extend(type_parameters.iter().copied());
-                let mut seen = BTreeSet::new();
                 for recipe in heritage.iter() {
                     assign_contextual_type_parameters(
                         product,
                         *recipe,
                         &parameters,
                         &mut resolutions,
-                        &mut seen,
+                        &mut visits,
                     );
                 }
                 for member in members.iter() {
@@ -170,7 +191,7 @@ pub(super) fn build_contextual_type_parameter_index(
                         &product.members()[member.index()],
                         &parameters,
                         &mut resolutions,
-                        &mut seen,
+                        &mut visits,
                     );
                 }
             }
@@ -184,7 +205,7 @@ pub(super) fn build_contextual_type_parameter_index(
                     *value,
                     &parameters,
                     &mut resolutions,
-                    &mut BTreeSet::new(),
+                    &mut visits,
                 );
             }
             DeclarationPayload::Function { signature } => assign_signature_type_parameters(
@@ -192,7 +213,7 @@ pub(super) fn build_contextual_type_parameter_index(
                 *signature,
                 &parameters,
                 &mut resolutions,
-                &mut BTreeSet::new(),
+                &mut visits,
             ),
             DeclarationPayload::Variable { annotation }
             | DeclarationPayload::Parameter { annotation }
@@ -203,7 +224,7 @@ pub(super) fn build_contextual_type_parameter_index(
                         *recipe,
                         &parameters,
                         &mut resolutions,
-                        &mut BTreeSet::new(),
+                        &mut visits,
                     );
                 }
             }
@@ -224,7 +245,7 @@ fn assign_signature_type_parameters(
     signature: SignatureKey,
     outer: &[TypeParameterKey],
     resolutions: &mut [Option<TypeParameterKey>],
-    seen: &mut BTreeSet<usize>,
+    visits: &mut ContextualTypeRecipeVisits<'_>,
 ) {
     let signature = &product.signatures()[signature.index()];
     let mut parameters = outer.to_vec();
@@ -232,16 +253,16 @@ fn assign_signature_type_parameters(
     for parameter in signature.type_parameters.iter() {
         let parameter = &product.type_parameters()[parameter.index()];
         for recipe in parameter.constraint.iter().chain(parameter.default.iter()) {
-            assign_contextual_type_parameters(product, *recipe, &parameters, resolutions, seen);
+            assign_contextual_type_parameters(product, *recipe, &parameters, resolutions, visits);
         }
     }
     for parameter in signature.parameters.iter() {
         if let Some(recipe) = parameter.value {
-            assign_contextual_type_parameters(product, recipe, &parameters, resolutions, seen);
+            assign_contextual_type_parameters(product, recipe, &parameters, resolutions, visits);
         }
     }
     if let Some(recipe) = signature.result {
-        assign_contextual_type_parameters(product, recipe, &parameters, resolutions, seen);
+        assign_contextual_type_parameters(product, recipe, &parameters, resolutions, visits);
     }
 }
 
@@ -250,13 +271,13 @@ fn assign_member_type_parameters(
     member: &MemberRecipe,
     parameters: &[TypeParameterKey],
     resolutions: &mut [Option<TypeParameterKey>],
-    seen: &mut BTreeSet<usize>,
+    visits: &mut ContextualTypeRecipeVisits<'_>,
 ) {
     if let Some(recipe) = member.value {
-        assign_contextual_type_parameters(product, recipe, parameters, resolutions, seen);
+        assign_contextual_type_parameters(product, recipe, parameters, resolutions, visits);
     }
     if let Some(signature) = member.signature {
-        assign_signature_type_parameters(product, signature, parameters, resolutions, seen);
+        assign_signature_type_parameters(product, signature, parameters, resolutions, visits);
     }
 }
 
@@ -265,11 +286,9 @@ fn assign_contextual_type_parameters(
     recipe: TypeRecipeKey,
     parameters: &[TypeParameterKey],
     resolutions: &mut [Option<TypeParameterKey>],
-    seen: &mut BTreeSet<usize>,
+    visits: &mut ContextualTypeRecipeVisits<'_>,
 ) {
-    #[cfg(test)]
-    CONTEXTUAL_ORDERED_SEEN_INSERTS.set(CONTEXTUAL_ORDERED_SEEN_INSERTS.get() + 1);
-    if !seen.insert(recipe.index()) {
+    if !visits.visit(recipe) {
         return;
     }
     match &product.types()[recipe.index()].node {
@@ -286,7 +305,7 @@ fn assign_contextual_type_parameters(
                     });
             }
             for child in arguments.iter() {
-                assign_contextual_type_parameters(product, *child, parameters, resolutions, seen);
+                assign_contextual_type_parameters(product, *child, parameters, resolutions, visits);
             }
         }
         TypeRecipeNode::Reference { arguments, .. }
@@ -294,11 +313,11 @@ fn assign_contextual_type_parameters(
         | TypeRecipeNode::Union(arguments)
         | TypeRecipeNode::Intersection(arguments) => {
             for child in arguments.iter() {
-                assign_contextual_type_parameters(product, *child, parameters, resolutions, seen);
+                assign_contextual_type_parameters(product, *child, parameters, resolutions, visits);
             }
         }
         TypeRecipeNode::Array(child) | TypeRecipeNode::Operator { operand: child, .. } => {
-            assign_contextual_type_parameters(product, *child, parameters, resolutions, seen);
+            assign_contextual_type_parameters(product, *child, parameters, resolutions, visits);
         }
         TypeRecipeNode::Tuple { elements } => {
             for child in elements.iter() {
@@ -307,12 +326,12 @@ fn assign_contextual_type_parameters(
                     child.value,
                     parameters,
                     resolutions,
-                    seen,
+                    visits,
                 );
             }
         }
         TypeRecipeNode::Function(signature) | TypeRecipeNode::Constructor { signature, .. } => {
-            assign_signature_type_parameters(product, *signature, parameters, resolutions, seen);
+            assign_signature_type_parameters(product, *signature, parameters, resolutions, visits);
         }
         TypeRecipeNode::Object(members) => {
             for member in members.iter() {
@@ -321,13 +340,13 @@ fn assign_contextual_type_parameters(
                     &product.members()[member.index()],
                     parameters,
                     resolutions,
-                    seen,
+                    visits,
                 );
             }
         }
         TypeRecipeNode::IndexedAccess { object, index } => {
-            assign_contextual_type_parameters(product, *object, parameters, resolutions, seen);
-            assign_contextual_type_parameters(product, *index, parameters, resolutions, seen);
+            assign_contextual_type_parameters(product, *object, parameters, resolutions, visits);
+            assign_contextual_type_parameters(product, *index, parameters, resolutions, visits);
         }
         TypeRecipeNode::Mapped {
             parameter,
@@ -343,7 +362,7 @@ fn assign_contextual_type_parameters(
                     *child,
                     &mapped_parameters,
                     resolutions,
-                    seen,
+                    visits,
                 );
             }
         }
@@ -354,17 +373,17 @@ fn assign_contextual_type_parameters(
             when_false,
         } => {
             for child in [check, extends, when_true, when_false] {
-                assign_contextual_type_parameters(product, *child, parameters, resolutions, seen);
+                assign_contextual_type_parameters(product, *child, parameters, resolutions, visits);
             }
         }
         TypeRecipeNode::Template { holes, .. } => {
             for child in holes.iter() {
-                assign_contextual_type_parameters(product, *child, parameters, resolutions, seen);
+                assign_contextual_type_parameters(product, *child, parameters, resolutions, visits);
             }
         }
         TypeRecipeNode::Predicate { value, .. } => {
             if let Some(child) = value {
-                assign_contextual_type_parameters(product, *child, parameters, resolutions, seen);
+                assign_contextual_type_parameters(product, *child, parameters, resolutions, visits);
             }
         }
         TypeRecipeNode::Keyword(_)

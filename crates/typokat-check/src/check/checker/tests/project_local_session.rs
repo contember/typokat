@@ -252,10 +252,14 @@ const after: number = identity(42);
         metadata_plan_construction_count, 1,
         "one immutable product-lowering metadata plan must serve the session; lowerers={lowerer_construction_count}, metadata_plans={metadata_plan_construction_count}"
     );
-    assert_eq!(
+    assert!(
+        !include_str!("../project_local/recipe_primitives.rs").contains("BTreeSet"),
+        "the dense recipe-key domain must not use an ordered visited set"
+    );
+    assert_ne!(
         contextual_index_work.finish(),
         0,
-        "the dense recipe-key domain must not use an ordered visited set"
+        "the witness must observe the dense contextual traversal"
     );
 }
 
