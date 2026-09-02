@@ -5,7 +5,8 @@ use crate::binder::namespace::{
 };
 use crate::binder::product::{project_library_declaration_product, LibraryProductSource};
 use crate::check::checker::project_local::{
-    observation_storage_counts_for_test, CheckerSession, ObservationEventKindForTest,
+    observation_storage_counts_for_test, CheckerSession,
+    ContextualTypeParameterIndexWorkScopeForTest, ObservationEventKindForTest,
     ObservationScopeForTest, ProductLowererConstructionScopeForTest,
     ProductLoweringMetadataPlanConstructionScopeForTest,
 };
@@ -200,6 +201,7 @@ fn separate_generic_library_demands_reuse_one_metadata_plan_without_identity_col
     ));
     let lowerer_constructions = ProductLowererConstructionScopeForTest::start();
     let metadata_plan_constructions = ProductLoweringMetadataPlanConstructionScopeForTest::start();
+    let contextual_index_work = ContextualTypeParameterIndexWorkScopeForTest::start();
     let run = run_prepared_project_frontend(
         vec![FileInput {
             name: USER_PATH.to_owned(),
@@ -249,6 +251,11 @@ const after: number = identity(42);
     assert_eq!(
         metadata_plan_construction_count, 1,
         "one immutable product-lowering metadata plan must serve the session; lowerers={lowerer_construction_count}, metadata_plans={metadata_plan_construction_count}"
+    );
+    assert_eq!(
+        contextual_index_work.finish(),
+        0,
+        "the dense recipe-key domain must not use an ordered visited set"
     );
 }
 

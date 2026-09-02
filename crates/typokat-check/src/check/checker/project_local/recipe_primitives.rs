@@ -9,6 +9,25 @@ use super::project_local_pass_port::{
 };
 use std::collections::BTreeSet;
 
+#[cfg(test)]
+thread_local! {
+    static CONTEXTUAL_ORDERED_SEEN_INSERTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub struct ContextualTypeParameterIndexWorkScopeForTest(u64);
+
+#[cfg(test)]
+impl ContextualTypeParameterIndexWorkScopeForTest {
+    pub fn start() -> Self {
+        Self(CONTEXTUAL_ORDERED_SEEN_INSERTS.get())
+    }
+
+    pub fn finish(self) -> u64 {
+        CONTEXTUAL_ORDERED_SEEN_INSERTS.get().saturating_sub(self.0)
+    }
+}
+
 pub(super) const fn mapped_modifier(modifier: MappedModifier) -> ModifierOp {
     match modifier {
         MappedModifier::Preserve => ModifierOp::Keep,
@@ -248,6 +267,8 @@ fn assign_contextual_type_parameters(
     resolutions: &mut [Option<TypeParameterKey>],
     seen: &mut BTreeSet<usize>,
 ) {
+    #[cfg(test)]
+    CONTEXTUAL_ORDERED_SEEN_INSERTS.set(CONTEXTUAL_ORDERED_SEEN_INSERTS.get() + 1);
     if !seen.insert(recipe.index()) {
         return;
     }

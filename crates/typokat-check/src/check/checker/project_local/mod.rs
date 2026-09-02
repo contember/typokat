@@ -38,6 +38,8 @@ pub use observation::{
     ObservationReceiptForTest, ObservationScopeForTest, ObservationWitnessKindForTest,
     ProjectLocalFaultSeamForTest, ProjectLocalSemanticPhaseForTest, WeakLivenessForTest,
 };
+#[cfg(test)]
+pub(super) use recipe_primitives::ContextualTypeParameterIndexWorkScopeForTest;
 pub use session::{CheckerSession, CheckerSessionError};
 #[cfg(feature = "session-bench")]
 pub use session::{
