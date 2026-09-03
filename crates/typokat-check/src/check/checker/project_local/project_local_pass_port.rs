@@ -19,6 +19,7 @@ pub(super) use crate::binder::declaration::ValueStorageId;
 pub(super) use crate::binder::declaration::{
     source_global_binding_census_with_provenance, SourceBindingSlot,
 };
+use crate::binder::namespace::MergeDisposition;
 pub(super) use crate::binder::namespace::NamespaceId;
 #[cfg(any(test, feature = "test-utils"))]
 pub(super) use crate::binder::roots::collect_final_global_object_contributors;
@@ -123,11 +124,17 @@ pub(super) fn project_local_user_augmented_product_groups(
                 .fragments
                 .iter()
                 .any(|fragment| {
-                    bound
+                    let is_user = bound
                         .binder
                         .namespaces
                         .compilation_origin_for_source(fragment.source)
-                        .is_some_and(|origin| matches!(origin, CompilationOrigin::User(_)))
+                        .is_some_and(|origin| matches!(origin, CompilationOrigin::User(_)));
+                    let is_admitted = !bound
+                        .binder
+                        .namespaces
+                        .merge_disposition_for_declaration(fragment.declaration)
+                        .is_some_and(|disposition| disposition != MergeDisposition::Admitted);
+                    is_user && is_admitted
                 });
             augmented.then_some((row.product_key, group))
         })
