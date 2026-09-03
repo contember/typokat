@@ -2718,5 +2718,710 @@ class SessionBatchLiveAllocationCollectorTests(unittest.TestCase):
         )
 
 
+
+def _wu6_result(verdict: str, evidence: dict[str, object]) -> dict[str, object]:
+    return {
+        "verdict": verdict,
+        "evidence_sha256": hashlib.sha256(
+            json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+        "evidence": evidence,
+    }
+
+
+def _wu6_runner(
+    tool: str,
+    stage: str,
+    source_sha256: str,
+    binary_sha256: str,
+    commit: str,
+) -> dict[str, object]:
+    return {
+        "tool": tool,
+        "path": f"/private/{stage}/{tool}",
+        "source_sha256": source_sha256,
+        "binary_sha256": binary_sha256,
+        "commit": commit,
+    }
+
+
+def _wu6_protocol(
+    tool: str,
+    runner: dict[str, object],
+    contract: dict[str, object],
+) -> dict[str, object]:
+    value = protocol_info(tool)
+    value.update(
+        source_sha256=runner["source_sha256"],
+        binary_sha256=runner["binary_sha256"],
+        upstream_revision=runner["commit"],
+        profile_sha256=contract["profile"]["length_framed_sha256"],
+        profile_file_count=contract["profile"]["file_count"],
+    )
+    return value
+
+
+def wu6_stage_results(
+    contract: dict[str, object],
+    *,
+    panel_verdict: str = "PANEL-PASS",
+) -> dict[str, dict[str, object]]:
+    candidate = {"commit": "a" * 40, "tree": "b" * 40, "dirty": False}
+    profile = {
+        "file_count": contract["profile"]["file_count"],
+        "length_framed_sha256": contract["profile"]["length_framed_sha256"],
+    }
+    typokat_source = "4" * 64
+    typokat_binary = "2" * 64
+    tsgo_source = "5" * 64
+    tsgo_binary = "3" * 64
+    allocation_binary = "6" * 64
+    upstream_revision = contract["tsgo"]["upstream_revision"]
+
+    linkage_runners = {
+        "typokat": _wu6_runner(
+            "typokat",
+            "linkage",
+            typokat_source,
+            typokat_binary,
+            candidate["commit"],
+        ),
+        "tsgo": _wu6_runner(
+            "tsgo", "linkage", tsgo_source, tsgo_binary, upstream_revision
+        ),
+    }
+    linkage_protocols = {
+        tool: _wu6_protocol(tool, runner, contract)
+        for tool, runner in linkage_runners.items()
+    }
+    cold_binaries = {
+        "typokat": {"binary_sha256": "7" * 64, "path": "/private/linkage/cold"},
+        "tsgo": {"binary_sha256": "8" * 64, "path": "/private/linkage/tsgo-cold"},
+    }
+    linkage_evidence = {
+        "schema": 1,
+        "candidate": copy.deepcopy(candidate),
+        "runners": linkage_runners,
+        "protocols": linkage_protocols,
+        "cold_binaries": cold_binaries,
+        "batch_smoke": {"retained": "linkage-batch"},
+        "cold_processes": {"retained": "linkage-cold"},
+        "single_project_processes": {"retained": "linkage-single"},
+        "recomputation": {"verdict": "LINKAGE-RECOMPUTED"},
+        "final_attestation": {
+            "candidate": copy.deepcopy(candidate),
+            "runners": copy.deepcopy(linkage_runners),
+            "cold": copy.deepcopy(cold_binaries),
+            "profile": copy.deepcopy(profile),
+        },
+    }
+
+    panel_runners = {
+        "typokat": _wu6_runner(
+            "typokat",
+            "panels",
+            typokat_source,
+            typokat_binary,
+            candidate["commit"],
+        ),
+        "tsgo": _wu6_runner(
+            "tsgo", "panels", tsgo_source, tsgo_binary, upstream_revision
+        ),
+    }
+    panel_protocols = {
+        tool: _wu6_protocol(tool, runner, contract)
+        for tool, runner in panel_runners.items()
+    }
+    process_receipts_sha256 = "9" * 64
+    panel_evidence = {
+        "schema": 1,
+        "candidate": copy.deepcopy(candidate),
+        "runners": panel_runners,
+        "protocols": panel_protocols,
+        "profile": copy.deepcopy(profile),
+        "timing": {"retained": "panel-timing"},
+        "raw_panels": {"retained": "panel-raw"},
+        "panel_receipts": [{"verdict": panel_verdict}],
+        "process_receipts_sha256": process_receipts_sha256,
+        "final_attestation": {
+            "candidate": copy.deepcopy(candidate),
+            "runners": copy.deepcopy(panel_runners),
+            "profile": copy.deepcopy(profile),
+            "process_receipts_sha256": process_receipts_sha256,
+        },
+    }
+
+    concurrency_runner = _wu6_runner(
+        "typokat",
+        "concurrency",
+        typokat_source,
+        typokat_binary,
+        candidate["commit"],
+    )
+    concurrency_evidence = {
+        "schema": 1,
+        "candidate": copy.deepcopy(candidate),
+        "runner": concurrency_runner,
+        "protocol": _wu6_protocol("typokat", concurrency_runner, contract),
+        "concurrency": {"retained": "concurrency-processes"},
+        "final_attestation": {
+            "candidate": copy.deepcopy(candidate),
+            "runner": copy.deepcopy(concurrency_runner),
+        },
+    }
+
+    allocation_runner = _wu6_runner(
+        "typokat",
+        "allocation",
+        typokat_source,
+        allocation_binary,
+        candidate["commit"],
+    )
+    allocation_evidence = {
+        "schema": 1,
+        "candidate": copy.deepcopy(candidate),
+        "runner": allocation_runner,
+        "protocol": _wu6_protocol("typokat", allocation_runner, contract),
+        "process": {
+            "retained": "allocation-process",
+            "executable_before_sha256": allocation_binary,
+            "executable_after_sha256": allocation_binary,
+        },
+        "allocation_receipt": {"binary_sha256": allocation_binary},
+        "final_attestation": {
+            "candidate": copy.deepcopy(candidate),
+            "runner": copy.deepcopy(allocation_runner),
+        },
+    }
+    return {
+        "linkage": _wu6_result("LINKAGE-PASS", linkage_evidence),
+        "panels": _wu6_result(panel_verdict, panel_evidence),
+        "concurrency": _wu6_result("CONCURRENCY-PASS", concurrency_evidence),
+        "allocation": _wu6_result("ALLOCATION-PASS", allocation_evidence),
+    }
+
+
+def _wu6_normalized_runner(runner: dict[str, object]) -> dict[str, object]:
+    return {
+        key: runner[key]
+        for key in ("tool", "source_sha256", "binary_sha256", "commit")
+    }
+
+
+def _wu6_normalized_protocol(protocol: dict[str, object]) -> dict[str, object]:
+    return {
+        key: copy.deepcopy(value)
+        for key, value in protocol.items()
+        if key not in {"source_sha256", "binary_sha256", "upstream_revision"}
+    }
+
+
+def expected_wu6_identity_linkage(
+    stages: dict[str, dict[str, object]],
+) -> dict[str, object]:
+    linkage = stages["linkage"]["evidence"]
+    allocation = stages["allocation"]["evidence"]
+    return {
+        "schema": 1,
+        "stage_evidence_sha256": {
+            stage: stages[stage]["evidence_sha256"]
+            for stage in ("linkage", "panels", "concurrency", "allocation")
+        },
+        "candidate": copy.deepcopy(linkage["candidate"]),
+        "profile": copy.deepcopy(linkage["final_attestation"]["profile"]),
+        "runners": {
+            "typokat": _wu6_normalized_runner(linkage["runners"]["typokat"]),
+            "tsgo": _wu6_normalized_runner(linkage["runners"]["tsgo"]),
+            "typokat_allocation": _wu6_normalized_runner(allocation["runner"]),
+        },
+        "protocols": {
+            tool: _wu6_normalized_protocol(linkage["protocols"][tool])
+            for tool in ("typokat", "tsgo")
+        },
+    }
+
+
+class SessionBatchLiveWu6CollectorTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.contract = batch.verify_contract()
+
+    def test_public_wu6_collector_owns_hosts_deadline_and_atomic_publication(
+        self,
+    ) -> None:
+        signature = inspect.signature(collect.collect_live_wu6)
+        self.assertEqual(list(signature.parameters), ["output"])
+        self.assertEqual(
+            signature.parameters["output"].kind,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
+        private = inspect.signature(collect._collect_live_wu6)
+        self.assertEqual(list(private.parameters), ["hosts", "contract"])
+
+        hosts = [mock.Mock(contract=self.contract) for _ in range(4)]
+        stages = wu6_stage_results(self.contract)
+        combined_evidence = {
+            "schema": 1,
+            "stages": copy.deepcopy(stages),
+            "identity_linkage": expected_wu6_identity_linkage(stages),
+        }
+        combined = _wu6_result("GO", combined_evidence)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "wu6.json"
+            with (
+                mock.patch.object(batch, "verify_contract", return_value=self.contract),
+                mock.patch.object(collect.time, "monotonic", return_value=100.0),
+                mock.patch.object(
+                    collect, "SystemLiveHost", side_effect=hosts
+                ) as constructor,
+                mock.patch.object(
+                    collect, "_collect_live_wu6", return_value=combined
+                ) as private_collect,
+                mock.patch.object(
+                    collect,
+                    "_atomic_write_new",
+                    wraps=collect._atomic_write_new,
+                ) as atomic_write,
+            ):
+                result = collect.collect_live_wu6(output=output)
+                with self.assertRaisesRegex(batch.BatchContractError, "exists"):
+                    collect.collect_live_wu6(output=output)
+
+            expected_constructor = mock.call(
+                self.contract,
+                collection_deadline=700.0,
+                persistent_rust_build_cache=True,
+            )
+            self.assertEqual(
+                constructor.call_args_list,
+                [expected_constructor, expected_constructor, expected_constructor,
+                 expected_constructor],
+            )
+            supplied_hosts, supplied_contract = private_collect.call_args.args
+            self.assertEqual(
+                list(supplied_hosts),
+                ["linkage", "panels", "concurrency", "allocation"],
+            )
+            self.assertEqual(list(supplied_hosts.values()), hosts)
+            self.assertIs(supplied_contract, self.contract)
+            private_collect.assert_called_once()
+            atomic_write.assert_called_once_with(
+                output,
+                json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
+                + b"\n",
+            )
+            self.assertEqual(
+                output.read_bytes(),
+                json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
+                + b"\n",
+            )
+            self.assertEqual(list(Path(directory).iterdir()), [output])
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "failed-wu6.json"
+            with (
+                mock.patch.object(batch, "verify_contract", return_value=self.contract),
+                mock.patch.object(collect.time, "monotonic", return_value=100.0),
+                mock.patch.object(
+                    collect,
+                    "SystemLiveHost",
+                    side_effect=[mock.Mock(contract=self.contract) for _ in range(4)],
+                ),
+                mock.patch.object(
+                    collect,
+                    "_collect_live_wu6",
+                    side_effect=batch.BatchContractError("malformed nested evidence"),
+                ),
+            ):
+                with self.assertRaises(batch.BatchContractError):
+                    collect.collect_live_wu6(output=output)
+            self.assertFalse(output.exists())
+            self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_private_wu6_requires_exact_stage_hosts(self) -> None:
+        for label, hosts in (
+            (
+                "missing",
+                {
+                    stage: object()
+                    for stage in ("linkage", "panels", "concurrency")
+                },
+            ),
+            (
+                "extra",
+                {
+                    stage: object()
+                    for stage in (
+                        "linkage",
+                        "panels",
+                        "concurrency",
+                        "allocation",
+                        "static-document",
+                    )
+                },
+            ),
+        ):
+            with (
+                self.subTest(label=label),
+                mock.patch.object(collect, "_collect_live_linkage") as linkage,
+                mock.patch.object(collect, "_collect_live_panels") as panels,
+                mock.patch.object(collect, "_collect_live_concurrency") as concurrency,
+                mock.patch.object(collect, "_collect_live_allocation") as allocation,
+                self.assertRaises(batch.BatchContractError),
+            ):
+                collect._collect_live_wu6(hosts, self.contract)
+            for collector in (linkage, panels, concurrency, allocation):
+                collector.assert_not_called()
+
+    def test_private_wu6_collects_once_in_order_and_emits_recomputable_receipt(
+        self,
+    ) -> None:
+        hosts = {stage: object() for stage in (
+            "linkage", "panels", "concurrency", "allocation"
+        )}
+        stages = wu6_stage_results(self.contract)
+        order: list[str] = []
+
+        def stage_collector(stage: str):
+            def run(host, contract):
+                self.assertIs(host, hosts[stage])
+                self.assertIs(contract, self.contract)
+                order.append(stage)
+                return copy.deepcopy(stages[stage])
+
+            return run
+
+        with (
+            mock.patch.object(
+                collect, "_collect_live_linkage", side_effect=stage_collector("linkage")
+            ) as linkage,
+            mock.patch.object(
+                collect, "_collect_live_panels", side_effect=stage_collector("panels")
+            ) as panels,
+            mock.patch.object(
+                collect,
+                "_collect_live_concurrency",
+                side_effect=stage_collector("concurrency"),
+            ) as concurrency,
+            mock.patch.object(
+                collect,
+                "_collect_live_allocation",
+                side_effect=stage_collector("allocation"),
+            ) as allocation,
+        ):
+            result = collect._collect_live_wu6(hosts, self.contract)
+
+        self.assertEqual(order, ["linkage", "panels", "concurrency", "allocation"])
+        for collector in (linkage, panels, concurrency, allocation):
+            collector.assert_called_once()
+        self.assertEqual(result["verdict"], "GO")
+        self.assertEqual(set(result), {"verdict", "evidence_sha256", "evidence"})
+        evidence = result["evidence"]
+        self.assertEqual(set(evidence), {"schema", "stages", "identity_linkage"})
+        self.assertEqual(evidence["schema"], 1)
+        self.assertEqual(evidence["stages"], stages)
+        self.assertEqual(
+            evidence["identity_linkage"],
+            expected_wu6_identity_linkage(stages),
+        )
+        self.assertNotIn(
+            "path",
+            json.dumps(evidence["identity_linkage"], sort_keys=True),
+        )
+        self.assertEqual(
+            result["evidence_sha256"],
+            hashlib.sha256(
+                json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest(),
+        )
+
+    def _assert_wu6_rejected(
+        self,
+        mutation,
+        *,
+        refresh: tuple[str, ...] = (),
+    ) -> None:
+        stages = wu6_stage_results(self.contract)
+        mutation(stages)
+        for stage in refresh:
+            stages[stage]["evidence_sha256"] = hashlib.sha256(
+                json.dumps(
+                    stages[stage]["evidence"],
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest()
+        hosts = {stage: object() for stage in stages}
+        with (
+            mock.patch.object(
+                collect, "_collect_live_linkage", return_value=stages["linkage"]
+            ),
+            mock.patch.object(
+                collect, "_collect_live_panels", return_value=stages["panels"]
+            ),
+            mock.patch.object(
+                collect,
+                "_collect_live_concurrency",
+                return_value=stages["concurrency"],
+            ),
+            mock.patch.object(
+                collect, "_collect_live_allocation", return_value=stages["allocation"]
+            ),
+            self.assertRaises(batch.BatchContractError),
+        ):
+            collect._collect_live_wu6(hosts, self.contract)
+
+    def test_wu6_fails_closed_on_candidate_hash_and_exact_verdict_drift(self) -> None:
+        def dirty(stages):
+            for location in (
+                stages["linkage"]["evidence"]["candidate"],
+                stages["linkage"]["evidence"]["final_attestation"]["candidate"],
+            ):
+                location["dirty"] = True
+
+        def cross_stage_candidate(stages):
+            for location in (
+                stages["panels"]["evidence"]["candidate"],
+                stages["panels"]["evidence"]["final_attestation"]["candidate"],
+            ):
+                location["tree"] = "c" * 40
+
+        cases = [
+            ("dirty", dirty, ("linkage",)),
+            ("cross-stage-candidate", cross_stage_candidate, ("panels",)),
+            (
+                "malformed-stage",
+                lambda stages: stages["linkage"]["evidence"].pop(
+                    "final_attestation"
+                ),
+                ("linkage",),
+            ),
+        ]
+        cases.extend(
+            (
+                f"{stage}-nested-evidence-hash",
+                lambda stages, stage=stage: stages[stage].update(
+                    evidence_sha256="f" * 64
+                ),
+                (),
+            )
+            for stage in ("linkage", "panels", "concurrency", "allocation")
+        )
+        cases.extend(
+            (
+                f"{stage}-exact-verdict",
+                lambda stages, stage=stage: stages[stage].update(verdict="GO"),
+                (),
+            )
+            for stage in ("linkage", "panels", "concurrency", "allocation")
+        )
+        for label, mutation, refresh in cases:
+            with self.subTest(label=label):
+                self._assert_wu6_rejected(mutation, refresh=refresh)
+
+    def test_wu6_fails_closed_on_runner_protocol_and_profile_drift(self) -> None:
+        def runner_drift(stage, tool, field, value):
+            def mutate(stages):
+                evidence = stages[stage]["evidence"]
+                runner = (
+                    evidence["runners"][tool]
+                    if "runners" in evidence
+                    else evidence["runner"]
+                )
+                runner[field] = value
+                protocol = (
+                    evidence["protocols"][tool]
+                    if "protocols" in evidence
+                    else evidence["protocol"]
+                )
+                protocol[
+                    {
+                        "source_sha256": "source_sha256",
+                        "binary_sha256": "binary_sha256",
+                        "commit": "upstream_revision",
+                    }[field]
+                ] = value
+                final = evidence["final_attestation"]
+                final_runner = (
+                    final["runners"][tool]
+                    if "runners" in final
+                    else final["runner"]
+                )
+                final_runner[field] = value
+                if stage == "allocation" and field == "binary_sha256":
+                    evidence["process"]["executable_before_sha256"] = value
+                    evidence["process"]["executable_after_sha256"] = value
+                    evidence["allocation_receipt"]["binary_sha256"] = value
+
+            return mutate
+
+        mutations = (
+            (
+                "normal-typokat-source",
+                runner_drift("concurrency", "typokat", "source_sha256", "a" * 64),
+                "concurrency",
+            ),
+            (
+                "normal-typokat-binary",
+                runner_drift("concurrency", "typokat", "binary_sha256", "a" * 64),
+                "concurrency",
+            ),
+            (
+                "tsgo-source",
+                runner_drift("panels", "tsgo", "source_sha256", "a" * 64),
+                "panels",
+            ),
+            (
+                "tsgo-binary",
+                runner_drift("panels", "tsgo", "binary_sha256", "a" * 64),
+                "panels",
+            ),
+            (
+                "allocation-source",
+                runner_drift("allocation", "typokat", "source_sha256", "a" * 64),
+                "allocation",
+            ),
+            (
+                "allocation-commit",
+                runner_drift("allocation", "typokat", "commit", "c" * 40),
+                "allocation",
+            ),
+            (
+                "allocation-binary-collision",
+                runner_drift(
+                    "allocation",
+                    "typokat",
+                    "binary_sha256",
+                    FakePostPanelHost.NORMAL_BINARY_SHA256,
+                ),
+                "allocation",
+            ),
+        )
+        for label, mutation, stage in mutations:
+            with self.subTest(label=label):
+                self._assert_wu6_rejected(mutation, refresh=(stage,))
+
+        def protocol_drift(stages):
+            stages["panels"]["evidence"]["protocols"]["typokat"][
+                "compiler_flags"
+            ].append("--forged")
+
+        def allocation_protocol_drift(stages):
+            stages["allocation"]["evidence"]["protocol"]["compiler_flags"].append(
+                "--forged"
+            )
+
+        def profile_drift(stages):
+            profile = stages["panels"]["evidence"]["profile"]
+            profile["length_framed_sha256"] = "a" * 64
+            stages["panels"]["evidence"]["final_attestation"]["profile"] = (
+                copy.deepcopy(profile)
+            )
+
+        self._assert_wu6_rejected(protocol_drift, refresh=("panels",))
+        self._assert_wu6_rejected(
+            allocation_protocol_drift, refresh=("allocation",)
+        )
+        self._assert_wu6_rejected(profile_drift, refresh=("panels",))
+
+    def test_wu6_revalidates_every_embedded_final_attestation(self) -> None:
+        def candidate(stages, stage):
+            stages[stage]["evidence"]["final_attestation"]["candidate"][
+                "commit"
+            ] = "c" * 40
+
+        def linkage_cold(stages, _stage):
+            stages["linkage"]["evidence"]["final_attestation"]["cold"][
+                "typokat"
+            ]["binary_sha256"] = "c" * 64
+
+        def panel_processes(stages, _stage):
+            stages["panels"]["evidence"]["final_attestation"][
+                "process_receipts_sha256"
+            ] = "c" * 64
+
+        def runner(stages, stage):
+            attestation = stages[stage]["evidence"]["final_attestation"]
+            runner_identity = (
+                attestation["runners"]["typokat"]
+                if "runners" in attestation
+                else attestation["runner"]
+            )
+            runner_identity["binary_sha256"] = "c" * 64
+
+        cases = [
+            (f"{stage}-candidate", stage, candidate)
+            for stage in ("linkage", "panels", "concurrency", "allocation")
+        ]
+        cases.extend(
+            [
+                ("linkage-cold", "linkage", linkage_cold),
+                ("panel-processes", "panels", panel_processes),
+                ("linkage-runner", "linkage", runner),
+                ("panel-runner", "panels", runner),
+                ("concurrency-runner", "concurrency", runner),
+                ("allocation-runner", "allocation", runner),
+            ]
+        )
+        for label, stage, mutation in cases:
+            def mutate(stages, *, stage=stage, mutation=mutation):
+                mutation(stages, stage)
+
+            with self.subTest(label=label):
+                self._assert_wu6_rejected(mutate, refresh=(stage,))
+
+    def test_panel_failure_is_retained_and_stops_post_panel_collection(self) -> None:
+        hosts = {stage: object() for stage in (
+            "linkage", "panels", "concurrency", "allocation"
+        )}
+        stages = wu6_stage_results(self.contract, panel_verdict="PANEL-FAIL")
+        with (
+            mock.patch.object(
+                collect, "_collect_live_linkage", return_value=stages["linkage"]
+            ) as linkage,
+            mock.patch.object(
+                collect, "_collect_live_panels", return_value=stages["panels"]
+            ) as panels,
+            mock.patch.object(collect, "_collect_live_concurrency") as concurrency,
+            mock.patch.object(collect, "_collect_live_allocation") as allocation,
+        ):
+            result = collect._collect_live_wu6(hosts, self.contract)
+
+        linkage.assert_called_once_with(hosts["linkage"], self.contract)
+        panels.assert_called_once_with(hosts["panels"], self.contract)
+        concurrency.assert_not_called()
+        allocation.assert_not_called()
+        self.assertEqual(result["verdict"], "NO-GO")
+        self.assertEqual(
+            result["evidence"]["stages"],
+            {"linkage": stages["linkage"], "panels": stages["panels"]},
+        )
+        self.assertEqual(
+            result["evidence_sha256"],
+            hashlib.sha256(
+                json.dumps(
+                    result["evidence"], sort_keys=True, separators=(",", ":")
+                ).encode()
+            ).hexdigest(),
+        )
+
+        forged = wu6_stage_results(self.contract, panel_verdict="PANEL-FAIL")
+        forged["panels"]["evidence_sha256"] = "f" * 64
+        with (
+            mock.patch.object(
+                collect, "_collect_live_linkage", return_value=forged["linkage"]
+            ),
+            mock.patch.object(
+                collect, "_collect_live_panels", return_value=forged["panels"]
+            ),
+            mock.patch.object(collect, "_collect_live_concurrency") as concurrency,
+            mock.patch.object(collect, "_collect_live_allocation") as allocation,
+            self.assertRaises(batch.BatchContractError),
+        ):
+            collect._collect_live_wu6(hosts, self.contract)
+        concurrency.assert_not_called()
+        allocation.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
