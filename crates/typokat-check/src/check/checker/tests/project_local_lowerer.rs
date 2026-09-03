@@ -1781,7 +1781,7 @@ fn source_infer_registration_reaches_function_constructor_and_object_positions()
 }
 
 #[test]
-fn source_outer_infer_reference_inside_nested_conditional_is_conservatively_rejected() {
+fn source_outer_infer_reference_inside_nested_conditional_is_ready_and_conservatively_poisoned() {
     let source = r#"
         type Cross<T> = T extends infer Outer
             ? "x" extends `${infer Inner}`
@@ -1801,9 +1801,33 @@ fn source_outer_infer_reference_inside_nested_conditional_is_conservatively_reje
         None,
     );
 
-    assert!(receipt.unavailable.contains(&group));
-    assert!(!receipt.ready.contains(&group));
-    assert_eq!(receipt.group_types[group], None);
+    assert!(receipt.ready.contains(&group));
+    assert!(!receipt.unavailable.contains(&group));
+    let template = receipt.group_types[group].expect("ready alias template");
+    let alias = interner
+        .store()
+        .alias_template_id(template)
+        .expect("published alias identity");
+    let PublishedAliasTerminal::Ready(surface) = receipt
+        .aliases
+        .terminal(alias)
+        .expect("published alias terminal")
+    else {
+        panic!("cross-frame infer alias is conservatively ready")
+    };
+    let outer = interner
+        .store()
+        .conditional_type(surface.body())
+        .expect("published alias body is the outer conditional");
+    let nested = interner
+        .store()
+        .conditional_type(outer.true_branch)
+        .expect("outer true branch is the nested conditional");
+
+    assert_eq!(outer.infer_count, 1);
+    assert!(outer.poisoned);
+    assert_eq!(nested.infer_count, 1);
+    assert!(nested.poisoned);
 }
 
 #[test]
