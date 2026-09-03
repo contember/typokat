@@ -902,3 +902,30 @@ numbers are invalid without `--no-smt`.
   source/binary/candidate attestation required by the WU6 authority contract. The individual
   performance, memory, concurrency, and allocation gates above pass; they do not compose into
   `GO`.
+- **2026-09-03 — unified WU6 orchestration exposed and closed one semantic gap.** RED/fix commits
+  `991aac28` / `75f17286` added the one-shot live authority that owns linkage, panels,
+  concurrency, and allocation under one deadline and candidate identity; the complete Python
+  verifier/collector suite passed `83/83`. Its first clean run stopped at linkage because
+  project-local `Promise.resolve` was absent in external modules. The immutable lowerer rejected
+  `Awaited<T>` when its nested conditional referenced an active outer `infer` binder, causing
+  atomic overload omission to remove every `resolve` signature. RED commits `da9c77ac` and
+  `efbfe73c`, followed by general fix `f029bffb`, now preserve the graph and conservatively poison
+  every crossed conditional frame. The focused external-module protocol test, all `42`
+  project-local lowerer tests, and all `36` session-batch integration tests pass. The corrected
+  four-row live single-project oracle digest exactly matches
+  `2df1b378c1d31367db41b538700c38e6f068a3a0bec9264f60bbf34c1b26a785`.
+- **2026-09-03 — WU6 unified live authority returned `GO`.** The one-shot collector ran under a
+  two-vCPU no-SMT lease at clean candidate `f029bffb1b5c1e0e284266cd8904f25d4a57bd25`
+  (tree `ecd53428db611ddd52a4fbd0bb3c8a1e2c88314e`) and retained
+  `target/wu6/session-wu6-f029bffb.json` (file SHA-256
+  `1d3460304bc450c232acbfaaa33aaf3f95f60009e61d957df30a83e957c63b2d`, canonical evidence
+  SHA-256 `6d7e4f247f417719012917313be70e6a181543c1c243eb6d0d3bd7a0e783cfd5`).
+  The linked stage verdicts are `LINKAGE-PASS`, `PANEL-PASS`, `CONCURRENCY-PASS`, and
+  `ALLOCATION-PASS`. The 32-frame ABBA panel reports median speedup `9.172970`, p95 ratio
+  `9.618792`, bootstrap lower bound `9.115916`, and typokat median/peak RSS
+  `75,600` / `75,720 KiB` versus TypeScript-Go median `172,542 KiB`. The 687-frame route took
+  `12.325578265 s`, beating the strict `12.946437 s` historical gate by `0.620858735 s`, with
+  `75,780 KiB` peak RSS. Concurrent 1/2/32-session processes peaked at
+  `80,612` / `81,192` / `157,872 KiB`; the counting-allocator binary recorded exactly
+  `36,102,528` allocation and reallocation calls. This single current-candidate attestation
+  supersedes the preceding standalone-evidence `NO-GO`: formal WU6 verdict is `GO`.
