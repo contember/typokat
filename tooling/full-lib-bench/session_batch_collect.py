@@ -108,8 +108,10 @@ def _exact_keys(value: Any, keys: set[str], label: str) -> None:
 def _validate_candidate(candidate: Any) -> None:
     _exact_keys(candidate, {"commit", "tree", "dirty"}, "candidate")
     if (
-        not HEX40.fullmatch(candidate["commit"] or "")
-        or not HEX40.fullmatch(candidate["tree"] or "")
+        not isinstance(candidate["commit"], str)
+        or not HEX40.fullmatch(candidate["commit"])
+        or not isinstance(candidate["tree"], str)
+        or not HEX40.fullmatch(candidate["tree"])
         or candidate["dirty"] is not False
     ):
         _fail("candidate is not a clean frozen Git identity")
@@ -129,8 +131,10 @@ def _validate_runner(
         runner["tool"] != tool
         or not isinstance(runner["path"], str)
         or not runner["path"]
-        or not HEX64.fullmatch(runner["source_sha256"] or "")
-        or not HEX64.fullmatch(runner["binary_sha256"] or "")
+        or not isinstance(runner["source_sha256"], str)
+        or not HEX64.fullmatch(runner["source_sha256"])
+        or not isinstance(runner["binary_sha256"], str)
+        or not HEX64.fullmatch(runner["binary_sha256"])
         or runner["commit"] != expected_commit
     ):
         _fail(f"{tool} built runner identity differs")
@@ -1116,6 +1120,386 @@ def _collect_live_allocation(
     }
 
 
+_WU6_STAGES = ("linkage", "panels", "concurrency", "allocation")
+_WU6_STAGE_VERDICTS = {
+    "linkage": {"LINKAGE-PASS"},
+    "panels": {"PANEL-PASS", "PANEL-FAIL"},
+    "concurrency": {"CONCURRENCY-PASS"},
+    "allocation": {"ALLOCATION-PASS"},
+}
+_WU6_EVIDENCE_KEYS = {
+    "linkage": {
+        "schema",
+        "candidate",
+        "runners",
+        "protocols",
+        "cold_binaries",
+        "batch_smoke",
+        "cold_processes",
+        "single_project_processes",
+        "recomputation",
+        "final_attestation",
+    },
+    "panels": {
+        "schema",
+        "candidate",
+        "runners",
+        "protocols",
+        "profile",
+        "timing",
+        "raw_panels",
+        "panel_receipts",
+        "process_receipts_sha256",
+        "final_attestation",
+    },
+    "concurrency": {
+        "schema",
+        "candidate",
+        "runner",
+        "protocol",
+        "concurrency",
+        "final_attestation",
+    },
+    "allocation": {
+        "schema",
+        "candidate",
+        "runner",
+        "protocol",
+        "process",
+        "allocation_receipt",
+        "final_attestation",
+    },
+}
+
+
+def _wu6_profile_identity(contract: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "file_count": contract["profile"]["file_count"],
+        "length_framed_sha256": contract["profile"]["length_framed_sha256"],
+    }
+
+
+def _validate_wu6_profile(profile: Any, contract: dict[str, Any], label: str) -> None:
+    _exact_keys(profile, {"file_count", "length_framed_sha256"}, label)
+    if profile != _wu6_profile_identity(contract):
+        _fail(f"{label} differs")
+
+
+def _wu6_runner_identity(runner: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: runner[key]
+        for key in ("tool", "source_sha256", "binary_sha256", "commit")
+    }
+
+
+def _wu6_protocol_identity(protocol: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: copy.deepcopy(value)
+        for key, value in protocol.items()
+        if key not in {"source_sha256", "binary_sha256", "upstream_revision"}
+    }
+
+
+
+
+def _validate_wu6_linkage_attestation(
+    evidence: dict[str, Any], contract: dict[str, Any]
+) -> None:
+    attestation = evidence["final_attestation"]
+    _exact_keys(
+        attestation,
+        {"candidate", "runners", "cold", "profile"},
+        "final linkage attestation",
+    )
+    _validate_candidate(attestation["candidate"])
+    if attestation["candidate"] != evidence["candidate"]:
+        _fail("final linkage candidate identity differs")
+    _exact_keys(attestation["runners"], {"typokat", "tsgo"}, "final linkage runners")
+    for tool in ("typokat", "tsgo"):
+        _validate_runner(
+            attestation["runners"][tool], tool, attestation["candidate"], contract
+        )
+    if attestation["runners"] != evidence["runners"]:
+        _fail("final linkage runner identity differs")
+    if attestation["cold"] != evidence["cold_binaries"]:
+        _fail("final linkage cold binary identity differs")
+    _validate_wu6_profile(
+        attestation["profile"], contract, "final linkage profile identity"
+    )
+
+
+def _validate_wu6_panel_attestation(
+    evidence: dict[str, Any], contract: dict[str, Any]
+) -> None:
+    attestation = evidence["final_attestation"]
+    _exact_keys(
+        attestation,
+        {"candidate", "runners", "profile", "process_receipts_sha256"},
+        "final panel attestation",
+    )
+    _validate_candidate(attestation["candidate"])
+    if attestation["candidate"] != evidence["candidate"]:
+        _fail("final panel candidate identity differs")
+    _exact_keys(attestation["runners"], {"typokat", "tsgo"}, "final panel runners")
+    for tool in ("typokat", "tsgo"):
+        _validate_runner(
+            attestation["runners"][tool], tool, attestation["candidate"], contract
+        )
+    if attestation["runners"] != evidence["runners"]:
+        _fail("final panel runner identity differs")
+    _validate_wu6_profile(
+        attestation["profile"], contract, "final panel profile identity"
+    )
+    if attestation["profile"] != evidence["profile"]:
+        _fail("final panel profile identity differs")
+    process_sha256 = evidence["process_receipts_sha256"]
+    if (
+        not isinstance(process_sha256, str)
+        or not HEX64.fullmatch(process_sha256)
+        or attestation["process_receipts_sha256"] != process_sha256
+    ):
+        _fail("final panel process receipt digest differs")
+
+
+def _validate_wu6_typokat_attestation(
+    evidence: dict[str, Any], contract: dict[str, Any]
+) -> None:
+    attestation = evidence["final_attestation"]
+    _validate_typokat_attestation(
+        attestation, evidence["candidate"], evidence["runner"]
+    )
+    _validate_candidate(attestation["candidate"])
+    _validate_runner(
+        attestation["runner"], "typokat", attestation["candidate"], contract
+    )
+
+
+def _validate_wu6_stage_result(
+    result: Any, stage: str, contract: dict[str, Any]
+) -> dict[str, Any]:
+    _exact_keys(result, {"verdict", "evidence_sha256", "evidence"}, f"{stage} result")
+    if (
+        not isinstance(result["verdict"], str)
+        or result["verdict"] not in _WU6_STAGE_VERDICTS[stage]
+    ):
+        _fail(f"{stage} verdict differs")
+    evidence = result["evidence"]
+    _exact_keys(evidence, _WU6_EVIDENCE_KEYS[stage], f"{stage} evidence")
+    if evidence["schema"] != 1:
+        _fail(f"{stage} evidence schema differs")
+    digest = result["evidence_sha256"]
+    try:
+        expected_digest = _sha(_canonical(evidence))
+    except (TypeError, ValueError) as error:
+        raise batch.BatchContractError(
+            f"{stage} evidence is not canonical-hashable"
+        ) from error
+    if (
+        not isinstance(digest, str)
+        or not HEX64.fullmatch(digest)
+        or digest != expected_digest
+    ):
+        _fail(f"{stage} evidence digest differs")
+
+    _validate_candidate(evidence["candidate"])
+    if stage in {"linkage", "panels"}:
+        _exact_keys(evidence["runners"], {"typokat", "tsgo"}, f"{stage} runners")
+        _exact_keys(evidence["protocols"], {"typokat", "tsgo"}, f"{stage} protocols")
+        for tool in ("typokat", "tsgo"):
+            runner = evidence["runners"][tool]
+            _validate_runner(runner, tool, evidence["candidate"], contract)
+            batch.validate_protocol_info(
+                evidence["protocols"][tool], tool, runner, contract
+            )
+        if stage == "linkage":
+            _validate_wu6_linkage_attestation(evidence, contract)
+        else:
+            _validate_wu6_profile(evidence["profile"], contract, "panel profile")
+            _validate_wu6_panel_attestation(evidence, contract)
+    else:
+        runner = evidence["runner"]
+        _validate_runner(runner, "typokat", evidence["candidate"], contract)
+        batch.validate_protocol_info(
+            evidence["protocol"], "typokat", runner, contract
+        )
+        _validate_wu6_typokat_attestation(evidence, contract)
+        if stage == "allocation":
+            process = evidence["process"]
+            receipt = evidence["allocation_receipt"]
+            if (
+                not isinstance(process, dict)
+                or process.get("executable_before_sha256") != runner["binary_sha256"]
+                or process.get("executable_after_sha256") != runner["binary_sha256"]
+                or not isinstance(receipt, dict)
+                or receipt.get("binary_sha256") != runner["binary_sha256"]
+            ):
+                _fail("allocation evidence differs from its built runner identity")
+    return evidence
+
+
+def _validate_wu6_continuity(
+    stages: dict[str, dict[str, Any]], contract: dict[str, Any]
+) -> None:
+    linkage = stages["linkage"]["evidence"]
+    candidate = linkage["candidate"]
+    normal_runner = _wu6_runner_identity(linkage["runners"]["typokat"])
+    tsgo_runner = _wu6_runner_identity(linkage["runners"]["tsgo"])
+    normal_protocol = _wu6_protocol_identity(linkage["protocols"]["typokat"])
+    tsgo_protocol = _wu6_protocol_identity(linkage["protocols"]["tsgo"])
+
+    for stage in stages:
+        if stages[stage]["evidence"]["candidate"] != candidate:
+            _fail("WU6 stage candidate identity differs")
+
+    if "panels" in stages:
+        panels = stages["panels"]["evidence"]
+        if (
+            _wu6_runner_identity(panels["runners"]["typokat"]) != normal_runner
+            or _wu6_runner_identity(panels["runners"]["tsgo"]) != tsgo_runner
+            or _wu6_protocol_identity(panels["protocols"]["typokat"])
+            != normal_protocol
+            or _wu6_protocol_identity(panels["protocols"]["tsgo"]) != tsgo_protocol
+        ):
+            _fail("WU6 panel runner or protocol identity differs")
+        _validate_wu6_profile(panels["profile"], contract, "WU6 profile identity")
+        if panels["profile"] != linkage["final_attestation"]["profile"]:
+            _fail("WU6 profile identity differs")
+
+    if "concurrency" in stages:
+        concurrency = stages["concurrency"]["evidence"]
+        if (
+            _wu6_runner_identity(concurrency["runner"]) != normal_runner
+            or _wu6_protocol_identity(concurrency["protocol"]) != normal_protocol
+        ):
+            _fail("WU6 concurrency runner or protocol identity differs")
+
+    if "allocation" in stages:
+        allocation = stages["allocation"]["evidence"]
+        allocation_runner = _wu6_runner_identity(allocation["runner"])
+        if (
+            any(
+                allocation_runner[key] != normal_runner[key]
+                for key in ("tool", "source_sha256", "commit")
+            )
+            or allocation_runner["binary_sha256"] == normal_runner["binary_sha256"]
+            or _wu6_protocol_identity(allocation["protocol"]) != normal_protocol
+        ):
+            _fail("WU6 allocation runner or protocol identity differs")
+
+
+def _wu6_identity_linkage(
+    stages: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    linkage = stages["linkage"]["evidence"]
+    runners = {
+        "typokat": _wu6_runner_identity(linkage["runners"]["typokat"]),
+        "tsgo": _wu6_runner_identity(linkage["runners"]["tsgo"]),
+    }
+    if "allocation" in stages:
+        runners["typokat_allocation"] = _wu6_runner_identity(
+            stages["allocation"]["evidence"]["runner"]
+        )
+    return {
+        "schema": 1,
+        "stage_evidence_sha256": {
+            stage: stages[stage]["evidence_sha256"]
+            for stage in _WU6_STAGES
+            if stage in stages
+        },
+        "candidate": copy.deepcopy(linkage["candidate"]),
+        "profile": copy.deepcopy(linkage["final_attestation"]["profile"]),
+        "runners": runners,
+        "protocols": {
+            tool: _wu6_protocol_identity(linkage["protocols"][tool])
+            for tool in ("typokat", "tsgo")
+        },
+    }
+
+
+def _wu6_result(
+    verdict: str, stages: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    evidence = {
+        "schema": 1,
+        "stages": stages,
+        "identity_linkage": _wu6_identity_linkage(stages),
+    }
+    return {
+        "verdict": verdict,
+        "evidence_sha256": _sha(_canonical(evidence)),
+        "evidence": evidence,
+    }
+
+
+def _validate_wu6_result(
+    result: Any, contract: dict[str, Any]
+) -> None:
+    _exact_keys(result, {"verdict", "evidence_sha256", "evidence"}, "WU6 result")
+    evidence = result["evidence"]
+    _exact_keys(evidence, {"schema", "stages", "identity_linkage"}, "WU6 evidence")
+    if evidence["schema"] != 1:
+        _fail("WU6 evidence schema differs")
+    stages = evidence["stages"]
+    verdict = result["verdict"]
+    if not isinstance(verdict, str) or verdict not in {"GO", "NO-GO"}:
+        _fail("WU6 verdict differs")
+    expected_stages = (
+        set(_WU6_STAGES) if verdict == "GO" else {"linkage", "panels"}
+    )
+    _exact_keys(stages, expected_stages, "WU6 stages")
+    for stage in _WU6_STAGES:
+        if stage in stages:
+            _validate_wu6_stage_result(stages[stage], stage, contract)
+    if (
+        (result["verdict"] == "GO" and stages["panels"]["verdict"] != "PANEL-PASS")
+        or (
+            result["verdict"] == "NO-GO"
+            and stages["panels"]["verdict"] != "PANEL-FAIL"
+        )
+    ):
+        _fail("WU6 verdict does not match panel verdict")
+    _validate_wu6_continuity(stages, contract)
+    if evidence["identity_linkage"] != _wu6_identity_linkage(stages):
+        _fail("WU6 identity linkage receipt differs")
+    digest = result["evidence_sha256"]
+    if (
+        not isinstance(digest, str)
+        or not HEX64.fullmatch(digest)
+        or digest != _sha(_canonical(evidence))
+    ):
+        _fail("WU6 evidence digest differs")
+
+
+def _collect_live_wu6(
+    hosts: dict[str, Any], contract: dict[str, Any]
+) -> dict[str, Any]:
+    _exact_keys(hosts, set(_WU6_STAGES), "WU6 stage hosts")
+    stages: dict[str, dict[str, Any]] = {}
+
+    stages["linkage"] = _collect_live_linkage(hosts["linkage"], contract)
+    _validate_wu6_stage_result(stages["linkage"], "linkage", contract)
+
+    stages["panels"] = _collect_live_panels(hosts["panels"], contract)
+    _validate_wu6_stage_result(stages["panels"], "panels", contract)
+    _validate_wu6_continuity(stages, contract)
+    if stages["panels"]["verdict"] == "PANEL-FAIL":
+        result = _wu6_result("NO-GO", stages)
+        _validate_wu6_result(result, contract)
+        return result
+
+    stages["concurrency"] = _collect_live_concurrency(hosts["concurrency"], contract)
+    _validate_wu6_stage_result(stages["concurrency"], "concurrency", contract)
+    _validate_wu6_continuity(stages, contract)
+
+    stages["allocation"] = _collect_live_allocation(hosts["allocation"], contract)
+    _validate_wu6_stage_result(stages["allocation"], "allocation", contract)
+    _validate_wu6_continuity(stages, contract)
+
+    result = _wu6_result("GO", stages)
+    _validate_wu6_result(result, contract)
+    return result
+
+
 def _atomic_write_new(path: Path, data: bytes) -> None:
     parent = path.parent
     if parent.is_symlink() or not parent.is_dir():
@@ -1214,6 +1598,28 @@ def collect_live_allocation(*, output: Path) -> dict[str, Any]:
     )
     result = _collect_live_allocation(host, host.contract)
     _bounded_timeout(contract["sampling"]["max_collection_wall_seconds"], deadline)
+    _atomic_write_new(output, _canonical(result) + b"\n")
+    return result
+
+
+def collect_live_wu6(*, output: Path) -> dict[str, Any]:
+    output = Path(output)
+    if output.exists() or output.is_symlink():
+        _fail(f"output already exists: {output}")
+    contract = batch.verify_contract()
+    maximum = contract["sampling"]["max_collection_wall_seconds"]
+    deadline = time.monotonic() + maximum
+    hosts = {
+        stage: SystemLiveHost(
+            contract,
+            collection_deadline=deadline,
+            persistent_rust_build_cache=True,
+        )
+        for stage in _WU6_STAGES
+    }
+    result = _collect_live_wu6(hosts, contract)
+    _validate_wu6_result(result, contract)
+    _bounded_timeout(maximum, deadline)
     _atomic_write_new(output, _canonical(result) + b"\n")
     return result
 
