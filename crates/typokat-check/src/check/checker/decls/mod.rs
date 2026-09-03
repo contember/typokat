@@ -5150,8 +5150,9 @@ fn reserve_type_decls_with_policy<'ast>(
                     if preserves_library_alias {
                         continue;
                     }
-                    if group.index() < decls.published_len() && decls.has_replacement(group.index())
-                    {
+                    // A rejected user alias cannot replace an immutable project-local terminal.
+                    // Any legal augmentation has already installed its own prefix replacement.
+                    if group.index() < decls.published_len() {
                         continue;
                     }
                     ensure_type_group_slot(decls, group.index());
