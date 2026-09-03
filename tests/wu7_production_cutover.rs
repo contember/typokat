@@ -24,7 +24,7 @@ fn assert_clean(label: &str, output: &CheckOutput) {
         output.diagnostics.is_empty()
             && output.parse_errors.is_empty()
             && output.incomplete.is_empty(),
-        "{label} did not use the complete production library: diagnostics={:?}, parse={:?}, incomplete={:?}",
+        "{label} did not use the production checker session: diagnostics={:?}, parse={:?}, incomplete={:?}",
         output.diagnostics,
         output.parse_errors,
         output.incomplete,
@@ -33,14 +33,14 @@ fn assert_clean(label: &str, output: &CheckOutput) {
 
 #[test]
 fn public_single_parallel_and_project_modes_agree_on_the_full_library() {
-    let single = check_source(FULL_LIBRARY_CLEAN).expect("single mode initializes the full base");
+    let single = check_source(FULL_LIBRARY_CLEAN).expect("single mode initializes one session");
     assert_clean("single", &single);
 
     let parallel = check_files(vec![FileInput {
         name: "/wu7/parallel.ts".to_owned(),
         source: FULL_LIBRARY_CLEAN.to_owned(),
     }])
-    .expect("parallel mode initializes the full base before rayon");
+    .expect("parallel mode initializes the product before rayon");
     assert_eq!(parallel.len(), 1);
     assert_clean("parallel", &parallel[0].output);
 
@@ -48,7 +48,7 @@ fn public_single_parallel_and_project_modes_agree_on_the_full_library() {
         name: "/wu7/project.ts".to_owned(),
         source: FULL_LIBRARY_CLEAN.to_owned(),
     }])
-    .expect("project mode initializes the full base");
+    .expect("project mode initializes one session");
     assert_eq!(project.len(), 1);
     assert_clean("project", &project[0].output);
 }
@@ -60,10 +60,8 @@ fn parallel_mode_preserves_filename_derived_declaration_semantics() {
         name: "/wu7/valid.d.ts".to_owned(),
         source: source.to_owned(),
     };
-    let parallel =
-        check_files(vec![input()]).expect("parallel declaration mode initializes the full base");
-    let project =
-        check_project(vec![input()]).expect("project declaration mode initializes the full base");
+    let parallel = check_files(vec![input()]).expect("parallel declaration mode uses one session");
+    let project = check_project(vec![input()]).expect("project declaration mode uses one session");
     assert_eq!(parallel.len(), 1);
     assert_eq!(project.len(), 1);
 
@@ -86,7 +84,7 @@ fn parallel_mode_preserves_filename_derived_declaration_semantics() {
 }
 
 #[test]
-fn production_sources_have_explicit_cli_and_provider_routes_and_no_prelude_asset() {
+fn production_sources_use_only_checker_session_lifecycle() {
     let root = root();
     assert!(
         !root.join("crates/typokat-check/src/prelude.ts").exists(),
@@ -109,6 +107,22 @@ fn production_sources_have_explicit_cli_and_provider_routes_and_no_prelude_asset
         "PRELUDE_SOURCE",
         "bootstrap_trusted_prelude",
         "include_str!(\"../../prelude.ts\")",
+        "FrozenLibraryBase",
+        "LibraryBinderCheckpoint",
+        "CollisionReplayPlan",
+        "PrivateCollisionEpoch",
+        "CompleteSourceFallbackRuntime",
+        "ReplayDependencyTrace",
+        "LibraryCompiler",
+        "fork_sparse_delta",
+        "fork_sparse_collision_delta",
+        "check_project_programs_with_library",
+        "check_private_project_programs_with_library",
+        "check_complete_source_project_programs_with_library",
+        "check_program_with_owned_library",
+        "production_cli_route",
+        "production-complete-source-once",
+        "production-default-library",
     ] {
         let offenders = production_sources
             .iter()
@@ -117,7 +131,7 @@ fn production_sources_have_explicit_cli_and_provider_routes_and_no_prelude_asset
             .collect::<Vec<_>>();
         assert!(
             offenders.is_empty(),
-            "retired production bootstrap remains reachable: {forbidden}: {offenders:?}"
+            "retired production lifecycle remains reachable: {forbidden}: {offenders:?}"
         );
     }
     for forbidden in ["check_source_with_library", "check_project_with_library"] {
@@ -142,20 +156,20 @@ fn production_sources_have_explicit_cli_and_provider_routes_and_no_prelude_asset
     );
     assert!(
         !conformance.contains("FixtureBase")
-            && !conformance.contains("check_source_with_library")
-            && !conformance.contains("check_project_with_library"),
-        "conformance must use the same single production route as the CLI"
+            && !conformance.contains("SharedColdParity")
+            && !conformance.contains("check_project_programs_with_library"),
+        "conformance must use the same production CheckerSession lifecycle"
     );
     assert!(
         !facade.contains("pub use typokat_check::check"),
-        "the facade must not expose a raw prelude-backed checker bypass"
+        "the facade must not expose a raw checker bypass"
     );
     assert!(
         !checker.contains("pub fn check_program<'ast>")
             && !checker.contains("pub fn check_project_programs<'ast>")
             && !checker_api.contains("pub use checker::check_project_programs")
             && !checker_api.contains("pub use checker::{check_program"),
-        "raw prelude-era checker entry points must be private test support or removed"
+        "raw checker entry points must be private test support or removed"
     );
     for forbidden in [
         ".expect(\"spawn check worker\")",
@@ -172,16 +186,12 @@ fn production_sources_have_explicit_cli_and_provider_routes_and_no_prelude_asset
         "CLI exit 2 needs the stable initialization-failure prefix"
     );
     assert!(
-        !main.contains("CURRENT_LIBRARY_ROUTE") && !main.contains("\"production-default-library\""),
-        "library-info must derive its route from the initialized production provider"
-    );
-    assert!(
-        main.contains("production_library_route"),
-        "library-info must attest through the ordinary driver singleton"
-    );
-    assert!(
-        main.contains("check_project_once") && main.contains("production_cli_route"),
-        "ordinary CLI checks need the explicit complete-source lifecycle"
+        main.contains("production_library_route")
+            && main.contains("check_project_once")
+            && !main.contains("production_cli_route")
+            && !main.contains("\"production-complete-source-once\"")
+            && !main.contains("\"production-default-library\""),
+        "CLI checks and library-info must attest one production CheckerSession lifecycle"
     );
 }
 

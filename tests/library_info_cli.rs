@@ -22,11 +22,10 @@ fn library_info_reports_the_embedded_profile_and_production_route() {
     assert_eq!(
         observed,
         serde_json::json!({
-            "schema": 2,
+            "schema": 3,
             "profile_sha256": PROFILE_SHA256,
             "file_count": 82,
-            "check_route": "production-complete-source-once",
-            "provider_route": "production-default-library"
+            "route": "production-checker-session"
         })
     );
 }

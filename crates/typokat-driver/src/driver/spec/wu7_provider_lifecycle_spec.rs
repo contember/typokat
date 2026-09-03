@@ -57,11 +57,16 @@ fn deterministic_initialization_failure_is_one_cached_arc_through_real_public_fu
         super::check_project(inputs(2)),
         "project mode must expose initialization failure",
     );
+    let third = library_failure(
+        super::check_project_once(inputs(1)),
+        "standalone mode must expose initialization failure",
+    );
     let route = match super::production_library_route() {
         Ok(_) => panic!("library-info attestation must expose initialization failure"),
         Err(error) => error,
     };
     assert!(Arc::ptr_eq(&first, &second));
+    assert!(Arc::ptr_eq(&first, &third));
     assert!(Arc::ptr_eq(&first, &route));
 
     let trace_context = scope.context();
@@ -97,17 +102,17 @@ fn deterministic_initialization_failure_is_one_cached_arc_through_real_public_fu
     let trace = scope.finish();
     assert_eq!(trace.provider_initialization_attempts, 1);
     assert_eq!(trace.provider_publications, 0);
-    assert_eq!(trace.provider_acquisitions, 35);
+    assert_eq!(trace.provider_acquisitions, 36);
     assert_eq!(trace.worker_starts, 0);
     assert_eq!(trace.rayon_worker_starts, 0);
     assert_eq!(trace.reports_exposed, 0);
 }
 
 #[test]
-fn fault_trace_scope_excludes_a_preexisting_foreign_standalone_invocation() {
+fn fault_trace_scope_excludes_a_preexisting_foreign_invocation() {
     let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
     let (release_sender, release_receiver) = mpsc::sync_channel(1);
-    let (owned_reports, foreign_reports, trace) = std::thread::scope(|threads| {
+    let (_owned_error, foreign_reports, trace) = std::thread::scope(|threads| {
         let foreign = threads.spawn(move || {
             ready_sender.send(()).expect("foreign thread reports ready");
             release_receiver
@@ -121,37 +126,34 @@ fn fault_trace_scope_excludes_a_preexisting_foreign_standalone_invocation() {
 
         let scope = ProductionDriverFaultTraceScopeForTest::install(
             ProductionDriverFaultForTest::ProviderInitialization(
-                "standalone invocations must bypass the provider".to_owned(),
+                "owned invocation must use the product provider".to_owned(),
             ),
         );
         release_sender
             .send(())
             .expect("foreign invocation is released");
-        let owned_reports = super::check_project_once(inputs(1))
-            .expect("owned standalone invocation bypasses the provider");
+        let owned_error = library_failure(
+            super::check_project_once(inputs(1)),
+            "owned standalone invocation must expose provider failure",
+        );
         let foreign_reports = foreign
             .join()
             .expect("foreign standalone caller does not panic")
-            .expect("foreign standalone invocation bypasses the provider");
+            .expect("foreign standalone invocation uses the ordinary provider");
         let trace = scope.finish();
-        (owned_reports, foreign_reports, trace)
+        (owned_error, foreign_reports, trace)
     });
 
-    assert_eq!(owned_reports.len(), 1);
     assert_eq!(foreign_reports.len(), 1);
-    assert_eq!(trace.provider_initialization_attempts, 0);
+    assert_eq!(trace.provider_initialization_attempts, 1);
     assert_eq!(trace.provider_publications, 0);
-    assert_eq!(trace.provider_acquisitions, 0);
-    assert_eq!(
-        (trace.worker_starts, trace.reports_exposed),
-        (1, 1),
-        "{trace:#?}"
-    );
-    assert_eq!(trace.worker_base_identities, [0]);
+    assert_eq!(trace.provider_acquisitions, 1);
+    assert_eq!(trace.worker_starts, 0);
+    assert_eq!(trace.reports_exposed, 0);
 }
 
 #[test]
-fn thirty_two_real_public_callers_share_one_published_provider_and_base() {
+fn thirty_two_real_public_callers_share_one_published_product() {
     let scope = ProductionDriverFaultTraceScopeForTest::install(ProductionDriverFaultForTest::None);
     let trace_context = scope.context();
     std::thread::scope(|threads| {
@@ -180,7 +182,7 @@ fn thirty_two_real_public_callers_share_one_published_provider_and_base() {
     });
 
     let route = super::production_library_route().expect("route uses the same provider");
-    assert_eq!(route, "production-default-library");
+    assert_eq!(route, "production-checker-session");
 
     let trace = scope.finish();
     assert_eq!(trace.provider_initialization_attempts, 1);
