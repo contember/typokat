@@ -265,6 +265,35 @@ fn single_project_preserves_warm_nested_set_inference() {
 }
 
 #[test]
+fn single_project_keeps_library_alias_terminal() {
+    let output = invoke_request(json!({
+        "case_id": "library-alias-collision",
+        "files": [{
+            "path": "main.ts",
+            "source": concat!(
+                "type Partial<T> = { b103: T };\n",
+                "\n",
+                "const partial: Partial<number> = { b103: 1 };\n",
+            ),
+        }],
+        "schema": 1,
+    }));
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+
+    let receipt: Value = serde_json::from_slice(&output.stdout).expect("runner response JSON");
+    assert_eq!(
+        receipt["semantic"],
+        json!({
+            "diagnostics": ["main.ts:3:7:2322"],
+            "exit_code": 1,
+            "incompletes": [],
+            "parse_errors": [],
+        })
+    );
+}
+
+#[test]
 fn single_project_rejects_noncanonical_or_nonexclusive_requests() {
     assert_rejected("", "exactly one canonical JSON request");
     assert_rejected(
