@@ -170,6 +170,67 @@ fn single_project_preserves_object_freeze_assignability() {
 }
 
 #[test]
+fn single_project_links_promise_statics_in_an_external_module() {
+    let output = invoke_request(json!({
+        "case_id": "promise-static-linkage",
+        "files": [{
+            "path": "main.ts",
+            "source": "export {}; const promised: Promise<number> = Promise.resolve(1);",
+        }],
+        "schema": 1,
+    }));
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        output.stdout.iter().filter(|byte| **byte == b'\n').count(),
+        1
+    );
+
+    let line = std::str::from_utf8(&output.stdout)
+        .expect("UTF-8 runner response")
+        .strip_suffix('\n')
+        .expect("one newline");
+    let receipt: Value = serde_json::from_str(line).expect("single-project response JSON");
+    assert_eq!(line, canonical(&receipt), "response must be canonical JSON");
+    assert_eq!(receipt["schema"], 1);
+    assert_eq!(receipt["tool"], "typokat");
+    assert_eq!(receipt["case_id"], "promise-static-linkage");
+    assert_eq!(receipt["file_count"], 1);
+    assert_eq!(
+        receipt["semantic"],
+        json!({
+            "diagnostics": [],
+            "exit_code": 0,
+            "incompletes": [],
+            "parse_errors": [],
+        })
+    );
+    assert_eq!(receipt["retained_frame_state"], 0);
+    assert_eq!(receipt["session_weak_alive_after"], false);
+    assert_eq!(receipt["cache_weak_alive_after"], false);
+    assert_eq!(
+        receipt["shared_product_identity"],
+        typokat_library::embedded_library_profile_metadata().profile_identity()
+    );
+    let identities = [
+        receipt["program_identity"].as_str(),
+        receipt["checker_identity"].as_str(),
+        receipt["semantic_identity"].as_str(),
+    ];
+    assert!(identities
+        .iter()
+        .all(|identity| identity.is_some_and(|value| !value.is_empty())));
+    assert_eq!(
+        identities
+            .into_iter()
+            .flatten()
+            .collect::<BTreeSet<_>>()
+            .len(),
+        3
+    );
+}
+
+#[test]
 fn single_project_rejects_noncanonical_or_nonexclusive_requests() {
     assert_rejected("", "exactly one canonical JSON request");
     assert_rejected(
