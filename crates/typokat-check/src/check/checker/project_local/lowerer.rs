@@ -400,9 +400,16 @@ struct ProductMappedFrame {
 
 #[derive(Default)]
 struct ProductInferFrame {
+    // Product references retain declaration identity. `binder_count` tracks source-name
+    // identity separately so repeated declarations (notably `infer _`) share one de Bruijn slot
+    // without allocating a second map.
     binders: BTreeMap<TypeParameterKey, u32>,
+    binder_count: usize,
     accepts_declarations: bool,
     active: bool,
+    // An outer binder referenced by a nested conditional cannot be freshened locally.
+    // Keep the graph intact but prevent every crossed frame from evaluating.
+    poisoned: bool,
 }
 
 #[derive(Clone)]
@@ -2139,7 +2146,7 @@ impl<'product, 'plan, 'interner> ProductLowerer<'product, 'plan, 'interner> {
                 if let Some(error) = error {
                     return Err(error);
                 }
-                let infer_count = u32::try_from(frame.binders.len())
+                let infer_count = u32::try_from(frame.binder_count)
                     .map_err(|_| ProductLoweringError::UnsupportedRecipe)?;
                 let conditional = ConditionalType {
                     check: check.expect("successful conditional check"),
@@ -2148,20 +2155,34 @@ impl<'product, 'plan, 'interner> ProductLowerer<'product, 'plan, 'interner> {
                     false_branch: false_branch.expect("successful conditional false branch"),
                     infer_count,
                     distributive: is_type_parameter_reference(self.product, check_recipe),
-                    poisoned: false,
+                    poisoned: frame.poisoned,
                 };
                 Ok(self.interner.intern_conditional(conditional))
             }
             TypeRecipeNode::Infer(parameter) => {
+                let product = self.product;
                 let Some(frame) = self.infer_frames.last_mut() else {
                     return Err(ProductLoweringError::UnsupportedRecipe);
                 };
                 if !frame.accepts_declarations {
                     return Err(ProductLoweringError::UnsupportedRecipe);
                 }
-                let next = u32::try_from(frame.binders.len())
+                let name = product.type_parameters()[parameter.index()].name;
+                let next = u32::try_from(frame.binder_count)
                     .map_err(|_| ProductLoweringError::UnsupportedRecipe)?;
-                let index = *frame.binders.entry(parameter).or_insert(next);
+                let index = match frame.binders.iter().find_map(|(candidate, index)| {
+                    (product.type_parameters()[candidate.index()].name == name).then_some(*index)
+                }) {
+                    Some(index) => index,
+                    None => {
+                        frame.binder_count = frame
+                            .binder_count
+                            .checked_add(1)
+                            .ok_or(ProductLoweringError::UnsupportedRecipe)?;
+                        next
+                    }
+                };
+                frame.binders.insert(parameter, index);
                 let constraint = self.product.type_parameters()[parameter.index()]
                     .constraint
                     .map(|constraint| self.lower_type(constraint, owner))
@@ -2405,7 +2426,9 @@ impl<'product, 'plan, 'interner> ProductLowerer<'product, 'plan, 'interner> {
                 })
             {
                 if Some(owner) != innermost {
-                    return Err(ProductLoweringError::UnsupportedRecipe);
+                    for frame in &mut self.infer_frames[owner..] {
+                        frame.poisoned = true;
+                    }
                 }
                 return Ok(self.interner.intern_infer(index));
             }
