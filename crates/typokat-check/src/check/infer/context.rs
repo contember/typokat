@@ -13,8 +13,8 @@ pub(super) struct InferenceContext<'query> {
     /// pair short-circuits (it is already contributing candidates further up). See
     /// the module docs.
     visited: FxHashSet<(TypeId, TypeId)>,
-    source_stack: Vec<RecursionFrame>,
-    target_stack: Vec<RecursionFrame>,
+    source_stack: Vec<TypeId>,
+    target_stack: Vec<TypeId>,
     source_expanding: bool,
     target_expanding: bool,
     mode: InferenceMode,
@@ -24,11 +24,6 @@ pub(super) struct InferenceContext<'query> {
     exhaustion: Option<crate::class_semantics::Exhaustion>,
     demands: Vec<crate::relate::RelationDemand>,
     demand_set: FxHashSet<crate::relate::RelationDemand>,
-}
-
-struct RecursionFrame {
-    ty: TypeId,
-    identity: TypeId,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -49,28 +44,18 @@ fn recursion_identity(interner: &Interner, raw: TypeId, normalized: DerivedType)
     declared_template.unwrap_or_else(|| interner.derivation_identity(normalized))
 }
 
-fn is_deeply_repeating(stack: &[RecursionFrame]) -> bool {
+/// Detect recursive structural expansion by semantic identity. Numeric `TypeId`
+/// order is allocation history, so it cannot distinguish expansion from descent.
+fn is_deeply_repeating(stack: &[TypeId]) -> bool {
     const MAX_DEPTH: usize = 2;
-    if stack.len() < MAX_DEPTH {
-        return false;
-    }
     let Some(current) = stack.last() else {
         return false;
     };
-    let mut count = 0;
-    let mut last_type = TypeId(0);
-    for frame in stack {
-        if frame.identity == current.identity {
-            if frame.ty >= last_type {
-                count += 1;
-                if count >= MAX_DEPTH {
-                    return true;
-                }
-            }
-            last_type = frame.ty;
-        }
-    }
-    false
+    stack
+        .iter()
+        .filter(|identity| *identity == current)
+        .nth(MAX_DEPTH - 1)
+        .is_some()
 }
 
 fn unwrap_declared_type_recipe(interner: &Interner, mut derived: DerivedType) -> DerivedType {
@@ -466,14 +451,9 @@ impl<'query> InferenceContext<'query> {
     ) {
         let source_identity = recursion_identity(interner, raw_source, source);
         let target_identity = recursion_identity(interner, raw_target, target);
-        self.source_stack.push(RecursionFrame {
-            ty: source.ty,
-            identity: source_identity,
-        });
-        self.target_stack.push(RecursionFrame {
-            ty: target.ty,
-            identity: target_identity,
-        });
+        // Normalized node ids depend on prior queries; semantic identities do not.
+        self.source_stack.push(source_identity);
+        self.target_stack.push(target_identity);
 
         let saved_source_expanding = self.source_expanding;
         let saved_target_expanding = self.target_expanding;
