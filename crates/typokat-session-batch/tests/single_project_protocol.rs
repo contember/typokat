@@ -231,6 +231,40 @@ fn single_project_links_promise_statics_in_an_external_module() {
 }
 
 #[test]
+fn single_project_preserves_warm_nested_set_inference() {
+    let output = invoke_request(json!({
+        "case_id": "warm-nested-set-inference",
+        "files": [{
+            "path": "main.ts",
+            "source": concat!(
+                "declare const values: Set<string>;\n",
+                "declare const nested: Set<Set<string>>;\n",
+                "declare function take<T>(values: Iterable<T>): T[];\n",
+                "declare function takeNested<T>(values: Iterable<Set<T>>): T[];\n",
+                "const firstClean: string[] = take(values);\n",
+                "const firstWrong: number[] = take(values);\n",
+                "const nestedClean: string[] = takeNested(nested);\n",
+                "const nestedWrong: number[] = takeNested(nested);\n",
+            ),
+        }],
+        "schema": 1,
+    }));
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+
+    let receipt: Value = serde_json::from_slice(&output.stdout).expect("runner response JSON");
+    assert_eq!(
+        receipt["semantic"],
+        json!({
+            "diagnostics": ["main.ts:6:7:2322", "main.ts:8:7:2322"],
+            "exit_code": 1,
+            "incompletes": [],
+            "parse_errors": [],
+        })
+    );
+}
+
+#[test]
 fn single_project_rejects_noncanonical_or_nonexclusive_requests() {
     assert_rejected("", "exactly one canonical JSON request");
     assert_rejected(
