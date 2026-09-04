@@ -927,8 +927,6 @@ pub struct BoundProjectBinder {
     pub module_scopes: Vec<ScopeId>,
     pub module_placeholders: Vec<Vec<ImportPlaceholder>>,
     pub project_sources: Vec<ProjectSourceBindingRow>,
-    #[cfg(any(test, feature = "test-utils"))]
-    pub normalized: ProjectBindingProductForTest,
 }
 
 impl BoundProjectBinder {
@@ -1039,14 +1037,6 @@ fn project_binding_measurement_counters() -> ProjectBindingMeasurementCounters {
         typed_products: PROJECT_BINDING_PRODUCTS.get(),
         heavy_binding_projections: PROJECT_BINDING_HEAVY_PROJECTIONS.get(),
     }
-}
-
-#[cfg(any(test, feature = "test-utils"))]
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ProjectBindingProductForTest {
-    pub normalized_per_path_binding_shape: Vec<String>,
-    pub normalized_import_export_shape: Vec<String>,
-    pub normalized_namespace_shape: Vec<String>,
 }
 
 #[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
@@ -2294,12 +2284,6 @@ where
         })
         .collect::<Result<Vec<_>, ProjectBindingCoreError<Ticket::Error>>>()?;
     project_sources.sort_by(|left, right| left.normalized_path.cmp(&right.normalized_path));
-    #[cfg(any(test, feature = "test-utils"))]
-    let normalized = {
-        PROJECT_BINDING_HEAVY_PROJECTIONS
-            .set(PROJECT_BINDING_HEAVY_PROJECTIONS.get().saturating_add(1));
-        normalized_project_binding_product(&binder, units, &module_scopes, &module_placeholders)
-    };
     #[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
     PROJECT_BINDING_PRODUCTS.set(PROJECT_BINDING_PRODUCTS.get().saturating_add(1));
     Ok(BoundProjectBinder {
@@ -2309,124 +2293,7 @@ where
         module_scopes,
         module_placeholders,
         project_sources,
-        #[cfg(any(test, feature = "test-utils"))]
-        normalized,
     })
-}
-
-#[cfg(any(test, feature = "test-utils"))]
-fn normalized_project_binding_product(
-    binder: &Binder,
-    units: &[ProjectProgram<'_>],
-    module_scopes: &[ScopeId],
-    module_placeholders: &[Vec<ImportPlaceholder>],
-) -> ProjectBindingProductForTest {
-    let mut rows = units
-        .iter()
-        .zip(module_scopes.iter().copied())
-        .zip(module_placeholders)
-        .collect::<Vec<_>>();
-    rows.sort_by(|left, right| left.0 .0.normalized_path.cmp(&right.0 .0.normalized_path));
-    let mut value_labels = BTreeMap::<u32, usize>::new();
-    let mut type_labels = BTreeMap::<u32, usize>::new();
-    let mut namespace_labels = BTreeMap::<u32, usize>::new();
-    let mut per_path = Vec::new();
-    let mut imports = Vec::new();
-    let mut namespaces = Vec::new();
-    for ((unit, module), placeholders) in rows {
-        let mut names = binder
-            .graph
-            .get(module)
-            .into_iter()
-            .flat_map(|scope| scope.symbols.keys())
-            .cloned()
-            .collect::<Vec<_>>();
-        if !unit.compilation_unit.binding.external_module {
-            let census = source_global_binding_census(unit.program, unit.compilation_unit.binding);
-            names.extend(census.candidates.into_keys());
-            names.extend(census.uncertain_candidates.into_keys());
-        }
-        names.sort();
-        names.dedup();
-        for name in names {
-            let Some(symbol_id) = binder.graph.resolve(module, &name) else {
-                continue;
-            };
-            let Some(symbol) = binder.symbols.get(symbol_id) else {
-                continue;
-            };
-            let next_value = value_labels.len();
-            let value = symbol
-                .value
-                .map(|id| *value_labels.entry(id.0).or_insert(next_value));
-            let next_type = type_labels.len();
-            let ty = symbol
-                .ty
-                .map(|id| *type_labels.entry(id.0).or_insert(next_type));
-            let next_namespace = namespace_labels.len();
-            let namespace = symbol
-                .ns
-                .map(|id| *namespace_labels.entry(id.0).or_insert(next_namespace));
-            per_path.push(format!(
-                "{}|{}|v={value:?}|t={ty:?}|n={namespace:?}|bv={}|bt={}|bn={}",
-                unit.normalized_path,
-                name,
-                symbol.blocks_value_lookup,
-                symbol.blocks_type_lookup,
-                symbol.blocks_namespace_lookup
-            ));
-            if let Some(attachment) = binder.namespace_value_attachment(module, &name) {
-                namespaces.push(format!(
-                    "{}|{}|attached={:?}|members={}",
-                    unit.normalized_path,
-                    name,
-                    attachment.disposition,
-                    attachment.members.len()
-                ));
-            } else if let Some(namespace) = symbol.ns {
-                namespaces.push(format!(
-                    "{}|{}|standalone={}",
-                    unit.normalized_path,
-                    name,
-                    binder
-                        .namespaces
-                        .standalone_value_storage(namespace)
-                        .is_some()
-                ));
-            }
-        }
-        for import in &unit.imports {
-            let symbol = binder
-                .graph
-                .get(module)
-                .and_then(|scope| scope.lookup_local(&import.local))
-                .and_then(|id| binder.symbols.get(id));
-            imports.push(format!(
-                "{}|{}<-{}|missing={}|v={}|t={}|bv={}|bt={}",
-                unit.normalized_path,
-                import.local,
-                import.imported,
-                matches!(import.source, ProjectImportSource::Missing(_)),
-                symbol.is_some_and(|symbol| symbol.value.is_some()),
-                symbol.is_some_and(|symbol| symbol.ty.is_some()),
-                symbol.is_some_and(|symbol| symbol.blocks_value_lookup),
-                symbol.is_some_and(|symbol| symbol.blocks_type_lookup)
-            ));
-        }
-        imports.push(format!(
-            "{}|placeholder_values={}",
-            unit.normalized_path,
-            placeholders
-                .iter()
-                .filter(|placeholder| placeholder.value.is_some())
-                .count()
-        ));
-    }
-    ProjectBindingProductForTest {
-        normalized_per_path_binding_shape: per_path,
-        normalized_import_export_shape: imports,
-        normalized_namespace_shape: namespaces,
-    }
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -2994,14 +2861,26 @@ pub(in crate::check::checker) fn check_bound_project_local_programs<'a, 'ast>(
     enqueue_ambient_context_diagnostics(&binder, &lexical_events, &mut external_effects)?;
 
     let error = interner.well_known().error;
+    let project_local_library_value_storages = binder
+        .declarations
+        .iter()
+        .filter(|declaration| {
+            binder
+                .source_for_module(declaration.site.module)
+                .and_then(|source| binder.namespaces.compilation_origin_for_source(source))
+                .is_some_and(|origin| matches!(origin, CompilationOrigin::Library(_)))
+        })
+        .filter_map(|declaration| declaration.value_storage)
+        .collect();
     let mut decl_types = DeclTypes::new(binder.decl_count);
     for (storage, ty) in product_value_types {
         decl_types.set(storage, ty);
     }
-    let project_local_library_global_names = product_global_values
+    let mut project_local_library_global_names = product_global_values
         .iter()
         .map(|(name, _)| name.clone())
         .collect::<FxHashSet<_>>();
+    project_local_library_global_names.insert("undefined".to_owned());
     let mut project_local_global_properties = final_global_inventory
         .rows
         .into_iter()
@@ -3015,6 +2894,9 @@ pub(in crate::check::checker) fn check_bound_project_local_programs<'a, 'ast>(
             project_local_global_properties.insert(name, ty);
         }
     }
+    project_local_global_properties
+        .entry("undefined".to_owned())
+        .or_insert(interner.well_known().undefined);
     let project_local_global_object = interner.intern_object(ObjectType {
         properties: project_local_global_properties
             .into_iter()
@@ -3054,6 +2936,7 @@ pub(in crate::check::checker) fn check_bound_project_local_programs<'a, 'ast>(
     pass.project_local_demand_gateway = Some(demand_gateway);
     pass.project_local_library_identity_groups = Some(library_identity_groups);
     pass.project_local_library_global_names = project_local_library_global_names;
+    pass.project_local_library_value_storages = project_local_library_value_storages;
     pass.semantic_queries
         .set_native_identity_availability(library_identity_groups.map(|group| group.is_some()));
     pass.certified_library_values = certified_library_values;
@@ -5809,6 +5692,7 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
         semantic_queries: SemanticQueryState::default(),
         library_semantic_identities: None,
         project_local_library_global_names: FxHashSet::default(),
+        project_local_library_value_storages: FxHashSet::default(),
         early_native_array_groups: None,
         early_native_array_root_source: None,
         certified_library_values: context::CertifiedLibraryValues::default(),

@@ -28,6 +28,7 @@ use crate::types::repr::{
     TupleRestType, TupleType, TypeParamId, TypeTag,
 };
 use crate::types::store::TypeId;
+use crate::types::substitute::SubstitutionOutcome;
 use crate::types::{instantiate_function, substitute, Interner, WellKnown};
 use oxc_ast::ast::{
     Argument, ArrowFunctionExpression, BindingPattern, CallExpression, Expression, FormalParameter,
@@ -2769,12 +2770,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 }
             }
             let relation_target = self.call_argument_relation_target(target, src);
+            let obligation_kind = self.call_argument_obligation_kind(arg_expr, target.declared);
             self.schedule_obligation(AssignObligation {
                 src,
                 tgt: relation_target,
                 src_span,
                 source_sites: Vec::new(),
-                kind: self.call_argument_obligation_kind(arg_expr, target.declared),
+                kind: obligation_kind,
             });
             // A `never` parameter makes this call candidate impossible. Later
             // contextual callback targets are recovery artifacts of that failure,
@@ -2929,17 +2931,33 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let mut evaluated = Vec::with_capacity(params.len());
         for mut parameter in params {
             if let Some(body) = self.symbolic_declared_alias_body(parameter.ty) {
-                if let DemandOutcome::Exhausted(exhaustion) = self.evaluate_type(body) {
-                    match exhaustion {
-                        Exhaustion::EvaluationInvalidNode { ty }
-                            if self.interner.reserved_enum_semantic_frontier(ty) =>
-                        {
-                            self.own_type_demand(
-                                DemandOutcome::Exhausted(Exhaustion::EvaluationInvalidNode { ty }),
-                                span,
-                            );
+                if parameter.rest {
+                    let structural = match self.interner.materialize_declared(parameter.ty) {
+                        Ok(SubstitutionOutcome::CycleClean(ty))
+                        | Ok(SubstitutionOutcome::CycleTainted(ty)) => ty,
+                        Err(_) => parameter.ty,
+                    };
+                    parameter.ty = match self.evaluate_type(structural) {
+                        DemandOutcome::Ready(ty) => ty,
+                        DemandOutcome::Exhausted(exhaustion) => {
+                            return DemandOutcome::Exhausted(exhaustion)
                         }
-                        exhaustion => return DemandOutcome::Exhausted(exhaustion),
+                    };
+                } else {
+                    if let DemandOutcome::Exhausted(exhaustion) = self.evaluate_type(body) {
+                        match exhaustion {
+                            Exhaustion::EvaluationInvalidNode { ty }
+                                if self.interner.reserved_enum_semantic_frontier(ty) =>
+                            {
+                                self.own_type_demand(
+                                    DemandOutcome::Exhausted(Exhaustion::EvaluationInvalidNode {
+                                        ty,
+                                    }),
+                                    span,
+                                );
+                            }
+                            exhaustion => return DemandOutcome::Exhausted(exhaustion),
+                        }
                     }
                 }
                 evaluated.push(parameter);
@@ -3432,11 +3450,18 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     }
 
     fn call_argument_obligation_kind(
-        &self,
+        &mut self,
         arg_expr: &Expression<'_>,
         param_ty: TypeId,
     ) -> ObligationKind {
-        let context = contextual_literal_target(self.interner.store(), param_ty);
+        let context = match self.demand_apparent_type(param_ty) {
+            DemandOutcome::Ready(context) => {
+                contextual_literal_target(self.interner.store(), context)
+            }
+            DemandOutcome::Exhausted(_) => {
+                contextual_literal_target(self.interner.store(), param_ty)
+            }
+        };
         match arg_expr {
             Expression::ParenthesizedExpression(paren) => {
                 self.call_argument_obligation_kind(&paren.expression, context)

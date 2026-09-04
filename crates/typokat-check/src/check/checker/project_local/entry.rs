@@ -21,7 +21,6 @@ use super::project_local_pass_port::{
     CheckResult, ContainerKind, LibraryBinderUnit, LibraryDeclarationProduct, NamespaceId,
     ProjectLocalFinalTypeDependencies, ProjectLocalNamespaceSeed, ProjectLocalPublishedTypeInputs,
     ProjectLocalUserPassOutput, ProjectLocalUserPassRequest, ProjectProgram, TypeGroupId,
-    ValueStorageId,
 };
 #[cfg(any(test, feature = "test-utils"))]
 use super::project_local_pass_port::{
@@ -692,45 +691,45 @@ where
         });
     let next_type_param = u32::try_from(coordinator.type_parameter_ids().len())
         .expect("product type parameter count fits u32");
+    let product_map = bound
+        .library_product_map()
+        .ok_or(ProjectLocalCandidateErrorForTest::MissingProductBinderMap)?;
+    let product_value_storages = |product_key: usize| {
+        product
+            .groups()
+            .get(product_key)
+            .into_iter()
+            .flat_map(|group| group.fragments.iter())
+            .filter_map(|declaration| product_map.declaration(*declaration)?.value())
+            .collect::<Vec<_>>()
+    };
     let certified_library_values = super::project_local_pass_port::CertifiedLibraryValues {
         symbol: certified_well_known_symbol_owner(product)
-            .and_then(|owner| {
-                coordinator
-                    .mapped_groups()
-                    .get(owner.index())
-                    .filter(|row| row.product_key == owner.index())
-            })
-            .and_then(|row| row.local_value)
-            .map(|storage| {
-                ValueStorageId(u32::try_from(storage).expect("local value identity fits u32"))
-            }),
+            .and_then(|owner| product_value_storages(owner.index()).into_iter().next()),
     };
     let product_value_types = coordinator
         .mapped_groups()
         .iter()
         .filter_map(|row| {
-            let storage = row.local_value?;
             let ty = coordinator
                 .semantic_group_value_types()
                 .get(row.product_key)
                 .copied()
                 .flatten()?;
-            Some((
-                super::project_local_pass_port::ValueStorageId(
-                    u32::try_from(storage).expect("local value identity fits u32"),
-                ),
-                ty,
-            ))
+            Some(
+                product_value_storages(row.product_key)
+                    .into_iter()
+                    .map(move |storage| (storage, ty)),
+            )
         })
+        .flatten()
         .collect();
     let product_global_values =
         compilation_global_value_product_keys(product, &bound, coordinator.mapped_groups())?
             .into_iter()
             .filter_map(|product_key| {
                 let row = coordinator.mapped_groups().get(product_key)?;
-                let storage = ValueStorageId(
-                    u32::try_from(row.local_value?).expect("local value identity fits u32"),
-                );
+                let storage = product_value_storages(product_key).into_iter().next()?;
                 let name = product.strings()[row.name.index()].clone();
                 Some((name, storage))
             })
@@ -740,7 +739,7 @@ where
         .iter()
         .filter_map(|row| {
             let namespace = row.local_namespace?;
-            let storage = row.local_value?;
+            let storage = product_value_storages(row.product_key).into_iter().next()?;
             let ty = coordinator
                 .semantic_group_value_types()
                 .get(row.product_key)
@@ -750,9 +749,7 @@ where
                 namespace: NamespaceId(
                     u32::try_from(namespace).expect("local namespace identity fits u32"),
                 ),
-                storage: super::project_local_pass_port::ValueStorageId(
-                    u32::try_from(storage).expect("local value identity fits u32"),
-                ),
+                storage,
                 ty,
             })
         })
@@ -830,14 +827,18 @@ where
     Commit: FnMut(&mut ProjectLocalSemanticCoordinator) -> Result<(), &'static str>,
 {
     for (local, overlay) in coordinator.overlays() {
-        let stable = matches!(
-            output.published_type_groups.get(local.index()),
-            Some(super::project_local_pass_port::PublishedTypeGroupTerminal::Ready(group))
-                if group.surface
+        let stable = match output.published_type_groups.get(local.index()) {
+            Some(super::project_local_pass_port::PublishedTypeGroupTerminal::Ready(group)) => {
+                group.surface
                     == super::project_local_pass_port::PublishedTypeGroupSurface::Template(
-                        overlay.template
+                        overlay.template,
                     )
-        );
+            }
+            Some(super::project_local_pass_port::PublishedTypeGroupTerminal::Unavailable(_)) => {
+                true
+            }
+            None => false,
+        };
         if !stable {
             return Err(ProjectLocalCandidateErrorForTest::UserPass(
                 "project-local type overlay changed its reserved semantic identity",

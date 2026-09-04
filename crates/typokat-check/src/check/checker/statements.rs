@@ -16,7 +16,7 @@ use crate::class_semantics::DemandOutcome;
 use crate::diagnostics::{render_reason_chain, render_type, Diagnostic};
 use crate::relate::{Reason, RelationOutcome};
 use crate::span::Span;
-use crate::types::repr::{FunctionType, LiteralValue, ObjectType};
+use crate::types::repr::{FunctionType, LiteralValue, ObjectType, TypeTag};
 use crate::types::store::{Store, TypeId};
 use oxc_ast::ast::{
     BindingIdentifier, BindingPattern, BindingProperty, BlockStatement, Declaration,
@@ -1574,6 +1574,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         };
 
         let mut leaves = Vec::new();
+        let mut skipped_library_collision = false;
         for identifier in declarator.id.get_binding_identifiers() {
             let Some(declaration) = self.binder.exact_declaration_at(
                 self.current_module,
@@ -1599,12 +1600,38 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             let participant = symbol
                 .and_then(|symbol| self.binder.symbols.get(symbol))
                 .is_some_and(|symbol| symbol.declarations.contains(&declaration.id));
+            let library_collision = symbol
+                .and_then(|symbol| self.binder.symbols.get(symbol))
+                .is_some_and(|symbol| {
+                    symbol.declarations.iter().any(|candidate| {
+                        self.binder
+                            .declarations
+                            .get(*candidate)
+                            .and_then(|candidate| candidate.value_storage)
+                            .is_some_and(|storage| {
+                                storage != exact_storage
+                                    && self.project_local_library_value_storages.contains(&storage)
+                            })
+                    })
+                });
+            if participant && library_collision {
+                skipped_library_collision = true;
+                continue;
+            }
             let visible_storage = symbol
                 .and_then(|symbol| self.binder.symbols.get(symbol))
                 .and_then(|symbol| symbol.value)
                 .filter(|_| participant)
                 .unwrap_or(exact_storage);
-            let effective_storage = visible_storage;
+            let effective_storage = if visible_storage != exact_storage
+                && self
+                    .project_local_library_value_storages
+                    .contains(&visible_storage)
+            {
+                exact_storage
+            } else {
+                visible_storage
+            };
             leaves.push(ObjectBindingPendingLeaf {
                 declaration: declaration.id,
                 exact_storage,
@@ -1614,6 +1641,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
 
         if leaves.is_empty() {
+            if skipped_library_collision {
+                return;
+            }
             self.with_ticket_effects(owner, |pass| {
                 pass.record_incomplete(
                     "bind/binding-pattern/object-pattern",
@@ -2496,6 +2526,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         decl_id: ValueStorageId,
         ty: TypeId,
     ) {
+        if kind.is_var()
+            && matches!(
+                self.var_value_type_states.get(&decl_id),
+                Some(VarValueTypeState::Source | VarValueTypeState::Existing)
+            )
+        {
+            return;
+        }
         self.set_variable_decl_type(scope, kind, pattern, decl_id, ty);
         if kind.is_var() {
             self.var_value_type_states
@@ -2727,8 +2765,50 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 .participants
                 .sort_by_key(|participant| *participant == tail);
         }
-        let inherited_participants = Vec::new();
-        let inherited_call_signatures = Vec::new();
+        let inherited_participants = identity
+            .participants
+            .iter()
+            .copied()
+            .filter(|participant| {
+                self.project_local_library_value_storages
+                    .contains(participant)
+            })
+            .collect::<Vec<_>>();
+        let mut inherited_call_signatures = inherited_participants
+            .iter()
+            .filter_map(|participant| self.decl_type(*participant))
+            .flat_map(|ty| {
+                if self.interner.store().function_type(ty).is_some() {
+                    vec![ty]
+                } else {
+                    self.interner
+                        .store()
+                        .object_type(ty)
+                        .map(|object| object.call_signatures.clone())
+                        .unwrap_or_default()
+                }
+            })
+            .collect::<Vec<_>>();
+        if self.project_local_library_global_names.contains(name) {
+            let inherited_global = self
+                .global_object_type
+                .and_then(|global| self.interner.store().object_type(global))
+                .and_then(|global| global.property(name))
+                .map(|property| property.ty);
+            if let Some(ty) = inherited_global {
+                if self.interner.store().function_type(ty).is_some() {
+                    if !inherited_call_signatures.contains(&ty) {
+                        inherited_call_signatures.push(ty);
+                    }
+                } else if let Some(object) = self.interner.store().object_type(ty) {
+                    for signature in &object.call_signatures {
+                        if !inherited_call_signatures.contains(signature) {
+                            inherited_call_signatures.push(*signature);
+                        }
+                    }
+                }
+            }
+        }
         self.function_groups.register(identity.clone());
         self.function_groups.seed_inherited_publication(
             identity.symbol,
@@ -3703,21 +3783,23 @@ pub(in crate::check::checker) fn emit_obligation_failure(
             store,
             diagnostic_span,
             headline_src(ob, head),
-            ob.tgt,
+            headline_tgt(store, ob, head),
             head,
         ),
         ObligationKind::Argument => {
-            let widen = !is_literal_target(store, ob.tgt);
+            let target = headline_tgt(store, ob, head);
+            let widen = !is_literal_target(store, target);
             let src = render_type(store, headline_src(ob, head), widen);
-            let tgt = render_type(store, ob.tgt, /* widen */ false);
+            let tgt = render_type(store, target, /* widen */ false);
             Diagnostic::argument_not_assignable(diagnostic_span, &src, &tgt)
                 .with_elaboration(elaboration)
         }
         ObligationKind::FreshArgument => match head {
             Reason::MissingProperty { .. } | Reason::TupleLength { .. } => {
-                let widen = !is_literal_target(store, ob.tgt);
+                let target = headline_tgt(store, ob, head);
+                let widen = !is_literal_target(store, target);
                 let src = render_type(store, headline_src(ob, head), widen);
-                let tgt = render_type(store, ob.tgt, /* widen */ false);
+                let tgt = render_type(store, target, /* widen */ false);
                 Diagnostic::argument_not_assignable(diagnostic_span, &src, &tgt)
                     .with_elaboration(elaboration)
             }
@@ -3731,9 +3813,10 @@ pub(in crate::check::checker) fn emit_obligation_failure(
             | Reason::ArrayElement { .. }
             | Reason::TupleElement { .. }
             | Reason::IndexSignature { .. } => {
-                let widen = !is_literal_target(store, ob.tgt);
+                let target = headline_tgt(store, ob, head);
+                let widen = !is_literal_target(store, target);
                 let src = render_type(store, headline_src(ob, head), widen);
-                let tgt = render_type(store, ob.tgt, /* widen */ false);
+                let tgt = render_type(store, target, /* widen */ false);
                 let message = format!("Type '{src}' is not assignable to type '{tgt}'");
                 Diagnostic::not_assignable(diagnostic_span, message).with_elaboration(elaboration)
             }
@@ -3900,6 +3983,24 @@ fn headline_src(ob: &AssignObligation, head: &Reason) -> TypeId {
         Reason::Leaf { src, .. } => *src,
         _ => ob.src,
     }
+}
+
+fn headline_tgt(store: &Store, ob: &AssignObligation, head: &Reason) -> TypeId {
+    if matches!(
+        store.tag(ob.tgt),
+        TypeTag::Declared
+            | TypeTag::Instantiation
+            | TypeTag::Conditional
+            | TypeTag::Mapped
+            | TypeTag::Template
+            | TypeTag::Keyof
+            | TypeTag::DeferredIndexedAccess
+    ) {
+        if let Reason::Leaf { tgt, .. } = head {
+            return *tgt;
+        }
+    }
+    ob.tgt
 }
 
 /// Whether the message's **target** is a literal / unit type (M25). When it is, the

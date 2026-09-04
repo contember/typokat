@@ -2,7 +2,7 @@
 # Regenerate: TYPOKAT_BLESS_LIBRARY_RECORDS=1 cargo test --test library_owned_records
 # Columns are tab-separated: kind, name, file:line:column, detail.
 # profile: ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d
-# diagnostics: 322, incompletes: 387, records: 709
+# diagnostics: 318, incompletes: 385, records: 703
 incomplete	annotation-lower/type-reference/default-argument	lib.decorators.d.ts:31:7	type-parameter default unavailable at application
 incomplete	annotation-lower/type-query/typeof	lib.decorators.d.ts:36:26	typeof type query not lowered
 incomplete	annotation-lower/constructor-type/abstract	lib.decorators.d.ts:43:19	abstract constructor type not modeled
@@ -374,8 +374,6 @@ incomplete	annotation-lower/type-predicate/self	lib.es2015.core.d.ts:27:73	type 
 incomplete	annotation-lower/this-type/self	lib.es2015.core.d.ts:49:51	this type annotation not modeled
 incomplete	annotation-lower/this-type/self	lib.es2015.core.d.ts:60:62	this type annotation not modeled
 incomplete	annotation-lower/type-predicate/self	lib.es2015.core.d.ts:350:82	type predicate not lowered
-diagnostic	TK2430	lib.es2015.generator.d.ts:19:11	Interface 'Generator' incorrectly extends interface 'IteratorObject'.
-diagnostic	TK2430	lib.es2015.generator.d.ts:19:11	Interface 'Generator' incorrectly extends interface 'IteratorObject'.
 incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.iterable.d.ts:24:24	unique symbol operator not lowered
 incomplete	annotation-lower/optional-method/self	lib.es2015.iterable.d.ts:42:5	optional method signature not modeled
 incomplete	annotation-lower/optional-method/self	lib.es2015.iterable.d.ts:43:5	optional method signature not modeled
@@ -410,8 +408,6 @@ incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.symbol.wellk
 incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.symbol.wellknown.d.ts:66:27	unique symbol operator not lowered
 incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.symbol.wellknown.d.ts:72:27	unique symbol operator not lowered
 incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.symbol.wellknown.d.ts:78:27	unique symbol operator not lowered
-diagnostic	TK2430	lib.es2018.asyncgenerator.d.ts:19:11	Interface 'AsyncGenerator' incorrectly extends interface 'AsyncIteratorObject'.
-diagnostic	TK2430	lib.es2018.asyncgenerator.d.ts:19:11	Interface 'AsyncGenerator' incorrectly extends interface 'AsyncIteratorObject'.
 incomplete	annotation-lower/type-operator/unique-operand	lib.es2018.asynciterable.d.ts:25:29	unique symbol operator not lowered
 incomplete	annotation-lower/optional-method/self	lib.es2018.asynciterable.d.ts:31:5	optional method signature not modeled
 incomplete	annotation-lower/optional-method/self	lib.es2018.asynciterable.d.ts:32:5	optional method signature not modeled
@@ -481,6 +477,7 @@ incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:892:20	this typ
 incomplete	annotation-lower/interface-accessor/self	lib.es2024.arraybuffer.d.ts:23:5	interface accessor signature not modeled
 incomplete	annotation-lower/interface-accessor/self	lib.es2024.arraybuffer.d.ts:30:5	interface accessor signature not modeled
 incomplete	annotation-lower/interface-accessor/self	lib.es2024.arraybuffer.d.ts:44:5	interface accessor signature not modeled
+diagnostic	TK2344	lib.es2024.object.d.ts:26:23	Type 'K' does not satisfy the constraint 'number | string | symbol'.
 incomplete	annotation-lower/interface-accessor/self	lib.es2024.sharedmemory.d.ts:47:5	interface accessor signature not modeled
 incomplete	annotation-lower/interface-accessor/self	lib.es2024.sharedmemory.d.ts:54:5	interface accessor signature not modeled
 incomplete	annotation-lower/this-type/self	lib.es2025.float16.d.ts:60:62	this type annotation not modeled
@@ -520,7 +517,6 @@ diagnostic	TK2430	lib.es5.d.ts:329:11	Interface 'CallableFunction' incorrectly e
 diagnostic	TK2430	lib.es5.d.ts:329:11	Interface 'CallableFunction' incorrectly extends interface 'Function'.
 diagnostic	TK2430	lib.es5.d.ts:366:11	Interface 'NewableFunction' incorrectly extends interface 'Function'.
 diagnostic	TK2430	lib.es5.d.ts:366:11	Interface 'NewableFunction' incorrectly extends interface 'Function'.
-diagnostic	TK2430	lib.es5.d.ts:619:11	Interface 'TemplateStringsArray' incorrectly extends interface 'ReadonlyArray'.
 diagnostic	TK2430	lib.es5.d.ts:961:11	Interface 'RegExpMatchArray' incorrectly extends interface 'Array'.
 diagnostic	TK2430	lib.es5.d.ts:976:11	Interface 'RegExpExecArray' incorrectly extends interface 'Array'.
 incomplete	annotation-lower/this-type/self	lib.es5.d.ts:1020:47	this type annotation not modeled
@@ -532,8 +528,6 @@ incomplete	annotation-lower/type-predicate/self	lib.es5.d.ts:1438:76	type predic
 incomplete	annotation-lower/type-predicate/self	lib.es5.d.ts:1438:104	type predicate not lowered
 incomplete	annotation-lower/type-predicate/self	lib.es5.d.ts:1474:77	type predicate not lowered
 incomplete	annotation-lower/type-predicate/self	lib.es5.d.ts:1518:24	type predicate not lowered
-incomplete	annotation-lower/type-operator/keyof-operand	lib.es5.d.ts:1611:23	keyof operand has no modeled property keys
-incomplete	annotation-lower/type-operator/keyof-operand	lib.es5.d.ts:1628:24	keyof operand has no modeled property keys
 incomplete	annotation-lower/constructor-type/abstract	lib.es5.d.ts:1643:38	abstract constructor type not modeled
 incomplete	annotation-lower/constructor-type/abstract	lib.es5.d.ts:1643:86	abstract constructor type not modeled
 incomplete	annotation-lower/constructor-type/abstract	lib.es5.d.ts:1653:29	abstract constructor type not modeled

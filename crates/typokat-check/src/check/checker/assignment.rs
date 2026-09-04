@@ -780,13 +780,29 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         normalized: &mut FxHashMap<TypeId, TypeId>,
     ) -> DemandOutcome<TypeId> {
         let tag = self.interner.store().tag(target_ty);
+        let alias_application = tag == TypeTag::Instantiation
+            && self
+                .interner
+                .store()
+                .instantiation_type(target_ty)
+                .is_some_and(|application| {
+                    self.interner.store().tag(application.base) == TypeTag::AliasTemplate
+                });
         let demanded = match tag {
-            TypeTag::Declared => match self.evaluate_type(target_ty) {
+            TypeTag::Declared => match self.demand_apparent_type(target_ty) {
                 DemandOutcome::Ready(demanded) => demanded,
                 DemandOutcome::Exhausted(exhaustion) => {
                     return DemandOutcome::Exhausted(exhaustion);
                 }
             },
+            TypeTag::Instantiation if alias_application => {
+                match self.demand_apparent_type(target_ty) {
+                    DemandOutcome::Ready(demanded) => demanded,
+                    DemandOutcome::Exhausted(exhaustion) => {
+                        return DemandOutcome::Exhausted(exhaustion);
+                    }
+                }
+            }
             TypeTag::Readonly => {
                 let Some(operand) = self.interner.store().readonly_operand(target_ty) else {
                     return DemandOutcome::Ready(target_ty);

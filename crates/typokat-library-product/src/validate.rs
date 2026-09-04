@@ -641,15 +641,38 @@ impl LibraryDeclarationProduct {
                     row,
                 });
             };
-            let DeclarationPayload::TypeAlias { value, .. } = declaration.payload else {
-                return Err(ProductValidationError::InvalidIntrinsicMarker { row });
+            let valid_shape = match (marker.marker, &declaration.payload) {
+                (
+                    crate::schema::IntrinsicMarker::ThisType,
+                    DeclarationPayload::Interface {
+                        type_parameters,
+                        members,
+                        heritage,
+                    },
+                ) => type_parameters.len() == 1 && members.is_empty() && heritage.is_empty(),
+                (
+                    crate::schema::IntrinsicMarker::OmitThisParameter,
+                    DeclarationPayload::TypeAlias {
+                        type_parameters, ..
+                    },
+                ) => type_parameters.len() == 1,
+                (kind, DeclarationPayload::TypeAlias { value, .. })
+                    if !matches!(
+                        kind,
+                        crate::schema::IntrinsicMarker::ThisType
+                            | crate::schema::IntrinsicMarker::OmitThisParameter
+                    ) =>
+                {
+                    matches!(
+                        self.types.get(value.index()).map(|recipe| &recipe.node),
+                        Some(TypeRecipeNode::Keyword(
+                            crate::schema::KeywordKind::Intrinsic
+                        ))
+                    )
+                }
+                _ => false,
             };
-            if !matches!(
-                self.types.get(value.index()).map(|recipe| &recipe.node),
-                Some(TypeRecipeNode::Keyword(
-                    crate::schema::KeywordKind::Intrinsic
-                ))
-            ) {
+            if !valid_shape {
                 return Err(ProductValidationError::InvalidIntrinsicMarker { row });
             }
             if self.strings[declaration.name.index()] != intrinsic_marker_alias(marker.marker) {
@@ -1242,6 +1265,8 @@ fn intrinsic_marker_alias(marker: crate::schema::IntrinsicMarker) -> &'static st
         crate::schema::IntrinsicMarker::Uncapitalize => "Uncapitalize",
         crate::schema::IntrinsicMarker::NoInfer => "NoInfer",
         crate::schema::IntrinsicMarker::BuiltinIteratorReturn => "BuiltinIteratorReturn",
+        crate::schema::IntrinsicMarker::ThisType => "ThisType",
+        crate::schema::IntrinsicMarker::OmitThisParameter => "OmitThisParameter",
     }
 }
 

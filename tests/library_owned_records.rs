@@ -19,8 +19,8 @@ const PIN_PATH: &str = "tests/fixtures/library-owned-records.txt";
 /// Rewrite the pin instead of failing. Deliberate, and never set in CI.
 const BLESS: &str = "TYPOKAT_BLESS_LIBRARY_RECORDS";
 
-const PINNED_DIAGNOSTICS: usize = 322;
-const PINNED_INCOMPLETES: usize = 387;
+const PINNED_DIAGNOSTICS: usize = 318;
+const PINNED_INCOMPLETES: usize = 385;
 const FULL_LIBRARY_CLEAN: &str =
     include_str!("../tooling/full-lib-bench/workloads/fast-clean/main.ts");
 
@@ -108,7 +108,7 @@ fn every_pinned_entry_names_a_code_and_a_site() {
 
 /// No library-owned record reaches a user's output on the production driver path.
 ///
-/// The production census contains 709 library-owned records; a user check must see none of
+/// The production census contains 703 library-owned records; a user check must see none of
 /// them, and must still see its own.
 #[test]
 fn no_library_owned_record_reaches_user_output() {

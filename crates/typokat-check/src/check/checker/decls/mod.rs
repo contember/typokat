@@ -2412,6 +2412,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             let mut own = crate::types::repr::ObjectType::default();
             let mut first_method_members = BTreeSet::new();
             let mut lowered_fragments = Vec::with_capacity(fragments.len());
+            let mut unavailable = false;
             for fragment in fragments {
                 let frame = self.build_type_param_frame(fragment.param_decl, &fragment.params);
                 let lowered =
@@ -2424,6 +2425,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                             )
                         })
                     });
+                unavailable |= lowered.unavailable;
                 let fragment_methods = lowered.method_keys;
                 let fragment_own = lowered.object;
                 lowered_fragments.push((fragment, fragment_own.clone()));
@@ -2435,12 +2437,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 );
             }
             let alternatives = self.validate_interface_fragment_conflicts(&lowered_fragments);
-            own_objects.push((index, own, alternatives));
+            own_objects.push((index, own, alternatives, unavailable));
         }
 
         let component_set: FxHashSet<usize> = component.iter().copied().collect();
         let mut completed = Vec::with_capacity(component.len());
-        for (index, own, mut alternatives) in own_objects {
+        for (index, own, mut alternatives, unavailable) in own_objects {
             let TypeDecl::Interface { fragments, .. } = &self.type_decls[index] else {
                 unreachable!()
             };
@@ -2581,12 +2583,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 unreachable!()
             };
             *conflict_alternatives = alternatives;
-            completed.push((index, complete, own_surface));
+            completed.push((index, complete, own_surface, unavailable));
         }
 
         let fills = completed
             .into_iter()
-            .map(|(index, mut object, own_surface)| {
+            .map(|(index, mut object, own_surface, overlay_unavailable)| {
                 let (reserved, recovery_params) = match &self.type_decls[index] {
                     TypeDecl::Interface {
                         reserved,
@@ -2603,8 +2605,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     _ => unreachable!(),
                 };
                 if let Some(overlay) = overlay {
-                    let mut unavailable = false;
-                    if recovery_params.len() != overlay.parameters.len() {
+                    let mut unavailable = overlay_unavailable;
+                    if unavailable || recovery_params.len() != overlay.parameters.len() {
                         unavailable = true;
                         object = overlay.object.clone();
                     } else {

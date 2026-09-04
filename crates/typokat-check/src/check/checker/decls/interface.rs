@@ -4,6 +4,7 @@ use crate::binder::scope::ScopeId;
 use crate::span::Span;
 use crate::types::repr::{ObjectType, PropertyKey, PropertyType};
 use crate::types::store::TypeId;
+use crate::types::{substitute_with_outcome, SubstitutionOutcome};
 use oxc_ast::ast::{Expression, TSInterfaceHeritage, TSSignature};
 use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -18,6 +19,7 @@ struct InterfaceMethodOverloadAccumulator {
 pub(super) struct LoweredInterfaceMembers {
     pub(super) object: ObjectType,
     pub(super) method_keys: BTreeSet<PropertyKey>,
+    pub(super) unavailable: bool,
 }
 
 fn flatten_qualified_heritage_expression<'a>(
@@ -281,6 +283,37 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 .collect::<Option<Vec<_>>>()?;
             return Some(merge_intersection_objects(self.interner, objects));
         }
+        if let Some(instantiation) = self.interner.store().instantiation_type(ty).cloned() {
+            if let Some(alias) = self.interner.store().alias_template_id(instantiation.base) {
+                let surface = self.construction_alias_surface(alias)?;
+                if typokat_types::alias_semantics::PublishedAliases::validate_ready_surface(
+                    self.interner.store(),
+                    alias,
+                    &surface,
+                )
+                .is_err()
+                    || surface.template() != instantiation.base
+                    || surface.type_params().len() != instantiation.args.len()
+                    || surface
+                        .type_params()
+                        .iter()
+                        .zip(&instantiation.args)
+                        .any(|(expected, (actual, _))| expected != actual)
+                {
+                    return None;
+                }
+                let substitutions = instantiation.args.into_iter().collect::<FxHashMap<_, _>>();
+                let projected =
+                    match substitute_with_outcome(self.interner, surface.body(), &substitutions) {
+                        SubstitutionOutcome::CycleClean(projected)
+                        | SubstitutionOutcome::CycleTainted(projected) => projected,
+                    };
+                if projected == ty {
+                    return None;
+                }
+                return self.project_interface_heritage_type(projected);
+            }
+        }
         let application = self.interner.store().class_instance_type(ty).cloned()?;
         let crate::class_semantics::DemandOutcome::Ready(surface) = self
             .staged_published_classes
@@ -377,6 +410,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         declaration: Option<crate::binder::declaration::DeclId>,
     ) -> LoweredInterfaceMembers {
         let mut object = ObjectType::default();
+        let mut unavailable = false;
         let overloaded_method_keys = self.overloaded_method_keys(scope, members);
         let mut overloads: FxHashMap<PropertyKey, InterfaceMethodOverloadAccumulator> =
             FxHashMap::default();
@@ -388,6 +422,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 TSSignature::TSPropertySignature(sig) => {
                     let Some(key) = pass.signature_property_key(scope, &sig.key, sig.computed)
                     else {
+                        unavailable = true;
                         pass.record_property_signature_computed_key(&sig.key);
                         if let Some(annotation) = sig.type_annotation.as_ref() {
                             pass.lower_annotation(scope, &annotation.type_annotation);
@@ -420,6 +455,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                                 let Some(ty) =
                                     pass.lower_annotation(scope, &annotation.type_annotation)
                                 else {
+                                    unavailable = true;
                                     return;
                                 };
                                 ty
@@ -451,11 +487,17 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 // un-lowerable value) is **skipped** (lenient, like an out-of-subset
                 // property), so the interface keeps the members it can express.
                 TSSignature::TSIndexSignature(sig) => {
-                    let _ = pass.lower_index_signature(scope, sig, &mut object);
+                    if pass
+                        .lower_index_signature(scope, sig, &mut object)
+                        .is_none()
+                    {
+                        unavailable = true;
+                    }
                 }
                 TSSignature::TSMethodSignature(sig) => {
                     let Some(key) = pass.signature_property_key(scope, &sig.key, sig.computed)
                     else {
+                        unavailable = true;
                         pass.record_method_signature_computed_key(&sig.key);
                         pass.lower_generic_strict_signature_function_type(
                             scope,
@@ -500,16 +542,22 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     }
                     if let Some(prop) = pass.lower_method_signature_property(scope, sig) {
                         object.properties.push(prop);
+                    } else {
+                        unavailable = true;
                     }
                 }
                 TSSignature::TSCallSignatureDeclaration(sig) => {
                     if let Some(signature) = pass.lower_call_signature(scope, sig) {
                         object.call_signatures.push(signature);
+                    } else {
+                        unavailable = true;
                     }
                 }
                 TSSignature::TSConstructSignatureDeclaration(sig) => {
                     if let Some(signature) = pass.lower_construct_signature(scope, sig) {
                         object.construct_signatures.push(signature);
+                    } else {
+                        unavailable = true;
                     }
                 }
             };
@@ -532,6 +580,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 .remove(&key)
                 .expect("every interface overload retains its accumulator");
             if overload.unavailable || overload.call_signatures.is_empty() {
+                unavailable = true;
                 continue;
             }
             let ty = if overload.unsupported {
@@ -549,6 +598,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         LoweredInterfaceMembers {
             object,
             method_keys,
+            unavailable,
         }
     }
 }

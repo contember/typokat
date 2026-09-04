@@ -1629,6 +1629,11 @@ fn expected_trusted_intrinsic_markers(
     product: &LibraryDeclarationProduct,
 ) -> Vec<IntrinsicMarkerRecipe> {
     [
+        (
+            "lib.es5.d.ts",
+            "OmitThisParameter",
+            IntrinsicMarker::OmitThisParameter,
+        ),
         ("lib.es5.d.ts", "Uppercase", IntrinsicMarker::Uppercase),
         ("lib.es5.d.ts", "Lowercase", IntrinsicMarker::Lowercase),
         ("lib.es5.d.ts", "Capitalize", IntrinsicMarker::Capitalize),
@@ -1638,6 +1643,7 @@ fn expected_trusted_intrinsic_markers(
             IntrinsicMarker::Uncapitalize,
         ),
         ("lib.es5.d.ts", "NoInfer", IntrinsicMarker::NoInfer),
+        ("lib.es5.d.ts", "ThisType", IntrinsicMarker::ThisType),
         (
             "lib.es2015.iterable.d.ts",
             "BuiltinIteratorReturn",

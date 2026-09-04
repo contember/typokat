@@ -1634,6 +1634,8 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     pub(in crate::check::checker) library_semantic_identities: Option<LibrarySemanticIdentities>,
     /// Immutable-product globals whose value winner must not be replaced by user refreshes.
     pub(in crate::check::checker) project_local_library_global_names: FxHashSet<String>,
+    /// Immutable-product value declarations already published before user source checking.
+    pub(in crate::check::checker) project_local_library_value_storages: FxHashSet<ValueStorageId>,
     /// Exact library-root array roles available before type-group publication.
     pub(in crate::check::checker) early_native_array_groups: Option<NativeArrayGroups>,
     /// Outermost type-declaration source that authorizes construction-only array roles.

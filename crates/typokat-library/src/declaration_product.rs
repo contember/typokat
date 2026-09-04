@@ -68,11 +68,16 @@ pub(super) fn build_declaration_product(
 
 fn packaged_intrinsic_marker_evidence(
     _verified_profile: &ExactLibraryProfile,
-) -> [CertifiedIntrinsicMarkerEvidence; 6] {
+) -> [CertifiedIntrinsicMarkerEvidence; 8] {
     use typokat_library_product::IntrinsicMarker;
 
     // These byte sites are trusted only after the packaged profile verifies its source bytes.
     [
+        CertifiedIntrinsicMarkerEvidence {
+            source_ordinal: 0,
+            binding_start: 11_865,
+            marker: IntrinsicMarker::OmitThisParameter,
+        },
         CertifiedIntrinsicMarkerEvidence {
             source_ordinal: 0,
             binding_start: 75_505,
@@ -97,6 +102,11 @@ fn packaged_intrinsic_marker_evidence(
             source_ordinal: 0,
             binding_start: 75_941,
             marker: IntrinsicMarker::NoInfer,
+        },
+        CertifiedIntrinsicMarkerEvidence {
+            source_ordinal: 0,
+            binding_start: 76_021,
+            marker: IntrinsicMarker::ThisType,
         },
         CertifiedIntrinsicMarkerEvidence {
             source_ordinal: 20,

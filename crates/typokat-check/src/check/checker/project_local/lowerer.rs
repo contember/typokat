@@ -971,6 +971,16 @@ impl<'product, 'plan, 'interner> ProductLowerer<'product, 'plan, 'interner> {
                 return Ok(Some(ty));
             }
         }
+        if !group.slots.namespace
+            && object.properties.is_empty()
+            && object.construct_signatures.is_empty()
+            && object.call_signatures.len() == 1
+        {
+            let ty = object.call_signatures[0];
+            self.group_value_types[group_index] = Some(ty);
+            self.value_states[group_index] = GroupState::Ready;
+            return Ok(Some(ty));
+        }
         let ty = if let Some(reserved) = self.group_value_types[group_index] {
             self.interner.fill_object(reserved, object);
             reserved
@@ -3365,6 +3375,10 @@ impl<'product, 'plan, 'interner> ProductLowerer<'product, 'plan, 'interner> {
             IntrinsicMarker::Capitalize => Ok(self.interner.well_known().capitalize),
             IntrinsicMarker::Uncapitalize => Ok(self.interner.well_known().uncapitalize),
             IntrinsicMarker::BuiltinIteratorReturn => Ok(self.interner.well_known().undefined),
+            IntrinsicMarker::ThisType => Ok(self.interner.well_known().this_type),
+            IntrinsicMarker::OmitThisParameter => {
+                Ok(self.interner.well_known().omit_this_parameter)
+            }
             IntrinsicMarker::NoInfer => {
                 let DeclarationPayload::TypeAlias {
                     type_parameters, ..

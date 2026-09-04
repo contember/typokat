@@ -192,15 +192,8 @@ fn probe_feature_excludes_heavy_test_normalization() {
     assert!(!feature.contains("test-utils"));
 
     let checker = include_str!("../../typokat-check/src/check/checker/mod.rs");
-    let normalized = checker
-        .find("    pub normalized: ProjectBindingProductForTest,")
-        .expect("heavy normalized product field");
-    let field_cfg = checker[..normalized]
-        .lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .expect("normalized product cfg");
-    assert_eq!(field_cfg, "    #[cfg(any(test, feature = \"test-utils\"))]");
+    assert!(!checker.contains("ProjectBindingProductForTest"));
+    assert!(!checker.contains("normalized_project_binding_product"));
 
     let probe = include_str!("../../typokat-library/src/project_binder_probe.rs");
     assert!(!probe.contains(".normalized"));

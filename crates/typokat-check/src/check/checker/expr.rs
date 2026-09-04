@@ -2314,6 +2314,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             if !seen.insert(current) {
                 return DemandOutcome::Ready(current);
             }
+            let previous = current;
             current = match self.evaluate_type(current) {
                 DemandOutcome::Ready(demanded) => demanded,
                 DemandOutcome::Exhausted(exhaustion) => {
@@ -2322,9 +2323,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             };
             let apparent = self.apparent_type(current);
             if apparent == current {
-                return DemandOutcome::Ready(current);
+                if current == previous {
+                    return DemandOutcome::Ready(current);
+                }
+            } else {
+                current = apparent;
             }
-            current = apparent;
         }
     }
 

@@ -1246,7 +1246,9 @@ fn walk_intrinsic_marker(value: IntrinsicMarker) {
         | IntrinsicMarker::Capitalize
         | IntrinsicMarker::Uncapitalize
         | IntrinsicMarker::NoInfer
-        | IntrinsicMarker::BuiltinIteratorReturn => {}
+        | IntrinsicMarker::BuiltinIteratorReturn
+        | IntrinsicMarker::ThisType
+        | IntrinsicMarker::OmitThisParameter => {}
     }
 }
 

@@ -178,7 +178,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 }
             }
         } else {
-            let Some(surface) = self.construction_contextual_alias_surface(alias) else {
+            let Some(surface) = self.construction_alias_surface(alias) else {
                 active_aliases.remove(&ty);
                 structural.push(ty);
                 return DemandOutcome::Ready(());
@@ -222,7 +222,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         extracted
     }
 
-    fn construction_contextual_alias_surface(
+    pub(in crate::check::checker) fn construction_alias_surface(
         &self,
         alias: crate::types::repr::AliasId,
     ) -> Option<typokat_types::alias_semantics::PublishedAliasSurface> {

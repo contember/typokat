@@ -244,6 +244,8 @@ pub enum IntrinsicMarker {
     Uncapitalize,
     NoInfer,
     BuiltinIteratorReturn,
+    ThisType,
+    OmitThisParameter,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

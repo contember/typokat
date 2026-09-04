@@ -341,13 +341,13 @@ fn product_project_accepts_an_authenticated_source_reexport() {
 }
 
 #[test]
-fn test_utils_authenticates_the_heavy_binding_projection_counter() {
+fn product_project_binding_avoids_heavy_test_projections() {
     let measurement = ProjectBindingMeasurementScope::start();
     bind(&[("/project/one.ts", "export interface One {}")]).expect("product project binds");
     let measurement = measurement.finish();
     assert_eq!(measurement.entries, 1);
     assert_eq!(measurement.typed_products, 1);
-    assert_eq!(measurement.heavy_binding_projections, 1);
+    assert_eq!(measurement.heavy_binding_projections, 0);
 }
 
 #[test]
