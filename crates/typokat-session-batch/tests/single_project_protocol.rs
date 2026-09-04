@@ -170,6 +170,34 @@ fn single_project_preserves_object_freeze_assignability() {
 }
 
 #[test]
+fn single_project_materializes_standalone_library_namespace_values_on_demand() {
+    let output = invoke_request(json!({
+        "case_id": "standalone-library-namespace-value",
+        "files": [{
+            "path": "main.ts",
+            "source": concat!(
+                "const formatted: number = ",
+                "new Intl.DateTimeFormat(\"en\").format(new Date());\n",
+            ),
+        }],
+        "schema": 1,
+    }));
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+
+    let receipt: Value = serde_json::from_slice(&output.stdout).expect("runner response JSON");
+    assert_eq!(
+        receipt["semantic"],
+        json!({
+            "diagnostics": ["main.ts:1:7:2322"],
+            "exit_code": 1,
+            "incompletes": [],
+            "parse_errors": [],
+        })
+    );
+}
+
+#[test]
 fn single_project_links_promise_statics_in_an_external_module() {
     let output = invoke_request(json!({
         "case_id": "promise-static-linkage",

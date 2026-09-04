@@ -688,19 +688,25 @@ where
         .ok_or(ProjectLocalCandidateErrorForTest::MissingProductBinderMap)?;
     let global_value_roots =
         compilation_global_value_product_keys(product, &bound, coordinator.mapped_groups())?;
-    let product_value_bindings = product
-        .groups()
-        .iter()
-        .enumerate()
-        .flat_map(|(product_key, group)| {
-            group.fragments.iter().filter_map(move |declaration| {
-                product_map
-                    .declaration(*declaration)?
-                    .value()
-                    .map(|storage| (product_key, storage))
-            })
-        })
-        .collect::<Vec<_>>();
+    let mut product_values_by_storage = std::collections::BTreeMap::new();
+    for (product_key, group) in product.groups().iter().enumerate() {
+        if let Some(storage) = product
+            .group_key_at(product_key)
+            .and_then(|key| product_map.group(key))
+            .and_then(|binding| binding.value())
+        {
+            product_values_by_storage.insert(storage.index(), (product_key, storage));
+        }
+        for declaration in &group.fragments {
+            if let Some(storage) = product_map
+                .declaration(*declaration)
+                .and_then(|binding| binding.value())
+            {
+                product_values_by_storage.insert(storage.index(), (product_key, storage));
+            }
+        }
+    }
+    let product_value_bindings = product_values_by_storage.into_values().collect::<Vec<_>>();
     let product_value_storages = |product_key: usize| {
         product_value_bindings
             .iter()
