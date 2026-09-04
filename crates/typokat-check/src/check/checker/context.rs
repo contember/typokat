@@ -1556,6 +1556,11 @@ pub(in crate::check::checker) trait ProjectLocalUserDemandGateway {
         storage: ValueStorageId,
     ) -> Result<ProjectLocalDemandSnapshot, &'static str>;
 
+    fn demand_global_values(
+        &mut self,
+        interner: &mut Interner,
+    ) -> Result<ProjectLocalDemandSnapshot, &'static str>;
+
     fn commit_staged(&mut self) -> Result<ProjectLocalDemandSnapshot, &'static str>;
 }
 
@@ -1634,6 +1639,9 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     pub(in crate::check::checker) library_semantic_identities: Option<LibrarySemanticIdentities>,
     /// Immutable-product globals whose value winner must not be replaced by user refreshes.
     pub(in crate::check::checker) project_local_library_global_names: FxHashSet<String>,
+    /// Exact global library value winners, materialized only when their meaning is demanded.
+    pub(in crate::check::checker) project_local_library_global_values:
+        Vec<(String, ValueStorageId)>,
     /// Immutable-product value declarations already published before user source checking.
     pub(in crate::check::checker) project_local_library_value_storages: FxHashSet<ValueStorageId>,
     /// Exact library-root array roles available before type-group publication.

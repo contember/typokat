@@ -202,6 +202,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                             if identifier.name == "globalThis"
                     )
                 {
+                    self.demand_project_local_global_values();
                     return self.global_object_type;
                 }
                 self.record_incomplete(

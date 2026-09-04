@@ -2889,9 +2889,9 @@ pub(in crate::check::checker) fn check_bound_project_local_programs<'a, 'ast>(
             Some((row.name, ty))
         })
         .collect::<BTreeMap<_, _>>();
-    for (name, storage) in product_global_values {
-        if let Some(ty) = decl_types.get(storage) {
-            project_local_global_properties.insert(name, ty);
+    for (name, storage) in &product_global_values {
+        if let Some(ty) = decl_types.get(*storage) {
+            project_local_global_properties.insert(name.clone(), ty);
         }
     }
     project_local_global_properties
@@ -2936,6 +2936,7 @@ pub(in crate::check::checker) fn check_bound_project_local_programs<'a, 'ast>(
     pass.project_local_demand_gateway = Some(demand_gateway);
     pass.project_local_library_identity_groups = Some(library_identity_groups);
     pass.project_local_library_global_names = project_local_library_global_names;
+    pass.project_local_library_global_values = product_global_values;
     pass.project_local_library_value_storages = project_local_library_value_storages;
     pass.semantic_queries
         .set_native_identity_availability(library_identity_groups.map(|group| group.is_some()));
@@ -5692,6 +5693,7 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
         semantic_queries: SemanticQueryState::default(),
         library_semantic_identities: None,
         project_local_library_global_names: FxHashSet::default(),
+        project_local_library_global_values: Vec::new(),
         project_local_library_value_storages: FxHashSet::default(),
         early_native_array_groups: None,
         early_native_array_root_source: None,

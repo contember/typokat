@@ -114,6 +114,8 @@ pub(super) struct ProjectLocalPassDemandGateway<'a, Commit> {
     type_products: BTreeMap<TypeGroupId, usize>,
     user_type_products: &'a BTreeMap<TypeGroupId, Vec<usize>>,
     value_products: BTreeMap<usize, usize>,
+    value_storages: BTreeMap<usize, Vec<ValueStorageId>>,
+    global_value_products: Vec<usize>,
     commit: Commit,
 }
 
@@ -124,6 +126,8 @@ impl<'a, Commit> ProjectLocalPassDemandGateway<'a, Commit> {
         augmented_groups: &'a BTreeMap<usize, TypeGroupId>,
         native_array_groups: [Option<usize>; 2],
         user_type_products: &'a BTreeMap<TypeGroupId, Vec<usize>>,
+        product_value_bindings: &[(usize, ValueStorageId)],
+        global_value_products: Vec<usize>,
         commit: Commit,
     ) -> Self {
         let type_products = coordinator
@@ -137,17 +141,16 @@ impl<'a, Commit> ProjectLocalPassDemandGateway<'a, Commit> {
                 Some((TypeGroupId(local), row.product_key))
             })
             .collect();
-        let value_products = coordinator
-            .groups
-            .iter()
-            .filter_map(|row| {
-                if !row.has_value && !row.has_namespace {
-                    return None;
-                }
-                let local = u32::try_from(row.local_value?).ok()?;
-                Some((usize::try_from(local).ok()?, row.product_key))
-            })
-            .collect();
+        let mut value_products = BTreeMap::new();
+        let mut value_storages = BTreeMap::<usize, Vec<ValueStorageId>>::new();
+        for (product_group, storage) in product_value_bindings {
+            let replaced = value_products.insert(storage.index(), *product_group);
+            debug_assert!(replaced.is_none() || replaced == Some(*product_group));
+            value_storages
+                .entry(*product_group)
+                .or_default()
+                .push(*storage);
+        }
         Self {
             coordinator,
             product,
@@ -156,6 +159,8 @@ impl<'a, Commit> ProjectLocalPassDemandGateway<'a, Commit> {
             type_products,
             user_type_products,
             value_products,
+            value_storages,
+            global_value_products,
             commit,
         }
     }
@@ -166,6 +171,8 @@ impl<'a, Commit> ProjectLocalPassDemandGateway<'a, Commit> {
         augmented_groups: &'a BTreeMap<usize, TypeGroupId>,
         native_array_groups: [Option<usize>; 2],
         user_type_products: &'a BTreeMap<TypeGroupId, Vec<usize>>,
+        product_value_bindings: &[(usize, ValueStorageId)],
+        global_value_products: Vec<usize>,
         commit: Commit,
     ) -> Self {
         Self::new_inner(
@@ -174,6 +181,8 @@ impl<'a, Commit> ProjectLocalPassDemandGateway<'a, Commit> {
             augmented_groups,
             native_array_groups,
             user_type_products,
+            product_value_bindings,
+            global_value_products,
             commit,
         )
     }
@@ -259,22 +268,20 @@ where
             })
             .collect();
         let value_types = self
-            .coordinator
-            .groups
+            .value_storages
             .iter()
-            .filter(|row| {
-                !self.augmented_groups.contains_key(&row.product_key)
-                    && self.coordinator.session.cache().contains(row.product_key)
+            .filter(|(product_group, _)| {
+                !self.augmented_groups.contains_key(product_group)
+                    && self.coordinator.session.cache().contains(**product_group)
             })
-            .filter_map(|row| {
-                let storage = u32::try_from(row.local_value?).ok()?;
-                let ty = self
-                    .coordinator
+            .flat_map(|(product_group, storages)| {
+                self.coordinator
                     .semantic_group_value_types
-                    .get(row.product_key)
+                    .get(*product_group)
                     .copied()
-                    .flatten()?;
-                Some((ValueStorageId(storage), ty))
+                    .flatten()
+                    .into_iter()
+                    .flat_map(move |ty| storages.iter().copied().map(move |storage| (storage, ty)))
             })
             .collect();
         let namespace_seeds = self
@@ -287,7 +294,11 @@ where
             })
             .filter_map(|row| {
                 let namespace = u32::try_from(row.local_namespace?).ok()?;
-                let storage = u32::try_from(row.local_value?).ok()?;
+                let storage = self
+                    .value_storages
+                    .get(&row.product_key)?
+                    .first()
+                    .copied()?;
                 let ty = self
                     .coordinator
                     .semantic_group_value_types
@@ -296,7 +307,7 @@ where
                     .flatten()?;
                 Some(super::project_local_pass_port::ProjectLocalNamespaceSeed {
                     namespace: super::project_local_pass_port::NamespaceId(namespace),
-                    storage: ValueStorageId(storage),
+                    storage,
                     ty,
                 })
             })
@@ -337,6 +348,14 @@ where
             return Ok(empty_demand_snapshot());
         };
         self.demand(interner, &[product_group])
+    }
+
+    fn demand_global_values(
+        &mut self,
+        interner: &mut super::project_local_pass_port::Interner,
+    ) -> Result<ProjectLocalDemandSnapshot, &'static str> {
+        let roots = self.global_value_products.clone();
+        self.demand(interner, &roots)
     }
 
     fn commit_staged(&mut self) -> Result<ProjectLocalDemandSnapshot, &'static str> {

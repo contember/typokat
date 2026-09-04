@@ -234,6 +234,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         if name == "globalThis"
                             && self.binder.direct_global_this_value_conflict(symbol_id)
                         {
+                            self.demand_project_local_global_values();
                             if let Some(global_object) = self.global_object_type {
                                 return Some((global_object, span));
                             }
@@ -272,6 +273,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                             return Some((well_known.undefined, span));
                         }
                         if name == "globalThis" {
+                            self.demand_project_local_global_values();
                             if let Some(global_object) = self.global_object_type {
                                 return Some((global_object, span));
                             }

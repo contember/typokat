@@ -2774,6 +2774,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     .contains(participant)
             })
             .collect::<Vec<_>>();
+        for participant in &inherited_participants {
+            self.demand_project_local_value(*participant);
+        }
         let mut inherited_call_signatures = inherited_participants
             .iter()
             .filter_map(|participant| self.decl_type(*participant))

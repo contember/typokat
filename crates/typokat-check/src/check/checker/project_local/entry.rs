@@ -513,14 +513,6 @@ where
         library_identity_bindings.map(|binding| binding.map(|(_, local_group)| local_group));
     let native_array_groups = [library_identity_bindings[0], library_identity_bindings[1]]
         .map(|binding| binding.map(|(product_key, _)| product_key));
-    let global_value_roots =
-        compilation_global_value_product_keys(product, &bound, coordinator.mapped_groups())?;
-    let _ = coordinator.demand_product_groups(
-        product,
-        &global_value_roots,
-        &augmented_product_groups,
-        native_array_groups,
-    );
     let augmented_roots = augmented_product_groups.keys().copied().collect::<Vec<_>>();
     for root in augmented_roots {
         let _ = coordinator.demand_product_groups(
@@ -694,13 +686,25 @@ where
     let product_map = bound
         .library_product_map()
         .ok_or(ProjectLocalCandidateErrorForTest::MissingProductBinderMap)?;
+    let global_value_roots =
+        compilation_global_value_product_keys(product, &bound, coordinator.mapped_groups())?;
+    let product_value_bindings = product
+        .groups()
+        .iter()
+        .enumerate()
+        .flat_map(|(product_key, group)| {
+            group.fragments.iter().filter_map(move |declaration| {
+                product_map
+                    .declaration(*declaration)?
+                    .value()
+                    .map(|storage| (product_key, storage))
+            })
+        })
+        .collect::<Vec<_>>();
     let product_value_storages = |product_key: usize| {
-        product
-            .groups()
-            .get(product_key)
-            .into_iter()
-            .flat_map(|group| group.fragments.iter())
-            .filter_map(|declaration| product_map.declaration(*declaration)?.value())
+        product_value_bindings
+            .iter()
+            .filter_map(|(key, storage)| (*key == product_key).then_some(*storage))
             .collect::<Vec<_>>()
     };
     let certified_library_values = super::project_local_pass_port::CertifiedLibraryValues {
@@ -724,16 +728,15 @@ where
         })
         .flatten()
         .collect();
-    let product_global_values =
-        compilation_global_value_product_keys(product, &bound, coordinator.mapped_groups())?
-            .into_iter()
-            .filter_map(|product_key| {
-                let row = coordinator.mapped_groups().get(product_key)?;
-                let storage = product_value_storages(product_key).into_iter().next()?;
-                let name = product.strings()[row.name.index()].clone();
-                Some((name, storage))
-            })
-            .collect();
+    let product_global_values = global_value_roots
+        .iter()
+        .filter_map(|product_key| {
+            let row = coordinator.mapped_groups().get(*product_key)?;
+            let storage = product_value_storages(*product_key).into_iter().next()?;
+            let name = product.strings()[row.name.index()].clone();
+            Some((name, storage))
+        })
+        .collect();
     let product_namespace_seeds = coordinator
         .mapped_groups()
         .iter()
@@ -763,6 +766,8 @@ where
                 augmented_product_groups,
                 native_array_groups,
                 user_product_dependencies,
+                &product_value_bindings,
+                global_value_roots,
                 commit,
             );
             run(

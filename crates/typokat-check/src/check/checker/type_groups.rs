@@ -7,7 +7,7 @@ use crate::check::query::PublishedClassLookup;
 use crate::class_semantics::OwnedPublishedClassTerminal;
 use crate::class_semantics::{DemandOutcome, Exhaustion, PublishedClassSurface, PublishedClasses};
 use crate::types::layered::LayeredVec;
-use crate::types::repr::{AliasId, ClassId, TypeParamId};
+use crate::types::repr::{AliasId, ClassId, PropertyType, TypeParamId};
 use crate::types::store::TypeId;
 use crate::types::substitute;
 use rustc_hash::FxHashMap;
@@ -384,6 +384,40 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
             self.project_local_demand_error.get_or_insert(error);
             return false;
         }
+        true
+    }
+
+    pub(in crate::check::checker) fn demand_project_local_global_values(&mut self) -> bool {
+        let Some(gateway) = self.project_local_demand_gateway.take() else {
+            return true;
+        };
+        let snapshot = gateway.demand_global_values(self.interner);
+        self.project_local_demand_gateway = Some(gateway);
+        if let Err(error) =
+            snapshot.and_then(|snapshot| self.install_project_local_demand_snapshot(snapshot))
+        {
+            self.project_local_demand_error.get_or_insert(error);
+            return false;
+        }
+        let mut object = self
+            .global_object_type
+            .and_then(|ty| self.interner.store().object_type(ty).cloned())
+            .unwrap_or_default();
+        for (name, storage) in &self.project_local_library_global_values {
+            let Some(ty) = self.decl_types.get(*storage) else {
+                continue;
+            };
+            let property = PropertyType::public(name.clone(), ty);
+            match object
+                .properties
+                .iter_mut()
+                .find(|existing| existing.key == property.key)
+            {
+                Some(existing) => *existing = property,
+                None => object.properties.push(property),
+            }
+        }
+        self.global_object_type = Some(self.interner.intern_object(object));
         true
     }
 
