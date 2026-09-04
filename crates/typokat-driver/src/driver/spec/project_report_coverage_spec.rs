@@ -1,9 +1,6 @@
 //! RED coverage contract for translating checker results into user reports.
 
 use super::*;
-use crate::check::checker::library_compiler::{
-    PrivateReplayScaleRouteScopeForTest, PrivateReplayScaleRunForTest,
-};
 use typokat_core::source::{ModuleOrdinal, UnitSlot};
 
 fn input(name: &str) -> FileInput {
@@ -124,32 +121,4 @@ fn complete_dependency_ordered_coverage_remains_valid() {
     assert!(reports
         .iter()
         .all(|report| report.output.parse_errors.is_empty()));
-}
-
-#[test]
-fn shared_project_does_not_count_as_a_private_route() {
-    let base = crate::library::LibraryBaseProvider::new()
-        .get()
-        .expect("source-backed default-library base");
-    let scale_run = PrivateReplayScaleRunForTest::start();
-    let route_scope =
-        PrivateReplayScaleRouteScopeForTest::start(&scale_run, false, false, false, false)
-            .expect("shared route witness");
-    let reports = check_project_against_library(
-        &base,
-        vec![FileInput {
-            name: "shared.ts".to_owned(),
-            source: "const shared: number[] = [1, 2].map(value => value + 1);\n".to_owned(),
-        }],
-    )
-    .expect("shared production route");
-    let trace = route_scope.finish().expect("shared route witness finishes");
-
-    assert_eq!(reports.len(), 1);
-    assert!(reports[0].output.diagnostics.is_empty());
-    assert!(reports[0].output.parse_errors.is_empty());
-    assert!(reports[0].output.incomplete.is_empty());
-    assert_eq!(trace.production_route_invocations, 0, "{trace:#?}");
-    assert_eq!(trace.sparse_replay_invocations, 0, "{trace:#?}");
-    assert_eq!(trace.full_source_fallback_invocations, 0, "{trace:#?}");
 }

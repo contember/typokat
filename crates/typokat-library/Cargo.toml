@@ -5,7 +5,7 @@ edition.workspace = true
 
 [features]
 project-local-driver-shadow = []
-session-bench = ["typokat-check/session-bench"]
+session-bench = []
 library-record-census = [
     "typokat-binder/test-utils",
     "typokat-check/test-utils",
@@ -17,6 +17,7 @@ library-record-census = [
 project-binder-probe = [
     "dep:typokat-relate",
     "dep:typokat-types",
+    "dep:typokat-frontend",
     "typokat-check/measurement-counters",
 ]
 
@@ -26,9 +27,9 @@ oxc_parser.workspace = true
 oxc_span.workspace = true
 sha2.workspace = true
 typokat-binder.workspace = true
-typokat-check.workspace = true
+typokat-check = { workspace = true, optional = true }
 typokat-core.workspace = true
-typokat-frontend.workspace = true
+typokat-frontend = { workspace = true, optional = true }
 typokat-library-product.workspace = true
 typokat-relate = { workspace = true, optional = true }
 typokat-types = { workspace = true, optional = true }

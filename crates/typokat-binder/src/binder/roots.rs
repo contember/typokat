@@ -9,9 +9,7 @@ use super::namespace::{
     DeclarationOwner, DeclarationSyntaxFacts, MergeDeclarationKind, MergeDisposition, NamespaceId,
     NamespaceInstanceState, NamespaceTable, VariableKind,
 };
-#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 use super::scope::ScopeKind;
-#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 use crate::source::CompilationOrigin;
 use crate::source::LibraryFileOrdinal;
 use crate::span::Span;
@@ -47,7 +45,6 @@ impl Ord for FrozenLibraryMutationOwner {
 pub enum RootIndexError {
     MissingCompilationGlobalScope,
     MissingGlobalSymbol,
-    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
     MissingCompilationOrigin(super::namespace::SourceUnitKey),
 }
 
@@ -58,7 +55,6 @@ impl fmt::Display for RootIndexError {
                 formatter.write_str("missing compilation-global scope")
             }
             Self::MissingGlobalSymbol => formatter.write_str("global symbol id is missing"),
-            #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
             Self::MissingCompilationOrigin(source) => {
                 write!(formatter, "source {:?} has no compilation origin", source)
             }
@@ -75,7 +71,6 @@ pub struct RootNameRow {
 }
 
 /// One admitted declaration that contributes a property to the final global object.
-#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FinalGlobalContributorSite {
     pub declaration: super::declaration::DeclId,
@@ -86,7 +81,6 @@ pub struct FinalGlobalContributorSite {
 }
 
 /// One unfiltered compilation-global contributor with its final published slots.
-#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FinalGlobalContributorRow {
     pub name: String,
@@ -97,7 +91,6 @@ pub struct FinalGlobalContributorRow {
 }
 
 /// Final global-object contributor inventory across library and user sources.
-#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FinalGlobalContributorInventory {
     pub rows: Vec<FinalGlobalContributorRow>,
@@ -217,7 +210,6 @@ pub fn collect_root_rows(binder: &Binder) -> Result<Vec<RootNameRow>, RootIndexE
 }
 
 /// Collects admitted global-object contributors from the final binder merge state.
-#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 pub fn collect_final_global_object_contributors(
     binder: &Binder,
 ) -> Result<FinalGlobalContributorInventory, RootIndexError> {

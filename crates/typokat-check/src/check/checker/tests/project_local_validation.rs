@@ -22,6 +22,7 @@ use crate::check::checker::project_local_semantics::{
 };
 use crate::check::checker::{
     bind_library_product_project_programs, LibraryProductProjectBindingError,
+    ProjectSourceReexportPolicy,
 };
 use crate::frontend::{run_prepared_project_frontend, FileInput};
 use crate::source::{CompilationOrigin, LibraryFileOrdinal};
@@ -89,7 +90,7 @@ fn candidate_trace(
             let (library_units, bound) = bind_library_product_project_programs(
                 &candidate_product,
                 programs,
-                source_reexports,
+                ProjectSourceReexportPolicy::Admit(source_reexports),
                 default_modules,
             )?;
             Ok::<_, LibraryProductProjectBindingError>(project_local_semantic_candidate_for_test(
@@ -1021,7 +1022,7 @@ interface Affected { stable: boolean }\n";
             let (_library_units, bound) = bind_library_product_project_programs(
                 &candidate_product,
                 programs,
-                source_reexports,
+                ProjectSourceReexportPolicy::Admit(source_reexports),
                 default_modules,
             )
             .map_err(|error| format!("{error:?}"))?;

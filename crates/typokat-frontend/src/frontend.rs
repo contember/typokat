@@ -901,21 +901,20 @@ pub fn run_prepared_project_frontend<Product>(
     )
 }
 
-/// Preparation policy for the project-local driver shadow.
-#[cfg(any(test, feature = "test-utils"))]
+/// Preparation policy for a production checker session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PreparedProjectPolicyForTest {
+pub enum PreparedProjectPolicy {
+    PreparedProject,
     RepeatedProject,
     StandaloneExplicit,
     Bundler,
 }
 
-/// Parse and account one project under the selected shadow policy.
-#[cfg(any(test, feature = "test-utils"))]
+/// Parse and account one project under the selected checker-session policy.
 pub fn run_prepared_project_frontend_with_resolution_mode<Product>(
     inputs: Vec<FileInput>,
     resolution_mode: ProjectResolutionMode,
-    policy: PreparedProjectPolicyForTest,
+    policy: PreparedProjectPolicy,
     consume: impl for<'ast> FnOnce(
         &[ProjectProgram<'ast>],
         &AdmittedSourceReexports,
@@ -925,7 +924,7 @@ pub fn run_prepared_project_frontend_with_resolution_mode<Product>(
     run_prepared_project_frontend_with_parse_work_inner(
         inputs,
         resolution_mode,
-        PreparedProjectPolicy::from(policy),
+        policy,
         |units, source_reexports, default_modules, _| {
             consume(units, source_reexports, default_modules)
         },
@@ -950,27 +949,8 @@ pub fn run_prepared_project_frontend_with_parse_work<Product>(
     )
 }
 
-#[derive(Clone, Copy)]
-enum PreparedProjectPolicy {
-    PreparedProject,
-    #[cfg(any(test, feature = "test-utils"))]
-    RepeatedProject,
-    #[cfg(any(test, feature = "test-utils"))]
-    StandaloneExplicit,
-    #[cfg(any(test, feature = "test-utils"))]
-    Bundler,
-}
-
 #[cfg(any(test, feature = "test-utils"))]
-impl From<PreparedProjectPolicyForTest> for PreparedProjectPolicy {
-    fn from(policy: PreparedProjectPolicyForTest) -> Self {
-        match policy {
-            PreparedProjectPolicyForTest::RepeatedProject => Self::RepeatedProject,
-            PreparedProjectPolicyForTest::StandaloneExplicit => Self::StandaloneExplicit,
-            PreparedProjectPolicyForTest::Bundler => Self::Bundler,
-        }
-    }
-}
+pub type PreparedProjectPolicyForTest = PreparedProjectPolicy;
 
 fn run_prepared_project_frontend_with_parse_work_inner<Product>(
     inputs: Vec<FileInput>,
@@ -1014,50 +994,106 @@ fn run_prepared_project_frontend_with_parse_work_inner<Product>(
             .map(|parsed| &parsed.program)
             .collect::<Vec<_>>();
         match policy {
-            #[cfg(any(test, feature = "test-utils"))]
             PreparedProjectPolicy::RepeatedProject => {
-                let units = resolved_project_programs(&inputs, &programs);
-                let admitted = AdmittedSourceReexports::empty();
-                let default_modules = empty_default_module_candidates(&units);
-                (
-                    ProjectModuleInventory::default(),
-                    None,
-                    Some(consume(&units, &admitted, &default_modules, parse_work)),
-                )
+                match account_project_modules(
+                    &inputs,
+                    &programs,
+                    &resolution_mode,
+                    SourceReexportAccounting::FrozenUnsupported,
+                    DefaultCandidateAccounting::CollectCandidate,
+                ) {
+                    Ok(plan) => match certified_default_module_candidates(&inputs, &plan) {
+                        Ok(default_modules) => {
+                            match candidate_original_order(&inputs, &default_modules) {
+                                Ok(order) => {
+                                    let AccountedModulePlan {
+                                        paths, raw_imports, ..
+                                    } = plan;
+                                    let mut units =
+                                        project_programs_from_accounted_imports_in_order(
+                                            &inputs,
+                                            &programs,
+                                            paths,
+                                            raw_imports,
+                                            &order,
+                                        );
+                                    for (unit, path) in
+                                        units.iter_mut().zip(&default_modules.dependency_order)
+                                    {
+                                        unit.normalized_path.clone_from(path);
+                                    }
+                                    let admitted = AdmittedSourceReexports::empty();
+                                    (
+                                        ProjectModuleInventory::default(),
+                                        None,
+                                        Some(consume(
+                                            &units,
+                                            &admitted,
+                                            &default_modules,
+                                            parse_work,
+                                        )),
+                                    )
+                                }
+                                Err(error) => {
+                                    (ProjectModuleInventory::default(), Some(error), None)
+                                }
+                            }
+                        }
+                        Err(error) => (ProjectModuleInventory::default(), Some(error), None),
+                    },
+                    Err(error) => (ProjectModuleInventory::default(), Some(error), None),
+                }
             }
-            #[cfg(any(test, feature = "test-utils"))]
             PreparedProjectPolicy::StandaloneExplicit => {
                 match account_project_modules(
                     &inputs,
                     &programs,
                     &resolution_mode,
                     SourceReexportAccounting::FrozenUnsupported,
-                    DefaultCandidateAccounting::FrozenUnsupported,
+                    DefaultCandidateAccounting::CollectCandidateWithUnsupportedNotice,
                 ) {
-                    Ok(plan) => {
-                        let AccountedModulePlan {
-                            inventory,
-                            paths,
-                            raw_imports,
-                            source_reexports,
-                            admitted_source_reexports: _,
-                            default_module_authority: _,
-                        } = plan;
-                        let units = project_programs_from_accounted_imports_with_reexports(
-                            &inputs,
-                            &programs,
-                            paths,
-                            raw_imports,
-                            &source_reexports.dependency_edges,
-                        );
-                        let admitted = AdmittedSourceReexports::empty();
-                        let default_modules = empty_default_module_candidates(&units);
-                        (
-                            inventory,
-                            None,
-                            Some(consume(&units, &admitted, &default_modules, parse_work)),
-                        )
-                    }
+                    Ok(plan) => match certified_default_module_candidates(&inputs, &plan) {
+                        Ok(default_modules) => {
+                            match candidate_original_order(&inputs, &default_modules) {
+                                Ok(order) => {
+                                    let AccountedModulePlan {
+                                        inventory,
+                                        paths,
+                                        raw_imports,
+                                        ..
+                                    } = plan;
+                                    let mut units =
+                                        project_programs_from_accounted_imports_in_order(
+                                            &inputs,
+                                            &programs,
+                                            paths,
+                                            raw_imports,
+                                            &order,
+                                        );
+                                    for (unit, path) in
+                                        units.iter_mut().zip(&default_modules.dependency_order)
+                                    {
+                                        unit.normalized_path.clone_from(path);
+                                    }
+                                    let admitted = AdmittedSourceReexports::empty();
+                                    (
+                                        inventory,
+                                        None,
+                                        Some(consume(
+                                            &units,
+                                            &admitted,
+                                            &default_modules,
+                                            parse_work,
+                                        )),
+                                    )
+                                }
+                                Err(error) => {
+                                    (ProjectModuleInventory::default(), Some(error), None)
+                                }
+                            }
+                        }
+                        Err(error) => (ProjectModuleInventory::default(), Some(error), None),
+                    },
                     Err(error) => (ProjectModuleInventory::default(), Some(error), None),
                 }
             }
@@ -1066,9 +1102,7 @@ fn run_prepared_project_frontend_with_parse_work_inner<Product>(
                     PreparedProjectPolicy::PreparedProject => {
                         SourceReexportAccounting::PreparedProject
                     }
-                    #[cfg(any(test, feature = "test-utils"))]
                     PreparedProjectPolicy::Bundler => SourceReexportAccounting::AdmitBundler,
-                    #[cfg(any(test, feature = "test-utils"))]
                     PreparedProjectPolicy::RepeatedProject
                     | PreparedProjectPolicy::StandaloneExplicit => unreachable!(),
                 };
@@ -1088,7 +1122,6 @@ fn run_prepared_project_frontend_with_parse_work_inner<Product>(
                                     &default_modules,
                                     &mut plan.inventory,
                                 ) {
-                                    #[cfg(any(test, feature = "test-utils"))]
                                     Ok(())
                                         if matches!(policy, PreparedProjectPolicy::Bundler)
                                             && plan.inventory.blocks_semantics() =>
@@ -1102,7 +1135,7 @@ fn run_prepared_project_frontend_with_parse_work_inner<Product>(
                                         order,
                                     ) {
                                         Ok(finalized) => {
-                                            let units =
+                                            let mut units =
                                                 project_programs_from_accounted_imports_in_order(
                                                     &inputs,
                                                     &programs,
@@ -1110,6 +1143,12 @@ fn run_prepared_project_frontend_with_parse_work_inner<Product>(
                                                     plan.raw_imports,
                                                     &finalized.order,
                                                 );
+                                            for (unit, path) in units
+                                                .iter_mut()
+                                                .zip(&default_modules.dependency_order)
+                                            {
+                                                unit.normalized_path.clone_from(path);
+                                            }
                                             let admitted = AdmittedSourceReexports {
                                                 declarations: finalized.admitted,
                                             };
@@ -1144,20 +1183,6 @@ fn run_prepared_project_frontend_with_parse_work_inner<Product>(
         inventory,
         preparation_error,
         product,
-    }
-}
-
-#[cfg(any(test, feature = "test-utils"))]
-fn empty_default_module_candidates(units: &[ProjectProgram<'_>]) -> DefaultModuleCandidates {
-    DefaultModuleCandidates {
-        imports: Vec::new(),
-        exports: Vec::new(),
-        dependency_order: units
-            .iter()
-            .map(|unit| unit.normalized_path.clone())
-            .collect(),
-        dependency_edges: Vec::new(),
-        first_cycle: None,
     }
 }
 
@@ -2118,6 +2143,23 @@ impl SourceReexportAccounting {
 enum DefaultCandidateAccounting {
     FrozenUnsupported,
     CollectCandidate,
+    CollectCandidateWithUnsupportedNotice,
+}
+
+impl DefaultCandidateAccounting {
+    const fn collects_candidates(self) -> bool {
+        matches!(
+            self,
+            Self::CollectCandidate | Self::CollectCandidateWithUnsupportedNotice
+        )
+    }
+
+    const fn reports_candidates_as_unsupported(self) -> bool {
+        matches!(
+            self,
+            Self::FrozenUnsupported | Self::CollectCandidateWithUnsupportedNotice
+        )
+    }
 }
 
 struct DefaultModuleAuthority {
@@ -2542,6 +2584,21 @@ impl ModuleAccountingTaskContext<'_> {
         candidate: RawDefaultImportCandidate,
         authority: &mut DefaultModuleAuthority,
     ) -> Result<(), ProjectInventoryError> {
+        if self
+            .default_candidate_accounting
+            .reports_candidates_as_unsupported()
+            && candidate.disposition != DefaultImportCandidateDisposition::NamedDefaultSyntax
+        {
+            record_unsupported_module_form(
+                self.input,
+                self.line_index,
+                candidate.owner_start,
+                "default-import",
+                Some(&candidate.module_specifier),
+                self.resolution_identities,
+                self.notice_identities,
+            );
+        }
         let candidate = resolve_default_import_candidate(candidate, &self.resolution)?;
         if candidate.disposition == DefaultImportCandidateDisposition::Admitted {
             if let RawDefaultImportCandidateSource::Resolved(target) = &candidate.source {
@@ -2586,10 +2643,10 @@ impl ModuleAccountingTaskContext<'_> {
                 Ok(())
             }
             ModuleAccountingTask::DefaultExport { start } => {
-                if matches!(
-                    self.default_candidate_accounting,
-                    DefaultCandidateAccounting::FrozenUnsupported
-                ) {
+                if self
+                    .default_candidate_accounting
+                    .reports_candidates_as_unsupported()
+                {
                     record_unsupported_module_form(
                         self.input,
                         self.line_index,
@@ -2935,20 +2992,17 @@ impl ModuleAccounting {
             .enumerate()
             .filter_map(|(index, path)| fs::canonicalize(path).ok().map(|path| (path, index)))
             .collect::<BTreeMap<_, _>>();
-        let default_source_keys = matches!(
-            default_candidate_accounting,
-            DefaultCandidateAccounting::CollectCandidate
-        )
-        .then(|| stable_source_keys(&paths));
-        let default_module_authority = matches!(
-            default_candidate_accounting,
-            DefaultCandidateAccounting::CollectCandidate
-        )
-        .then(|| DefaultModuleAuthority {
-            imports: Vec::new(),
-            exports: Vec::new(),
-            admitted_default_edges: vec![BTreeSet::new(); inputs.len()],
-        });
+        let default_source_keys = default_candidate_accounting
+            .collects_candidates()
+            .then(|| stable_source_keys(&paths));
+        let default_module_authority =
+            default_candidate_accounting
+                .collects_candidates()
+                .then(|| DefaultModuleAuthority {
+                    imports: Vec::new(),
+                    exports: Vec::new(),
+                    admitted_default_edges: vec![BTreeSet::new(); inputs.len()],
+                });
         Ok(Self {
             paths,
             configured_roots,
@@ -3064,8 +3118,14 @@ impl ModuleAccounting {
                                 if let Some(candidate) =
                                     collect_default_import_syntax_candidate(index, import)
                                 {
-                                    syntax_evidence.default_imports.push(candidate);
-                                    true
+                                    let is_candidate = !default_candidate_accounting
+                                        .reports_candidates_as_unsupported()
+                                        || candidate.disposition
+                                            != DefaultImportCandidateDisposition::NamedDefaultSyntax;
+                                    if is_candidate {
+                                        syntax_evidence.default_imports.push(candidate);
+                                    }
+                                    is_candidate
                                 } else {
                                     false
                                 }

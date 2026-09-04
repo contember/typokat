@@ -9,8 +9,8 @@ use std::alloc::System;
 use std::io::{self, BufRead, Read, Write};
 use std::sync::{Arc, Condvar, Mutex};
 use typokat_check::check::checker::project_local::{
-    CheckerSession, SessionBenchClock, SessionBenchFault, SessionBenchFaultReceipt,
-    SessionBenchFaultSeam,
+    CheckerSession, ProjectSourceReexportPolicy, SessionBenchClock, SessionBenchFault,
+    SessionBenchFaultReceipt, SessionBenchFaultSeam,
 };
 use typokat_core::span::LineIndex;
 use typokat_frontend::frontend::{
@@ -483,13 +483,19 @@ fn run_single_project() -> Result<(), String> {
         })
         .collect::<Vec<_>>();
     let clock = SessionBenchClock::start();
-    let product = LibraryBaseProvider::new().declaration_product_for_session_bench()?;
+    let product = LibraryBaseProvider::new()
+        .get()
+        .map_err(|error| error.to_string())?;
     let shared_product_identity = product.profile_identity().to_owned();
     let prepared = run_prepared_project_frontend_with_parse_work(
         inputs,
-        |programs, _source_reexports, _default_modules, parse_work| {
-            let result = CheckerSession::new(product)
-                .check_project_programs_for_session_bench(programs, &clock);
+        |programs, source_reexports, default_modules, parse_work| {
+            let result = CheckerSession::new(product).check_project_programs_for_session_bench(
+                programs,
+                ProjectSourceReexportPolicy::Admit(source_reexports),
+                default_modules,
+                &clock,
+            );
             (parse_work, result)
         },
     );
@@ -563,9 +569,13 @@ fn run_frame(
             name: case_id.clone(),
             source: source.clone(),
         }],
-        |programs, _source_reexports, _default_modules, parse_work| {
-            let result = CheckerSession::new(product)
-                .check_project_programs_for_session_bench(programs, clock);
+        |programs, source_reexports, default_modules, parse_work| {
+            let result = CheckerSession::new(product).check_project_programs_for_session_bench(
+                programs,
+                ProjectSourceReexportPolicy::Admit(source_reexports),
+                default_modules,
+                clock,
+            );
             (parse_work, result)
         },
     );
@@ -693,7 +703,9 @@ fn run_frame(
 fn run_batch() -> Result<RunDisposition, String> {
     let clock = SessionBenchClock::start();
     let initialization_start_ns = clock.elapsed_ns();
-    let product = LibraryBaseProvider::new().declaration_product_for_session_bench()?;
+    let product = LibraryBaseProvider::new()
+        .get()
+        .map_err(|error| error.to_string())?;
     let initialization_end_ns = clock.elapsed_ns();
     let shared_product_identity = product.profile_identity().to_owned();
     let stdin = io::stdin();
@@ -817,7 +829,9 @@ fn run_concurrent(count: usize) -> Result<(), String> {
     let request = parse_concurrent_request(&input)?;
 
     let clock = Arc::new(SessionBenchClock::start());
-    let product = LibraryBaseProvider::new().declaration_product_for_session_bench()?;
+    let product = LibraryBaseProvider::new()
+        .get()
+        .map_err(|error| error.to_string())?;
     let shared_product_identity = product.profile_identity().to_owned();
     let start = Arc::new((
         Mutex::new(ConcurrentStart {

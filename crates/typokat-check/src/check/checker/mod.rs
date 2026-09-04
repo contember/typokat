@@ -38,7 +38,6 @@ use crate::span::Span;
 use crate::types::layered::{LayeredMap, LayeredSet};
 use crate::types::repr::{ClassId, ObjectType, PropertyType};
 use crate::types::store::TypeId;
-#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 use crate::types::substitute::substitute;
 use crate::types::Interner;
 #[cfg(any(test, feature = "test-utils"))]
@@ -90,9 +89,7 @@ mod library_identities;
 pub(crate) mod library_reporting;
 mod namespace_values;
 mod narrowing;
-#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 pub mod project_local;
-#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 pub(in crate::check) mod project_local_semantics;
 pub mod replay_index;
 pub mod reporting_record;
@@ -102,7 +99,6 @@ mod statements;
 mod surface_lowering_copy_spec;
 mod type_groups;
 
-#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 use context::ConstraintCheckObligation;
 use context::{
     AssertionCompatibilityObligation, AssignObligation, CheckerEffects, CheckerRecordBatch,
@@ -1427,9 +1423,8 @@ pub struct BoundProjectBinder {
     pub normalized: ProjectBindingProductForTest,
 }
 
-#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 impl BoundProjectBinder {
-    pub fn library_product_map_for_test(
+    pub(in crate::check::checker) fn library_product_map(
         &self,
     ) -> Option<&crate::binder::namespace::LibraryProductBinderMap> {
         self.library_product_map.as_ref()
@@ -2521,7 +2516,10 @@ where
             units,
             &user_declaration_manifests,
             ProjectModuleAdmission {
-                source_reexports,
+                source_reexports: source_reexports.map_or(
+                    ValidatedSourceReexportPolicy::PreserveUnsupported,
+                    ValidatedSourceReexportPolicy::Admit,
+                ),
                 default_module,
             },
             source_offset,
@@ -2606,10 +2604,12 @@ where
                 &mut external_effects,
                 SourceReexportProjectionContext {
                     dependency_exports: &exports,
-                    source_reexports,
+                    source_reexports: source_reexports.map_or(
+                        ValidatedSourceReexportPolicy::PreserveUnsupported,
+                        ValidatedSourceReexportPolicy::Admit,
+                    ),
                     module_index: unit_index,
                     diagnostic_disposition: ExternalDiagnosticDisposition::Emit,
-                    admission: SourceReexportAdmission::LegacyUnadmitted,
                 },
             )
             .map_err(|error| match error {
@@ -3432,6 +3432,7 @@ where
     Ok(results)
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 /// Check a dependency-ordered project in a universe forked from a published default-library base.
 ///
 /// The inspector-free face of [`check_project_programs_with_owned_library`], whose closure bounds
@@ -4123,6 +4124,7 @@ pub fn check_complete_library_project_programs_with_evidence<'ast>(
     Ok(evidence)
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 /// Check one user source in a universe forked from a published default-library base.
 ///
 /// The single-source analogue of [`check_project_programs_with_owned_library`]: it resumes the
@@ -4396,11 +4398,20 @@ pub(in crate::check::checker) fn bind_one_root_project_programs_for_test<'ast>(
     .map_err(|error| error.to_string())
 }
 
+/// Source-bearing export policy for one product-project binding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProjectSourceReexportPolicy<'a> {
+    /// Authenticate and project the supplied source re-export evidence.
+    Admit(&'a AdmittedSourceReexports),
+    /// Leave source-bearing exports on routes that deliberately do not support them.
+    PreserveUnsupported,
+}
+
 /// Bind one prepared project into a fresh binder instantiated from the immutable library product.
 pub fn bind_library_product_project_programs(
     product: &typokat_library_product::LibraryDeclarationProduct,
     units: &[ProjectProgram<'_>],
-    source_reexports: &AdmittedSourceReexports,
+    source_reexports: ProjectSourceReexportPolicy<'_>,
     default_modules: &DefaultModuleCandidates,
 ) -> Result<
     (
@@ -4416,31 +4427,6 @@ pub fn bind_library_product_project_programs(
         source_reexports,
         default_modules,
         instantiated,
-    )
-}
-
-/// Bind a prepared project while preserving the legacy unadmitted module surface.
-#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
-pub(in crate::check::checker) fn bind_library_product_project_programs_unadmitted(
-    product: &typokat_library_product::LibraryDeclarationProduct,
-    units: &[ProjectProgram<'_>],
-) -> Result<
-    (
-        Vec<crate::binder::bind::LibraryBinderUnit>,
-        BoundProjectBinder,
-    ),
-    LibraryProductProjectBindingError,
-> {
-    let instantiated = ProjectBinderBuilder::from_library_declaration_product(product)
-        .map_err(LibraryProductProjectBindingError::InvalidProduct)?;
-    bind_library_product_project_programs_with_builder_and_admission(
-        units,
-        instantiated,
-        ProjectModuleAdmission {
-            source_reexports: None,
-            default_module: None,
-        },
-        AuthoritativeProjectBinderFinish::ProductUnadmitted,
     )
 }
 
@@ -4463,7 +4449,7 @@ pub fn bind_library_product_project_programs_perturbed_for_test(
             .map_err(LibraryProductProjectBindingError::InvalidProduct)?;
     bind_library_product_project_programs_with_builder(
         units,
-        source_reexports,
+        ProjectSourceReexportPolicy::Admit(source_reexports),
         default_modules,
         instantiated,
     )
@@ -4490,7 +4476,7 @@ pub fn bind_library_product_project_programs_fully_perturbed_for_test(
         .map_err(LibraryProductProjectBindingError::InvalidProduct)?;
     bind_library_product_project_programs_with_builder(
         units,
-        source_reexports,
+        ProjectSourceReexportPolicy::Admit(source_reexports),
         default_modules,
         instantiated,
     )
@@ -4498,7 +4484,7 @@ pub fn bind_library_product_project_programs_fully_perturbed_for_test(
 
 fn bind_library_product_project_programs_with_builder<'ast>(
     units: &[ProjectProgram<'ast>],
-    source_reexports: &AdmittedSourceReexports,
+    source_reexports: ProjectSourceReexportPolicy<'_>,
     default_modules: &DefaultModuleCandidates,
     (builder, library_units): (
         ProjectBinderBuilder<'ast>,
@@ -4511,15 +4497,25 @@ fn bind_library_product_project_programs_with_builder<'ast>(
     ),
     LibraryProductProjectBindingError,
 > {
-    let source_reexport_plan = build_validated_source_reexport_plan(source_reexports, units)
-        .map_err(|error| LibraryProductProjectBindingError::Binding(error.message().to_owned()))?;
+    let source_reexport_plan = match source_reexports {
+        ProjectSourceReexportPolicy::Admit(admitted) => Some(
+            build_validated_source_reexport_plan(admitted, units).map_err(|error| {
+                LibraryProductProjectBindingError::Binding(error.message().to_owned())
+            })?,
+        ),
+        ProjectSourceReexportPolicy::PreserveUnsupported => None,
+    };
     let default_module_plan = build_validated_default_module_plan(default_modules, units)
         .map_err(|error| LibraryProductProjectBindingError::Binding(error.message().to_owned()))?;
     bind_library_product_project_programs_with_builder_and_admission(
         units,
         (builder, library_units),
         ProjectModuleAdmission {
-            source_reexports: Some(&source_reexport_plan),
+            source_reexports: source_reexport_plan
+                .as_ref()
+                .map_or(ValidatedSourceReexportPolicy::PreserveUnsupported, |plan| {
+                    ValidatedSourceReexportPolicy::Admit(plan)
+                }),
             default_module: Some(&default_module_plan),
         },
         AuthoritativeProjectBinderFinish::Product,
@@ -4608,7 +4604,10 @@ fn bind_fresh_project_programs(
         units,
         manifests,
         ProjectModuleAdmission {
-            source_reexports,
+            source_reexports: source_reexports.map_or(
+                ValidatedSourceReexportPolicy::PreserveUnsupported,
+                ValidatedSourceReexportPolicy::Admit,
+            ),
             default_module,
         },
         0,
@@ -4630,8 +4629,6 @@ enum AuthoritativeProjectBinderFinish {
     #[cfg(any(test, feature = "test-utils"))]
     DeclarationOracle,
     Product,
-    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
-    ProductUnadmitted,
     Continuation,
 }
 
@@ -4643,22 +4640,8 @@ impl AuthoritativeProjectBinderFinish {
         rejects
     }
 
-    const fn source_reexport_admission(self) -> SourceReexportAdmission {
-        let required = matches!(self, Self::Product);
-        #[cfg(any(test, feature = "test-utils"))]
-        let required = required || matches!(self, Self::DeclarationOracle);
-        if required {
-            SourceReexportAdmission::Required
-        } else {
-            SourceReexportAdmission::LegacyUnadmitted
-        }
-    }
-
     const fn finishes_library_product_project(self) -> bool {
-        let finishes = matches!(self, Self::Product);
-        #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
-        let finishes = finishes || matches!(self, Self::ProductUnadmitted);
-        finishes
+        matches!(self, Self::Product)
     }
 }
 
@@ -4668,10 +4651,10 @@ enum ExternalDiagnosticDisposition {
     RejectTyped,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum SourceReexportAdmission {
-    Required,
-    LegacyUnadmitted,
+#[derive(Clone, Copy)]
+enum ValidatedSourceReexportPolicy<'p> {
+    Admit(&'p ValidatedSourceReexportPlan<'p>),
+    PreserveUnsupported,
 }
 
 enum ProjectBindingCoreError<ReportingError> {
@@ -4694,7 +4677,7 @@ impl<ReportingError: std::fmt::Display> std::fmt::Display
 
 #[derive(Clone, Copy)]
 struct ProjectModuleAdmission<'p> {
-    source_reexports: Option<&'p ValidatedSourceReexportPlan<'p>>,
+    source_reexports: ValidatedSourceReexportPolicy<'p>,
     default_module: Option<&'p ValidatedDefaultModulePlan<'p>>,
 }
 
@@ -4743,7 +4726,10 @@ where
         units,
         manifests,
         ProjectModuleAdmission {
-            source_reexports,
+            source_reexports: source_reexports.map_or(
+                ValidatedSourceReexportPolicy::PreserveUnsupported,
+                ValidatedSourceReexportPolicy::Admit,
+            ),
             default_module: None,
         },
         source_offset,
@@ -4855,7 +4841,6 @@ where
                 source_reexports,
                 module_index: unit_index,
                 diagnostic_disposition,
-                admission: finish.source_reexport_admission(),
             },
         )?;
         if let Some(default_export) = default_module
@@ -4895,8 +4880,6 @@ where
                 None,
             ),
             AuthoritativeProjectBinderFinish::Product => unreachable!(),
-            #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
-            AuthoritativeProjectBinderFinish::ProductUnadmitted => unreachable!(),
         }
     };
     let mut project_sources = units
@@ -5391,7 +5374,6 @@ where
         .collect())
 }
 
-#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 pub(in crate::check::checker) struct ProjectLocalUserPassOutput {
     pub results: Vec<CheckResult>,
     #[cfg(any(test, feature = "test-utils"))]
@@ -5419,7 +5401,6 @@ pub(in crate::check::checker) enum ProjectLocalUserNamespaceUnavailableReason {
     Cyclic,
 }
 
-#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 pub(in crate::check::checker) struct ProjectLocalUserPassPlan<'a> {
     pub bound: BoundProjectBinder,
     pub published_types: type_groups::PublishedTypeEnvironment,
@@ -5438,7 +5419,6 @@ pub(in crate::check::checker) struct ProjectLocalUserPassPlan<'a> {
     pub inject_provisional_unavailable_write: bool,
 }
 
-#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 pub(in crate::check::checker) fn check_bound_project_local_programs<'a, 'ast>(
     interner: &'a mut Interner,
     units: &[ProjectProgram<'ast>],
@@ -6153,19 +6133,17 @@ where
             continue;
         };
         if export.source.is_some() {
-            let Some(validated) = projection
-                .source_reexports
-                .and_then(|plan| plan.declaration(projection.module_index, export.span.start))
-            else {
-                if projection.admission == SourceReexportAdmission::Required {
-                    return Err(ProjectBindingCoreError::Structural(
-                        ProjectDeclarationStructuralError::MissingSourceReexportAdmission {
-                            module_ordinal,
-                            owner_start: export.span.start,
-                        },
-                    ));
-                }
+            let ValidatedSourceReexportPolicy::Admit(plan) = projection.source_reexports else {
                 continue;
+            };
+            let Some(validated) = plan.declaration(projection.module_index, export.span.start)
+            else {
+                return Err(ProjectBindingCoreError::Structural(
+                    ProjectDeclarationStructuralError::MissingSourceReexportAdmission {
+                        module_ordinal,
+                        owner_start: export.span.start,
+                    },
+                ));
             };
             collect_source_reexport(&mut context, validated, projection.dependency_exports)?;
             continue;
@@ -6286,10 +6264,9 @@ fn bind_validated_default_export<'ast>(
 
 struct SourceReexportProjectionContext<'a, 'e> {
     dependency_exports: &'a [ExportSurface],
-    source_reexports: Option<&'a ValidatedSourceReexportPlan<'e>>,
+    source_reexports: ValidatedSourceReexportPolicy<'e>,
     module_index: usize,
     diagnostic_disposition: ExternalDiagnosticDisposition,
-    admission: SourceReexportAdmission,
 }
 
 fn collect_declaration_export<Ticket: UserReportingOwner>(
@@ -8259,7 +8236,6 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
         demands: Vec<crate::check::query::NativeIdentityDemand>,
         fulfilled: &mut [bool; 8],
     ) -> bool {
-        #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
         {
             if self.project_local_demand_gateway.is_none() {
                 return false;
@@ -8280,11 +8256,6 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
                 progressed = true;
             }
             progressed
-        }
-        #[cfg(not(any(test, feature = "test-utils", feature = "session-bench")))]
-        {
-            let _ = (demands, fulfilled);
-            false
         }
     }
 
@@ -8801,7 +8772,6 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
             .push_interface_relation(check, owner);
     }
 
-    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
     pub(in crate::check::checker) fn schedule_constraint_check(
         &mut self,
         check: ConstraintCheckObligation,
@@ -8813,7 +8783,6 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
             .push_constraint_check(check, owner);
     }
 
-    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
     fn schedule_project_local_library_validation(
         &mut self,
         validation: &project_local::validation::ProjectLocalValidationCandidate,
@@ -9152,15 +9121,10 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
     let pass = Pass {
         interner,
         binder,
-        #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
         project_local_demand_gateway: None,
-        #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
         project_local_demand_error: None,
-        #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
         project_local_library_identity_groups: None,
-        #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
         project_local_user_modules: None,
-        #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
         project_local_user_interface_own: FxHashMap::default(),
         eager_application_cache: FxHashMap::default(),
         #[cfg(test)]

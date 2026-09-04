@@ -3,7 +3,6 @@ use super::context::{
 };
 use super::replay_index::{ReplayClassLookup, ReplayOwner};
 use crate::binder::declaration::TypeGroupId;
-#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 use crate::binder::declaration::ValueStorageId;
 use crate::check::query::PublishedClassLookup;
 use crate::class_semantics::OwnedPublishedClassTerminal;
@@ -16,7 +15,6 @@ use rustc_hash::FxHashMap;
 use std::sync::Arc;
 use typokat_types::alias_semantics::{PublishedAliasTerminal, PublishedAliases};
 
-#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 fn project_local_row_is_writable<T>(rows: &LayeredVec<T>, index: usize) -> bool {
     index < rows.len() && (index >= rows.base_len() || rows.prefix_overrides_enabled())
 }
@@ -317,7 +315,6 @@ impl<'ast> TypeEnvironmentState<'ast> {
     }
 }
 
-#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
     pub(in crate::check::checker) fn demand_project_local_type_group(
         &mut self,
@@ -485,7 +482,6 @@ impl PublishedTypeEnvironment {
         Self::from_project_local_terminals_with_aliases(entries, PublishedAliases::empty())
     }
 
-    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
     pub(in crate::check::checker) fn from_project_local_terminals_with_aliases(
         entries: Vec<PublishedTypeGroupTerminal>,
         aliases: PublishedAliases,
@@ -530,7 +526,6 @@ impl PublishedTypeEnvironment {
         &self.groups
     }
 
-    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
     fn validate_project_local_snapshot(
         &self,
         aliases: &PublishedAliases,
@@ -549,7 +544,6 @@ impl PublishedTypeEnvironment {
         Ok(())
     }
 
-    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
     fn install_project_local_alias_snapshot(
         &mut self,
         aliases: &PublishedAliases,
@@ -560,7 +554,6 @@ impl PublishedTypeEnvironment {
         Ok(())
     }
 
-    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
     pub(in crate::check::checker) fn install_project_local_terminal(
         &mut self,
         group: TypeGroupId,
@@ -766,7 +759,6 @@ impl PublishedClassLookup for PublishedTypeEnvironment {
     }
 }
 
-#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 fn published_type_groups_from_terminals(
     terminals: Vec<PublishedTypeGroupTerminal>,
 ) -> PublishedTypeGroups {
@@ -1258,7 +1250,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         self.install_type_environment_base(base);
     }
 
-    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
     pub(in crate::check::checker) fn install_project_local_type_environment_base(
         &mut self,
         base: PublishedTypeEnvironment,
@@ -1614,7 +1605,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         self.publish_type_groups_inner(false)
     }
 
-    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
     pub(in crate::check::checker) fn publish_project_local_user_type_groups(
         &mut self,
     ) -> TypeGroupPublicationOutcome {

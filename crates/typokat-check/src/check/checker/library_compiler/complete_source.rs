@@ -525,7 +525,10 @@ fn complete_source_project_frontend<'source, 'ast>(
         units,
         &user_declaration_manifests,
         super::ProjectModuleAdmission {
-            source_reexports: source_reexport_plan.as_ref(),
+            source_reexports: source_reexport_plan.as_ref().map_or(
+                crate::check::checker::ValidatedSourceReexportPolicy::PreserveUnsupported,
+                crate::check::checker::ValidatedSourceReexportPolicy::Admit,
+            ),
             default_module,
         },
         source_offset,

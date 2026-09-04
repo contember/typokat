@@ -9,6 +9,7 @@ typokat-check.workspace = true
 typokat-diagnostics.workspace = true
 typokat-frontend.workspace = true
 typokat-library.workspace = true
+typokat-library-product.workspace = true
 typokat-types.workspace = true
 
 [dev-dependencies]
@@ -20,7 +21,6 @@ typokat-relate = { workspace = true, features = ["test-utils"] }
 typokat-types = { workspace = true, features = ["test-utils"] }
 typokat-frontend = { workspace = true, features = ["test-utils"] }
 typokat-library = { workspace = true, features = ["project-local-driver-shadow"] }
-typokat-library-product.workspace = true
 
 [lints]
 workspace = true

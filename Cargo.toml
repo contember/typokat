@@ -82,7 +82,6 @@ typokat-relate.workspace = true
 typokat-diagnostics.workspace = true
 typokat-surface.workspace = true
 typokat-frontend.workspace = true
-typokat-check.workspace = true
 typokat-library.workspace = true
 typokat-driver.workspace = true
 serde_json.workspace = true

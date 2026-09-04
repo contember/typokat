@@ -9,6 +9,7 @@ use crate::check::checker::project_local::{
     ContextualTypeParameterIndexWorkScopeForTest, ObservationEventKindForTest,
     ObservationScopeForTest, ProductDependencySccWorkScopeForTest,
     ProductLowererConstructionScopeForTest, ProductLoweringMetadataPlanConstructionScopeForTest,
+    ProjectSourceReexportPolicy,
 };
 use crate::frontend::{run_prepared_project_frontend, FileInput};
 use crate::source::{CompilationOrigin, LibraryFileOrdinal};
@@ -70,7 +71,7 @@ fn checker_session_owns_product_binding_and_returns_real_check_results() {
         move |programs, source_reexports, default_modules| {
             CheckerSession::new(product).check_project_programs(
                 programs,
-                source_reexports,
+                ProjectSourceReexportPolicy::Admit(source_reexports),
                 default_modules,
             )
         },
@@ -163,7 +164,7 @@ fn ordinary_preparation_copies_no_owned_product_group_names_for_scheduling() {
                 .prepare_project_programs_for_test(programs, source_reexports, default_modules)?;
             let results = CheckerSession::new(product).check_project_programs(
                 programs,
-                source_reexports,
+                ProjectSourceReexportPolicy::Admit(source_reexports),
                 default_modules,
             )?;
             Ok::<_, crate::check::checker::project_local::CheckerSessionError>((
@@ -222,7 +223,7 @@ const after: number = identity(42);
         move |programs, source_reexports, default_modules| {
             CheckerSession::new(product).check_project_programs(
                 programs,
-                source_reexports,
+                ProjectSourceReexportPolicy::Admit(source_reexports),
                 default_modules,
             )
         },
@@ -284,7 +285,7 @@ fn ordinary_checker_sessions_do_not_retain_test_observations() {
             move |programs, source_reexports, default_modules| {
                 CheckerSession::new(product).check_project_programs(
                     programs,
-                    source_reexports,
+                    ProjectSourceReexportPolicy::Admit(source_reexports),
                     default_modules,
                 )
             },

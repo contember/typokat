@@ -5092,7 +5092,7 @@ fn candidate_trace(
                 crate::check::checker::bind_library_product_project_programs(
                     &product_for_candidate,
                     programs,
-                    source_reexports,
+                    crate::check::checker::ProjectSourceReexportPolicy::Admit(source_reexports),
                     default_modules,
                 )?;
             Ok::<_, crate::check::checker::LibraryProductProjectBindingError>(
@@ -5160,7 +5160,7 @@ fn candidate_result_with_product(
                 crate::check::checker::bind_library_product_project_programs(
                     &product_for_candidate,
                     programs,
-                    source_reexports,
+                    crate::check::checker::ProjectSourceReexportPolicy::Admit(source_reexports),
                     default_modules,
                 )?;
             Ok::<_, crate::check::checker::LibraryProductProjectBindingError>(

@@ -13,7 +13,7 @@ mod lowerer;
 mod observation;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod project_local_pass_port;
-#[cfg(all(feature = "session-bench", not(any(test, feature = "test-utils"))))]
+#[cfg(not(any(test, feature = "test-utils")))]
 mod project_local_pass_port;
 mod recipe_primitives;
 mod record_staging;
@@ -21,9 +21,10 @@ mod session;
 mod terminal;
 pub(super) mod validation;
 
+pub use super::ProjectSourceReexportPolicy;
 #[cfg(any(test, feature = "test-utils"))]
 pub use contract::*;
-#[cfg(all(feature = "session-bench", not(any(test, feature = "test-utils"))))]
+#[cfg(not(any(test, feature = "test-utils")))]
 pub(super) use contract::*;
 #[cfg(any(test, feature = "test-utils"))]
 pub use entry::*;

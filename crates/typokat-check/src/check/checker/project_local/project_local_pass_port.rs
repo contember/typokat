@@ -153,7 +153,7 @@ pub(super) fn project_local_final_type_dependencies(
     product_library_dependencies_required: bool,
 ) -> Result<ProjectLocalFinalTypeDependencies, &'static str> {
     let map = bound
-        .library_product_map_for_test()
+        .library_product_map()
         .ok_or("project-local binder has no immutable-product identity map")?;
     let manifests = programs
         .iter()

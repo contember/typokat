@@ -257,7 +257,7 @@ impl ProjectBinderProbe<'_> {
         let (library_units, bound) = crate::check::checker::bind_library_product_project_programs(
             &product,
             self.units,
-            self.source_reexports,
+            crate::check::checker::ProjectSourceReexportPolicy::Admit(self.source_reexports),
             self.default_modules,
         )
         .map_err(|error| ProjectBinderProbeError(error.to_string()))?;

@@ -9,8 +9,8 @@ use std::process::ExitCode;
 
 use typokat::diagnostics::{self, DiagnosticFormat};
 use typokat::driver::{
-    check_bundler_project_once, check_project, check_project_once, production_cli_route,
-    production_library_route, DriverError, FileReport, ProjectCheckRun,
+    check_bundler_project_once, check_project, check_project_once, production_library_route,
+    DriverError, FileReport, ProjectCheckRun,
 };
 use typokat::frontend::{
     discover_project, DiscoveredProject, FileInput, ProjectDiscoveryError, ProjectModuleInventory,
@@ -33,7 +33,7 @@ const EXIT_USAGE: u8 = 2;
 const EXIT_INCOMPLETE: u8 = 3;
 const USAGE: &str = "usage: typokat check [--format rich|compact] [--project-summary json] <input>";
 const LIBRARY_INFO_USAGE: &str = "usage: typokat library-info --format json";
-const LIBRARY_INFO_SCHEMA: u32 = 2;
+const LIBRARY_INFO_SCHEMA: u32 = 3;
 const OFFICIAL_BATCH_SCHEMA: u64 = 1;
 const OFFICIAL_BATCH_MAX_FRAME_BYTES: usize = 2 * 1024 * 1024;
 const OFFICIAL_BATCH_MAX_OUTPUT_BYTES: usize = 1024 * 1024;
@@ -441,18 +441,16 @@ fn parse_library_info_args(args: &[String]) -> Result<(), String> {
 
 fn write_library_info_to(writer: &mut impl Write) -> Result<(), String> {
     let metadata = typokat::library::embedded_library_profile_metadata();
-    let provider_route = production_library_route().map_err(|error| {
+    let route = production_library_route().map_err(|error| {
         format!("failed to initialize embedded TypeScript 6.0.3 library: {error}")
     })?;
-    let check_route = production_cli_route();
     writeln!(
         writer,
-        "{{\"schema\":{},\"profile_sha256\":\"{}\",\"file_count\":{},\"check_route\":\"{}\",\"provider_route\":\"{}\"}}",
+        "{{\"schema\":{},\"profile_sha256\":\"{}\",\"file_count\":{},\"route\":\"{}\"}}",
         LIBRARY_INFO_SCHEMA,
         metadata.profile_identity(),
         metadata.file_count(),
-        check_route,
-        provider_route,
+        route,
     )
     .map_err(|error| format!("failed to write library info: {error}"))?;
     writer

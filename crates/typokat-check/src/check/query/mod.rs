@@ -968,7 +968,6 @@ impl SemanticQueryState {
         })
     }
 
-    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
     pub(in crate::check) fn set_native_identity_availability(&mut self, mapped: [bool; 8]) {
         let value = NativeIdentityAvailability(mapped);
         if self.native_identity_availability == value {

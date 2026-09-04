@@ -1,10 +1,9 @@
 use super::super::{
     bind_library_product_project_programs,
     bind_library_product_project_programs_fully_perturbed_for_test,
-    bind_library_product_project_programs_with_builder_and_admission,
-    project_local::CheckerSession, AuthoritativeProjectBinderFinish, CheckResult,
-    LibraryProductProjectBindingError, ProjectBindingMeasurementScope,
-    ProjectDeclarationStructuralError, ProjectModuleAdmission,
+    project_local::{CheckerSession, ProjectSourceReexportPolicy},
+    CheckResult, LibraryProductProjectBindingError, ProjectBindingMeasurementScope,
+    ProjectDeclarationStructuralError,
 };
 use crate::binder::bind::ProjectBinderBuilder;
 use crate::binder::declaration::SourceDeclarationManifest;
@@ -12,7 +11,7 @@ use crate::binder::namespace::{
     source_file_kind, CompilationUnit, ModuleBindingContext, SourceUnitKey,
 };
 use crate::binder::product::{project_library_declaration_product, LibraryProductSource};
-use crate::frontend::{run_prepared_project_frontend, FileInput};
+use crate::frontend::{run_prepared_project_frontend, AdmittedSourceReexports, FileInput};
 use crate::source::{CompilationOrigin, LibraryFileOrdinal};
 use oxc_allocator::Allocator;
 use oxc_parser::Parser;
@@ -114,8 +113,13 @@ fn bind_with_perturbation(
         .collect();
     let run = run_prepared_project_frontend(inputs, |units, reexports, defaults| {
         if perturbation_rows == 0 {
-            bind_library_product_project_programs(&product, units, reexports, defaults)
-                .map(|(_, bound)| bound)
+            bind_library_product_project_programs(
+                &product,
+                units,
+                ProjectSourceReexportPolicy::Admit(reexports),
+                defaults,
+            )
+            .map(|(_, bound)| bound)
         } else {
             bind_library_product_project_programs_fully_perturbed_for_test(
                 &product,
@@ -141,7 +145,11 @@ fn check(sources: &[(&str, &str)]) -> Vec<CheckResult> {
         })
         .collect();
     let run = run_prepared_project_frontend(inputs, |units, reexports, defaults| {
-        CheckerSession::new(Arc::clone(&product)).check_project_programs(units, reexports, defaults)
+        CheckerSession::new(Arc::clone(&product)).check_project_programs(
+            units,
+            ProjectSourceReexportPolicy::Admit(reexports),
+            defaults,
+        )
     });
     assert!(run.preparation_error.is_none());
     run.product
@@ -168,17 +176,13 @@ fn bind_without_source_reexport_admission(
             source: (*source).to_owned(),
         })
         .collect();
-    let run = run_prepared_project_frontend(inputs, |units, _, _| {
-        let instantiated = ProjectBinderBuilder::from_library_declaration_product(&product)
-            .map_err(LibraryProductProjectBindingError::InvalidProduct)?;
-        bind_library_product_project_programs_with_builder_and_admission(
+    let run = run_prepared_project_frontend(inputs, |units, _, defaults| {
+        let empty = AdmittedSourceReexports::empty();
+        bind_library_product_project_programs(
+            &product,
             units,
-            instantiated,
-            ProjectModuleAdmission {
-                source_reexports: None,
-                default_module: None,
-            },
-            AuthoritativeProjectBinderFinish::Product,
+            ProjectSourceReexportPolicy::Admit(&empty),
+            defaults,
         )
         .map(|(_, bound)| bound)
     });
@@ -648,8 +652,12 @@ fn isolated_live_type_owner_is_admitted_and_forced() {
     }];
     let product_for_build = product.clone();
     let run = run_prepared_project_frontend(inputs, move |units, reexports, defaults| {
-        let (_, bound) =
-            bind_library_product_project_programs(&product_for_build, units, reexports, defaults)?;
+        let (_, bound) = bind_library_product_project_programs(
+            &product_for_build,
+            units,
+            ProjectSourceReexportPolicy::Admit(reexports),
+            defaults,
+        )?;
         let inventories = units
             .iter()
             .zip(&bound.module_scopes)
@@ -726,8 +734,12 @@ fn mapped_product_and_live_user_edges_form_one_atomic_component() {
             .to_owned(),
     }];
     let run = run_prepared_project_frontend(inputs, |units, reexports, defaults| {
-        let (_, bound) =
-            bind_library_product_project_programs(&product, units, reexports, defaults)?;
+        let (_, bound) = bind_library_product_project_programs(
+            &product,
+            units,
+            ProjectSourceReexportPolicy::Admit(reexports),
+            defaults,
+        )?;
         let inventories = units
             .iter()
             .zip(&bound.module_scopes)

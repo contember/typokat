@@ -1,5 +1,5 @@
-//! Instance-scoped, failure-caching publication of the source-compiled library base.
-
+//! Instance-scoped, failure-caching publication of the immutable declaration product.
+#[cfg(test)]
 use super::base::FrozenLibraryBase;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -117,28 +117,18 @@ impl fmt::Display for LibraryInitError {
 impl std::error::Error for LibraryInitError {}
 
 pub struct LibraryBaseProvider {
-    result: OnceLock<Result<Arc<InitializedLibrary>, Arc<LibraryInitError>>>,
-    #[cfg_attr(not(test), allow(dead_code))]
-    declaration_product: OnceLock<
-        Result<
-            Arc<typokat_library_product::LibraryDeclarationProduct>,
-            Arc<super::declaration_product::LibraryDeclarationProductBuildError>,
-        >,
-    >,
-    #[cfg(feature = "project-local-driver-shadow")]
-    shadow_declaration_product: OnceLock<
+    result: OnceLock<
         Result<Arc<typokat_library_product::LibraryDeclarationProduct>, Arc<LibraryInitError>>,
     >,
+    #[cfg(test)]
+    legacy_result: OnceLock<Result<Arc<FrozenLibraryBase>, Arc<LibraryInitError>>>,
     attempts: AtomicU64,
     publications: AtomicU64,
     compile_us: AtomicU64,
     publication_us: AtomicU64,
 }
 
-struct InitializedLibrary {
-    base: Arc<FrozenLibraryBase>,
-}
-
+#[cfg(any(test, feature = "library-record-census",))]
 #[doc(hidden)]
 pub struct LibraryProjectBinderContinuation {
     library_unit_count: usize,
@@ -179,6 +169,7 @@ pub(super) struct ProjectDeclarationUniverseMetricsForTest {
     pub(super) binding_wall_us: u64,
 }
 
+#[cfg(any(test, feature = "library-record-census",))]
 impl LibraryProjectBinderContinuation {
     #[doc(hidden)]
     pub const fn library_unit_count(&self) -> usize {
@@ -241,9 +232,8 @@ impl LibraryBaseProvider {
     pub const fn new() -> Self {
         Self {
             result: OnceLock::new(),
-            declaration_product: OnceLock::new(),
-            #[cfg(feature = "project-local-driver-shadow")]
-            shadow_declaration_product: OnceLock::new(),
+            #[cfg(test)]
+            legacy_result: OnceLock::new(),
             attempts: AtomicU64::new(0),
             publications: AtomicU64::new(0),
             compile_us: AtomicU64::new(0),
@@ -251,70 +241,56 @@ impl LibraryBaseProvider {
         }
     }
 
-    pub fn get(&self) -> Result<Arc<FrozenLibraryBase>, Arc<LibraryInitError>> {
-        self.initialized()
-            .map(|initialized| initialized.base.clone())
+    #[cfg(not(test))]
+    pub fn get(
+        &self,
+    ) -> Result<Arc<typokat_library_product::LibraryDeclarationProduct>, Arc<LibraryInitError>>
+    {
+        self.product()
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn declaration_product(
-        &self,
-    ) -> Result<
-        Arc<typokat_library_product::LibraryDeclarationProduct>,
-        Arc<super::declaration_product::LibraryDeclarationProductBuildError>,
-    > {
-        self.declaration_product
-            .get_or_init(|| {
-                #[cfg(feature = "project-binder-probe")]
-                PROBE_DECLARATION_PRODUCT_INITIALIZATIONS.set(
-                    PROBE_DECLARATION_PRODUCT_INITIALIZATIONS
-                        .get()
-                        .saturating_add(1),
-                );
-                super::declaration_product::build_packaged_declaration_product().map_err(Arc::new)
-            })
+    #[cfg(test)]
+    pub fn get(&self) -> Result<Arc<FrozenLibraryBase>, Arc<LibraryInitError>> {
+        self.legacy_result
+            .get_or_init(|| self.initialize_legacy())
             .clone()
     }
 
+    fn product(
+        &self,
+    ) -> Result<Arc<typokat_library_product::LibraryDeclarationProduct>, Arc<LibraryInitError>>
+    {
+        self.result
+            .get_or_init(|| self.initialize_product())
+            .clone()
+    }
+
+    #[cfg(any(
+        test,
+        feature = "library-record-census",
+        feature = "project-binder-probe"
+    ))]
+    pub(crate) fn declaration_product(
+        &self,
+    ) -> Result<Arc<typokat_library_product::LibraryDeclarationProduct>, Arc<LibraryInitError>>
+    {
+        self.product()
+    }
     #[cfg(feature = "project-local-driver-shadow")]
     #[doc(hidden)]
     pub fn declaration_product_for_shadow(
         &self,
     ) -> Result<Arc<typokat_library_product::LibraryDeclarationProduct>, Arc<LibraryInitError>>
     {
-        self.shadow_declaration_product
-            .get_or_init(|| {
-                self.declaration_product().map_err(|error| {
-                    let (stage, cause) = match error.as_ref() {
-                        super::declaration_product::LibraryDeclarationProductBuildError::Profile(
-                            _,
-                        ) => (
-                            LibraryInitStage::ProfileLoad,
-                            LibraryInitCause::ProfileRejected {
-                                message: error.to_string(),
-                            },
-                        ),
-                        _ => (
-                            LibraryInitStage::Compile,
-                            LibraryInitCause::CompilationFailed {
-                                message: error.to_string(),
-                            },
-                        ),
-                    };
-                    Arc::new(LibraryInitError::new(stage, cause))
-                })
-            })
-            .clone()
+        self.product()
     }
 
-    /// Load the immutable declaration product for the isolated-session benchmark.
     #[cfg(feature = "session-bench")]
     #[doc(hidden)]
     pub fn declaration_product_for_session_bench(
         &self,
     ) -> Result<Arc<typokat_library_product::LibraryDeclarationProduct>, String> {
-        self.declaration_product()
-            .map_err(|error| error.to_string())
+        self.product().map_err(|error| error.to_string())
     }
 
     #[cfg(test)]
@@ -351,7 +327,7 @@ impl LibraryBaseProvider {
                     crate::check::checker::bind_library_product_project_programs(
                         &product_for_build,
                         units,
-                        source_reexports,
+                        crate::check::checker::ProjectSourceReexportPolicy::Admit(source_reexports),
                         default_modules,
                     )
                 };
@@ -387,6 +363,7 @@ impl LibraryBaseProvider {
         })
     }
 
+    #[cfg(any(test, feature = "library-record-census",))]
     /// Continue a compiled library binder checkpoint through the project's own files.
     ///
     /// Provenance is structural, not cryptographic: `LibraryBinderCheckpoint` is opaque and
@@ -584,7 +561,7 @@ impl LibraryBaseProvider {
             .compile_binder_checkpoint(&profile)
             .map_err(|error| compilation_failed(error.to_string()))?;
         // The shared base must be published before the checkpoint continues through it.
-        self.initialized().map_err(|error| error.as_ref().clone())?;
+        self.get().map_err(|error| error.as_ref().clone())?;
         let inspection = checkpoint.inspection_for_test();
         let checkpoint_ends = inspection.ends;
         let array_symbol = inspection.array_symbol;
@@ -633,14 +610,31 @@ impl LibraryBaseProvider {
         })
     }
 
-    fn initialized(&self) -> Result<Arc<InitializedLibrary>, Arc<LibraryInitError>> {
-        self.result.get_or_init(|| self.initialize()).clone()
+    fn initialize_product(
+        &self,
+    ) -> Result<Arc<typokat_library_product::LibraryDeclarationProduct>, Arc<LibraryInitError>>
+    {
+        #[cfg(feature = "project-binder-probe")]
+        PROBE_DECLARATION_PRODUCT_INITIALIZATIONS.set(
+            PROBE_DECLARATION_PRODUCT_INITIALIZATIONS
+                .get()
+                .saturating_add(1),
+        );
+        self.attempts.fetch_add(1, Ordering::Relaxed);
+        let compile = Instant::now();
+        let product = super::declaration_product::build_packaged_declaration_product()
+            .map_err(|error| Arc::new(declaration_product_failed(error)))?;
+        self.compile_us
+            .store(elapsed_us(compile), Ordering::Relaxed);
+        let publication = Instant::now();
+        self.publication_us
+            .store(elapsed_us(publication), Ordering::Relaxed);
+        self.publications.fetch_add(1, Ordering::Relaxed);
+        Ok(product)
     }
 
-    fn initialize(&self) -> Result<Arc<InitializedLibrary>, Arc<LibraryInitError>> {
-        #[cfg(feature = "project-binder-probe")]
-        PROBE_SEMANTIC_BASE_INITIALIZATIONS
-            .set(PROBE_SEMANTIC_BASE_INITIALIZATIONS.get().saturating_add(1));
+    #[cfg(test)]
+    fn initialize_legacy(&self) -> Result<Arc<FrozenLibraryBase>, Arc<LibraryInitError>> {
         self.attempts.fetch_add(1, Ordering::Relaxed);
         let compile = Instant::now();
         let compiled = FrozenLibraryBase::compile_packaged_profile().map_err(Arc::new)?;
@@ -651,7 +645,7 @@ impl LibraryBaseProvider {
         self.publication_us
             .store(elapsed_us(publication), Ordering::Relaxed);
         self.publications.fetch_add(1, Ordering::Relaxed);
-        Ok(Arc::new(InitializedLibrary { base }))
+        Ok(base)
     }
 
     #[cfg(test)]
@@ -664,7 +658,7 @@ impl LibraryBaseProvider {
 
     #[cfg(test)]
     pub(super) fn declaration_product_initialized_for_test(&self) -> bool {
-        self.declaration_product.get().is_some()
+        self.result.get().is_some()
     }
 }
 
@@ -920,6 +914,29 @@ impl Default for LibraryBaseProvider {
     }
 }
 
+fn declaration_product_failed(
+    error: super::declaration_product::LibraryDeclarationProductBuildError,
+) -> LibraryInitError {
+    let stage = match &error {
+        super::declaration_product::LibraryDeclarationProductBuildError::Profile(_) => {
+            LibraryInitStage::ProfileLoad
+        }
+        _ => LibraryInitStage::Compile,
+    };
+    let cause = match stage {
+        LibraryInitStage::ProfileLoad => LibraryInitCause::ProfileRejected {
+            message: error.to_string(),
+        },
+        LibraryInitStage::Compile | LibraryInitStage::Publication => {
+            LibraryInitCause::CompilationFailed {
+                message: error.to_string(),
+            }
+        }
+    };
+    LibraryInitError::new(stage, cause)
+}
+
+#[cfg(any(test, feature = "library-record-census"))]
 fn compilation_failed(message: String) -> LibraryInitError {
     LibraryInitError::new(
         LibraryInitStage::Compile,

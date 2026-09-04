@@ -9,12 +9,13 @@ use super::entry::run_ordinary_project_local_semantics_for_session_bench;
 #[cfg(any(test, feature = "test-utils"))]
 use super::observation;
 use super::project_local_pass_port::Interner;
-#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
-use crate::check::checker::bind_library_product_project_programs_unadmitted;
 use crate::check::checker::{
     bind_library_product_project_programs, CheckResult, LibraryProductProjectBindingError,
+    ProjectSourceReexportPolicy,
 };
-use crate::frontend::{AdmittedSourceReexports, DefaultModuleCandidates, ProjectProgram};
+#[cfg(test)]
+use crate::frontend::AdmittedSourceReexports;
+use crate::frontend::{DefaultModuleCandidates, ProjectProgram};
 use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
@@ -45,7 +46,7 @@ impl CheckerSession {
     pub fn check_project_programs<'ast>(
         self,
         programs: &[ProjectProgram<'ast>],
-        source_reexports: &AdmittedSourceReexports,
+        source_reexports: ProjectSourceReexportPolicy<'_>,
         default_modules: &DefaultModuleCandidates,
     ) -> Result<Vec<CheckResult>, CheckerSessionError> {
         let (library_units, bound) = bind_library_product_project_programs(
@@ -69,7 +70,7 @@ impl CheckerSession {
         let (library_units, bound) = bind_library_product_project_programs(
             &self.product,
             programs,
-            source_reexports,
+            ProjectSourceReexportPolicy::Admit(source_reexports),
             default_modules,
         )
         .map_err(CheckerSessionError::Binding)?;
@@ -88,14 +89,20 @@ impl CheckerSession {
     pub fn check_project_programs_for_session_bench<'ast>(
         self,
         programs: &[ProjectProgram<'ast>],
+        source_reexports: ProjectSourceReexportPolicy<'_>,
+        default_modules: &DefaultModuleCandidates,
         clock: &SessionBenchClock,
     ) -> Result<SessionBenchCheckReceipt, CheckerSessionError> {
         let mut lifecycle = OrdinarySessionBenchLifecycle;
         let product = consume_session_bench_checker(self, &mut lifecycle);
         let binding_start_ns = clock.elapsed_ns();
-        let (library_units, bound) =
-            bind_library_product_project_programs_unadmitted(&product, programs)
-                .map_err(CheckerSessionError::Binding)?;
+        let (library_units, bound) = bind_library_product_project_programs(
+            &product,
+            programs,
+            source_reexports,
+            default_modules,
+        )
+        .map_err(CheckerSessionError::Binding)?;
         let binding_end_ns = clock.elapsed_ns();
         let publication_start_ns = binding_end_ns;
         let semantic = run_ordinary_project_local_semantics_for_session_bench(
@@ -154,19 +161,6 @@ impl CheckerSession {
             session_weak_alive_after: session_weak.upgrade().is_some(),
             cache_weak_alive_after: cache_weak.upgrade().is_some(),
         }
-    }
-
-    /// Check a shadow project without admitting module export products.
-    #[cfg(any(test, feature = "test-utils"))]
-    pub fn check_project_programs_unadmitted_for_test<'ast>(
-        self,
-        programs: &[ProjectProgram<'ast>],
-    ) -> Result<Vec<CheckResult>, CheckerSessionError> {
-        let (library_units, bound) =
-            bind_library_product_project_programs_unadmitted(&self.product, programs)
-                .map_err(CheckerSessionError::Binding)?;
-        run_ordinary_project_local_semantics(&self.product, library_units, bound, programs)
-            .map_err(|error| CheckerSessionError::Semantic(error.to_string()))
     }
 }
 

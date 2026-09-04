@@ -11,22 +11,15 @@ use crate::check::checker::{
 };
 use crate::diagnostics::{Diagnostic, IncompleteSurface};
 use crate::frontend::{
-    parse_source_errors, run_clean_bundler_project_frontend_with_default_modules,
-    run_clean_project_frontend_with_deferred_auxiliary, run_project_frontend,
-    run_project_frontend_with_auxiliary, run_project_parse_only, run_source_frontend,
-    AccountedProjectProduct, AuxiliarySourceInput, DeferredProjectFrontendError, FileInput,
-    ProjectFrontendRun, ProjectModuleInventory, ProjectProgram, ProjectResolutionMode, ProjectRoot,
+    run_prepared_project_frontend_with_resolution_mode, FileInput, PreparedProjectPolicy,
+    ProjectModuleInventory, ProjectResolutionMode, ProjectRoot,
 };
 #[cfg(test)]
-use crate::frontend::{
-    run_prepared_project_frontend_with_resolution_mode, PreparedProjectPolicyForTest,
-};
-use crate::library::{
-    FrozenLibraryBase, LibraryBaseProvider, LibraryInitError, RoutedLibraryProject,
-    RoutedPrivateExecution, RoutedPrivateLibraryProject,
-};
+use crate::frontend::{run_project_frontend, ProjectFrontendRun, ProjectProgram};
+use crate::library::{LibraryBaseProvider, LibraryInitError};
 #[cfg(test)]
 use crate::span::Span;
+#[cfg(test)]
 use crate::types::Interner;
 use rayon::prelude::*;
 use std::path::PathBuf;
@@ -153,16 +146,22 @@ const CHECK_STACK_SIZE: usize = 256 * 1024 * 1024;
 /// Parse and check one TypeScript source. The local `Allocator` owns the AST only
 /// for this call; owned diagnostics are extracted before it drops.
 pub fn check_source(source: &str) -> Result<CheckOutput, DriverError> {
-    let base = library_base()?;
-    let output =
-        on_check_worker(&base, || check_source_inner(&base, source))?.map_err(check_failure)?;
+    let product = library_product()?;
+    let checked_product = Arc::clone(&product);
+    let run = on_check_worker(&product, move || {
+        check_checker_session_project(
+            vec![FileInput {
+                name: "input.ts".to_owned(),
+                source: source.to_owned(),
+            }],
+            CheckerSessionRoute::RepeatedProject,
+            checked_product,
+        )
+    })??;
+    let output = one_file_report(run.reports, "single-source checker session")?.output;
     #[cfg(test)]
     test_support::record_reports_exposed_for_test(1);
     Ok(output)
-}
-
-fn check_source_inner(base: &FrozenLibraryBase, source: &str) -> Result<CheckOutput, String> {
-    check_source_against_library(base, source)
 }
 
 /// Result for one [`FileInput`]. `name` and `source` move through the pipeline so
@@ -178,9 +177,7 @@ pub struct ProjectCheckRun {
     pub reports: Vec<FileReport>,
     pub inventory: ProjectModuleInventory,
 }
-
-#[cfg(test)]
-enum ProjectLocalShadowRouteForTest {
+enum CheckerSessionRoute {
     RepeatedProject,
     Standalone,
     Bundler {
@@ -189,43 +186,27 @@ enum ProjectLocalShadowRouteForTest {
     },
 }
 
-#[cfg(test)]
-#[derive(Clone, Copy)]
-enum ProjectLocalShadowOperationForTest {
-    Source,
-    Files,
-    RepeatedProject,
-    OfficialBatch,
-    Standalone,
-    Cli,
-}
-
-#[cfg(test)]
-fn check_project_local_shadow_for_test<Acquire>(
+fn check_checker_session_project(
     inputs: Vec<FileInput>,
-    route: ProjectLocalShadowRouteForTest,
-    acquire: Acquire,
-) -> Result<ProjectCheckRun, DriverError>
-where
-    Acquire: FnOnce() -> Result<
-        Arc<typokat_library_product::LibraryDeclarationProduct>,
-        Arc<LibraryInitError>,
-    >,
-{
-    let (resolution_mode, policy, product, mut acquire) = match route {
-        ProjectLocalShadowRouteForTest::RepeatedProject => (
+    route: CheckerSessionRoute,
+    product: Arc<typokat_library_product::LibraryDeclarationProduct>,
+) -> Result<ProjectCheckRun, DriverError> {
+    if inputs.is_empty() {
+        return Ok(ProjectCheckRun {
+            reports: Vec::new(),
+            inventory: ProjectModuleInventory::default(),
+        });
+    }
+    let (resolution_mode, policy) = match route {
+        CheckerSessionRoute::RepeatedProject => (
             ProjectResolutionMode::ExplicitFileList,
-            PreparedProjectPolicyForTest::RepeatedProject,
-            Some(acquire()?),
-            None,
+            PreparedProjectPolicy::RepeatedProject,
         ),
-        ProjectLocalShadowRouteForTest::Standalone => (
+        CheckerSessionRoute::Standalone => (
             ProjectResolutionMode::ExplicitFileList,
-            PreparedProjectPolicyForTest::StandaloneExplicit,
-            None,
-            Some(acquire),
+            PreparedProjectPolicy::StandaloneExplicit,
         ),
-        ProjectLocalShadowRouteForTest::Bundler {
+        CheckerSessionRoute::Bundler {
             project_directory,
             roots,
         } => (
@@ -233,50 +214,32 @@ where
                 project_directory,
                 roots,
             },
-            PreparedProjectPolicyForTest::Bundler,
-            None,
-            Some(acquire),
+            PreparedProjectPolicy::Bundler,
         ),
     };
-    if inputs.is_empty() {
-        return Ok(ProjectCheckRun {
-            reports: Vec::new(),
-            inventory: ProjectModuleInventory::default(),
-        });
-    }
     let run = run_prepared_project_frontend_with_resolution_mode(
         inputs,
         resolution_mode,
         policy,
         move |programs, source_reexports, default_modules| {
-            let product = match product {
-                Some(product) => Ok(product),
-                None => {
-                    let acquire = acquire
-                        .take()
-                        .expect("project-local shadow acquisition is consumed once");
-                    acquire()
+            let source_reexport_policy = match policy {
+                PreparedProjectPolicy::PreparedProject | PreparedProjectPolicy::Bundler => {
+                    crate::check::ProjectSourceReexportPolicy::Admit(source_reexports)
+                }
+                PreparedProjectPolicy::RepeatedProject
+                | PreparedProjectPolicy::StandaloneExplicit => {
+                    crate::check::ProjectSourceReexportPolicy::PreserveUnsupported
                 }
             };
             let project_units_by_slot = programs
                 .iter()
                 .map(|program| program.module_ordinal.index())
                 .collect::<Vec<_>>();
-            let results = product.map_err(DriverError::from).and_then(|product| {
-                let session = crate::check::checker::project_local::CheckerSession::new(product);
-                let checked = match policy {
-                    PreparedProjectPolicyForTest::RepeatedProject
-                    | PreparedProjectPolicyForTest::StandaloneExplicit => {
-                        session.check_project_programs_unadmitted_for_test(programs)
-                    }
-                    PreparedProjectPolicyForTest::Bundler => {
-                        session.check_project_programs(programs, source_reexports, default_modules)
-                    }
-                };
-                checked.map_err(|error| {
-                    check_failure(format!("project-local project check failed: {error}"))
-                })
-            });
+            let results = crate::check::CheckerSession::new(product)
+                .check_project_programs(programs, source_reexport_policy, default_modules)
+                .map_err(|error| {
+                    check_failure(format!("checker-session project check failed: {error}"))
+                });
             (project_units_by_slot, results)
         },
     );
@@ -286,107 +249,30 @@ where
     let inventory = run.inventory;
     let mut reports = match run.product {
         None => parse_reports_from_frontend_run(run.inputs, run.parse_errors),
-        Some((project_units_by_slot, results)) => {
-            let results = results?;
-            assemble_project_reports(run.inputs, run.parse_errors, project_units_by_slot, results)
-                .map_err(|error| check_failure(error.message().to_owned()))?
-        }
+        Some((project_units_by_slot, results)) => assemble_project_reports(
+            run.inputs,
+            run.parse_errors,
+            project_units_by_slot,
+            results?,
+        )
+        .map_err(|error| check_failure(error.message().to_owned()))?,
     };
     attach_project_notices(&mut reports, &inventory.notices);
     Ok(ProjectCheckRun { reports, inventory })
 }
 
-#[cfg(test)]
-fn check_project_local_operation_shadow_for_test<Acquire>(
-    inputs: Vec<FileInput>,
-    operation: ProjectLocalShadowOperationForTest,
-    acquire: Acquire,
-) -> Result<ProjectCheckRun, DriverError>
-where
-    Acquire: FnOnce() -> Result<
-            Arc<typokat_library_product::LibraryDeclarationProduct>,
-            Arc<LibraryInitError>,
-        > + Send,
-{
-    match operation {
-        ProjectLocalShadowOperationForTest::Source => {
-            let product = acquire()?;
-            if inputs.len() != 1 {
-                return Err(check_failure(
-                    "source project-local shadow requires exactly one input".to_owned(),
-                ));
-            }
-            let product_identity = Arc::as_ptr(&product).addr();
-            on_check_worker_with_identity(Some(product_identity), move || {
-                check_project_local_shadow_for_test(
-                    inputs,
-                    ProjectLocalShadowRouteForTest::RepeatedProject,
-                    || Ok(product),
-                )
-            })?
-        }
-        ProjectLocalShadowOperationForTest::RepeatedProject
-        | ProjectLocalShadowOperationForTest::OfficialBatch => {
-            let product = acquire()?;
-            let product_identity = Arc::as_ptr(&product).addr();
-            on_check_worker_with_identity(Some(product_identity), move || {
-                check_project_local_shadow_for_test(
-                    inputs,
-                    ProjectLocalShadowRouteForTest::RepeatedProject,
-                    || Ok(product),
-                )
-            })?
-        }
-        ProjectLocalShadowOperationForTest::Files => {
-            let product = acquire()?;
-            test_support::record_provider_acquired_before_rayon_for_test();
-            let trace_context = test_support::current_trace_context_for_test();
-            let product_identity = Arc::as_ptr(&product).addr();
-            let reports = inputs
-                .into_par_iter()
-                .map(|input| {
-                    let _trace_enrollment = trace_context
-                        .as_ref()
-                        .map(test_support::ProductionDriverFaultTraceContextForTest::enroll);
-                    test_support::record_rayon_worker_start_for_test();
-                    let worker_product = Arc::clone(&product);
-                    on_check_worker_with_identity(Some(product_identity), move || {
-                        check_project_local_shadow_for_test(
-                            vec![input],
-                            ProjectLocalShadowRouteForTest::RepeatedProject,
-                            || Ok(worker_product),
-                        )
-                    })?
-                    .and_then(|run| {
-                        let mut reports = run.reports;
-                        if reports.len() != 1 {
-                            return Err(check_failure(
-                                "one-file project-local shadow returned invalid report coverage"
-                                    .to_owned(),
-                            ));
-                        }
-                        reports.pop().ok_or_else(|| {
-                            check_failure(
-                                "one-file project-local shadow returned no report".to_owned(),
-                            )
-                        })
-                    })
-                })
-                .collect::<Result<Vec<_>, DriverError>>()?;
-            Ok(ProjectCheckRun {
-                reports,
-                inventory: ProjectModuleInventory::default(),
-            })
-        }
-        ProjectLocalShadowOperationForTest::Standalone
-        | ProjectLocalShadowOperationForTest::Cli => on_standalone_check_worker(move || {
-            check_project_local_shadow_for_test(
-                inputs,
-                ProjectLocalShadowRouteForTest::Standalone,
-                acquire,
-            )
-        })?,
+fn one_file_report(
+    mut reports: Vec<FileReport>,
+    operation: &'static str,
+) -> Result<FileReport, DriverError> {
+    if reports.len() != 1 {
+        return Err(check_failure(format!(
+            "{operation} produced invalid report coverage"
+        )));
     }
+    reports
+        .pop()
+        .ok_or_else(|| check_failure(format!("{operation} produced no report")))
 }
 
 /// Check many files in parallel, with an independent allocator/interner per file.
@@ -394,7 +280,7 @@ where
 /// lossless and keep the `!Send + !Sync` AST on its parser thread. Order is
 /// preserved: `reports[i]` corresponds to `inputs[i]`.
 pub fn check_files(inputs: Vec<FileInput>) -> Result<Vec<FileReport>, DriverError> {
-    let base = library_base()?;
+    let product = library_product()?;
     #[cfg(test)]
     test_support::record_provider_acquired_before_rayon_for_test();
     #[cfg(test)]
@@ -408,12 +294,16 @@ pub fn check_files(inputs: Vec<FileInput>) -> Result<Vec<FileReport>, DriverErro
                 .map(test_support::ProductionDriverFaultTraceContextForTest::enroll);
             #[cfg(test)]
             test_support::record_rayon_worker_start_for_test();
-            let worker_base = base.clone();
-            let checked_base = worker_base.clone();
-            on_check_worker(&worker_base, move || {
-                check_one_file_against_library(&checked_base, input)
-            })?
-            .map_err(check_failure)
+            let worker_product = Arc::clone(&product);
+            let checked_product = Arc::clone(&worker_product);
+            let run = on_check_worker(&worker_product, move || {
+                check_checker_session_project(
+                    vec![input],
+                    CheckerSessionRoute::RepeatedProject,
+                    checked_product,
+                )
+            })??;
+            one_file_report(run.reports, "single-file checker session")
         })
         .collect::<Result<Vec<_>, _>>()?;
     #[cfg(test)]
@@ -421,64 +311,40 @@ pub fn check_files(inputs: Vec<FileInput>) -> Result<Vec<FileReport>, DriverErro
     Ok(reports)
 }
 
-/// Check a local relative-module project in one serial type universe, resolving
-/// only `./` / `../` specifiers among the provided `.ts` files. Runs on a large-stack
-/// worker for the same reason as [`check_source`] (deep input meets the checker's nesting
-/// budget rather than a native parser stack overflow); `inputs` and the returned reports
-/// are owned/`Send`, so they cross the scope cleanly.
+/// Check a local relative-module project in one serial type universe.
 pub fn check_project(inputs: Vec<FileInput>) -> Result<Vec<FileReport>, DriverError> {
-    let base = library_base()?;
+    let product = library_product()?;
+    let checked_product = Arc::clone(&product);
+    let reports = on_check_worker(&product, move || {
+        check_checker_session_project(
+            inputs,
+            CheckerSessionRoute::RepeatedProject,
+            checked_product,
+        )
+        .map(|run| run.reports)
+    })??;
     #[cfg(test)]
-    {
-        let (reports, receipt) = on_check_worker(&base, || {
-            let reports = check_project_inner(&base, inputs);
-            let receipt = crate::check::checker::project_binding_thread_receipt_for_test();
-            (reports, receipt)
-        })?;
-        crate::check::checker::merge_project_binding_thread_receipt_for_test(receipt);
-        let reports = reports.map_err(check_failure)?;
-        test_support::record_reports_exposed_for_test(reports.len());
-        Ok(reports)
-    }
-    #[cfg(not(test))]
-    {
-        on_check_worker(&base, || check_project_inner(&base, inputs))?.map_err(check_failure)
-    }
+    test_support::record_reports_exposed_for_test(reports.len());
+    Ok(reports)
 }
 
-/// Check one standalone project through a complete library-plus-project source publication.
+/// Check one standalone project through a fresh checker session.
 pub fn check_project_once(inputs: Vec<FileInput>) -> Result<Vec<FileReport>, DriverError> {
     if inputs.is_empty() {
         return Ok(Vec::new());
     }
+    let product = library_product()?;
+    let checked_product = Arc::clone(&product);
+    let reports = on_check_worker(&product, move || {
+        check_checker_session_project(inputs, CheckerSessionRoute::Standalone, checked_product)
+            .map(|run| run.reports)
+    })??;
     #[cfg(test)]
-    {
-        let (reports, receipt, complete_source_receipt) = on_standalone_check_worker(|| {
-            let reports = check_project_once_inner(inputs, ProjectResolutionMode::ExplicitFileList)
-                .map(|run| run.reports);
-            let receipt = crate::check::checker::project_binding_thread_receipt_for_test();
-            let complete_source_receipt = crate::check::checker::library_compiler::complete_source_route_thread_receipt_for_test();
-            (reports, receipt, complete_source_receipt)
-        })?;
-        crate::check::checker::merge_project_binding_thread_receipt_for_test(receipt);
-        crate::check::checker::library_compiler::merge_complete_source_route_thread_receipt_for_test(
-            complete_source_receipt,
-        );
-        let reports = reports.map_err(complete_source_driver_error)?;
-        test_support::record_reports_exposed_for_test(reports.len());
-        Ok(reports)
-    }
-    #[cfg(not(test))]
-    {
-        on_standalone_check_worker(|| {
-            check_project_once_inner(inputs, ProjectResolutionMode::ExplicitFileList)
-                .map(|run| run.reports)
-        })?
-        .map_err(complete_source_driver_error)
-    }
+    test_support::record_reports_exposed_for_test(reports.len());
+    Ok(reports)
 }
 
-/// Check one config-backed Bundler project through the same production lifecycle.
+/// Check one config-backed Bundler project through a fresh checker session.
 pub fn check_bundler_project_once(
     inputs: Vec<FileInput>,
     project_directory: PathBuf,
@@ -490,144 +356,21 @@ pub fn check_bundler_project_once(
             inventory: ProjectModuleInventory::default(),
         });
     }
-    on_standalone_check_worker(|| {
-        check_project_once_inner(
+    let product = library_product()?;
+    let checked_product = Arc::clone(&product);
+    let run = on_check_worker(&product, move || {
+        check_checker_session_project(
             inputs,
-            ProjectResolutionMode::BundlerProject {
+            CheckerSessionRoute::Bundler {
                 project_directory,
                 roots,
             },
+            checked_product,
         )
-    })?
-    .map_err(complete_source_driver_error)
-}
-
-enum CompleteSourceCheckError {
-    Library(LibraryInitError),
-    Check(String),
-}
-
-fn complete_source_driver_error(error: CompleteSourceCheckError) -> DriverError {
-    match error {
-        CompleteSourceCheckError::Library(error) => {
-            DriverError::LibraryInitialization(Arc::new(error))
-        }
-        CompleteSourceCheckError::Check(message) => check_failure(message),
-    }
-}
-
-fn check_project_once_inner(
-    inputs: Vec<FileInput>,
-    resolution_mode: ProjectResolutionMode,
-) -> Result<ProjectCheckRun, CompleteSourceCheckError> {
-    let run = match resolution_mode {
-        ProjectResolutionMode::ExplicitFileList => {
-            run_clean_project_frontend_with_deferred_auxiliary(
-                inputs,
-                ProjectResolutionMode::ExplicitFileList,
-                crate::library::packaged_library_source_inputs,
-                move |_, source_specs, library_programs, units, _parse_work| {
-                    record_complete_source_parse_work(_parse_work);
-                    let injected = injected_library_sources(source_specs);
-                    crate::check::checker::library_compiler::compile_complete_source_project_programs(
-                        &injected,
-                        library_programs,
-                        units,
-                    )
-                },
-            )
-        }
-        ProjectResolutionMode::BundlerProject {
-            project_directory,
-            roots,
-        } => run_clean_bundler_project_frontend_with_default_modules(
-            inputs,
-            project_directory,
-            roots,
-            crate::library::packaged_library_source_inputs,
-            move |_,
-                  source_specs,
-                  library_programs,
-                  units,
-                  source_reexports,
-                  default_modules,
-                  _parse_work| {
-                record_complete_source_parse_work(_parse_work);
-                let injected = injected_library_sources(source_specs);
-                crate::check::checker::library_compiler::compile_complete_source_project_programs_with_default_modules(
-                    &injected,
-                    library_programs,
-                    units,
-                    source_reexports,
-                    default_modules,
-                )
-            },
-        ),
-    };
-    match run.product {
-        Err(DeferredProjectFrontendError::Auxiliary(error)) => {
-            Err(CompleteSourceCheckError::Library(error))
-        }
-        Err(DeferredProjectFrontendError::Inventory(error)) => Err(
-            CompleteSourceCheckError::Check(format!("project inventory failed: {error}")),
-        ),
-        Ok(AccountedProjectProduct {
-            inventory,
-            product: None,
-        }) => {
-            let mut reports = parse_reports_from_frontend_run(run.inputs, run.parse_errors);
-            attach_project_notices(&mut reports, &inventory.notices);
-            Ok(ProjectCheckRun { reports, inventory })
-        }
-        Ok(AccountedProjectProduct {
-            product: Some(Err(error)),
-            ..
-        }) => Err(CompleteSourceCheckError::Check(format!(
-            "complete-source project compilation failed: {error:?}"
-        ))),
-        Ok(AccountedProjectProduct {
-            inventory,
-            product: Some(Ok(results)),
-        }) => {
-            let mut reports = project_reports_from_frontend_run(ProjectFrontendRun {
-                inputs: run.inputs,
-                parse_errors: run.parse_errors,
-                product: (
-                    results
-                        .iter()
-                        .map(|result| result.module_ordinal.index())
-                        .collect(),
-                    Ok(results),
-                ),
-            })
-            .map_err(|message| CompleteSourceCheckError::Check(message.to_owned()))?;
-            attach_project_notices(&mut reports, &inventory.notices);
-            Ok(ProjectCheckRun { reports, inventory })
-        }
-    }
-}
-
-fn injected_library_sources(
-    source_specs: &[AuxiliarySourceInput],
-) -> Vec<crate::check::checker::library_compiler::InjectedLibrarySource<'_>> {
-    source_specs
-        .iter()
-        .map(
-            |source| crate::check::checker::library_compiler::InjectedLibrarySource {
-                file_ordinal: crate::library::LibraryFileOrdinal::new(source.source_ordinal),
-                name: &source.name,
-                source: &source.source,
-            },
-        )
-        .collect()
-}
-
-fn record_complete_source_parse_work(_parse_work: crate::frontend::AuxiliaryParseWork) {
+    })??;
     #[cfg(test)]
-    crate::check::checker::library_compiler::record_complete_source_auxiliary_parse_work_for_test(
-        _parse_work.parser_invocations,
-        _parse_work.source_reparses,
-    );
+    test_support::record_reports_exposed_for_test(run.reports.len());
+    Ok(run)
 }
 
 fn attach_project_notices(reports: &mut [FileReport], notices: &[String]) {
@@ -636,21 +379,9 @@ fn attach_project_notices(reports: &mut [FileReport], notices: &[String]) {
     }
 }
 
-/// Stable attestation for the standalone CLI lifecycle.
-pub const fn production_cli_route() -> &'static str {
-    "production-complete-source-once"
-}
-
-fn check_project_inner(
-    base: &FrozenLibraryBase,
-    inputs: Vec<FileInput>,
-) -> Result<Vec<FileReport>, String> {
-    check_project_against_library(base, inputs)
-}
-
-/// The process-wide default-library base. Publication happens once, on the first caller's thread,
-/// and never inside a rayon fan-out.
-fn library_base() -> Result<Arc<FrozenLibraryBase>, Arc<LibraryInitError>> {
+/// The process-wide immutable declaration product. Publication happens before worker fan-out.
+fn library_product(
+) -> Result<Arc<typokat_library_product::LibraryDeclarationProduct>, Arc<LibraryInitError>> {
     static PROVIDER: LazyLock<LibraryBaseProvider> = LazyLock::new(LibraryBaseProvider::new);
     #[cfg(test)]
     if let Some(result) = test_support::acquire_provider_for_test(&PROVIDER) {
@@ -661,33 +392,39 @@ fn library_base() -> Result<Arc<FrozenLibraryBase>, Arc<LibraryInitError>> {
 
 /// Stable attestation for every production consumer of the default-library singleton.
 pub fn production_library_route() -> Result<&'static str, Arc<LibraryInitError>> {
-    let _base = library_base()?;
-    Ok("production-default-library")
+    let _product = library_product()?;
+    Ok("production-checker-session")
 }
 
 /// Run `work` on a large-stack worker, for the reason given at [`CHECK_STACK_SIZE`]. Spawn and
 /// join failures return through the typed driver-infrastructure boundary.
 fn on_check_worker<T, W>(
-    _base: &Arc<FrozenLibraryBase>,
+    product: &Arc<typokat_library_product::LibraryDeclarationProduct>,
     work: W,
 ) -> Result<T, DriverInfrastructureError>
 where
     T: Send,
     W: FnOnce() -> T + Send,
 {
-    on_check_worker_with_identity(Some(Arc::as_ptr(_base).addr()), work)
-}
-
-fn on_standalone_check_worker<T, W>(work: W) -> Result<T, DriverInfrastructureError>
-where
-    T: Send,
-    W: FnOnce() -> T + Send,
-{
-    on_check_worker_with_identity(None, work)
+    #[cfg(test)]
+    {
+        let (output, receipt) =
+            on_check_worker_with_identity(Some(Arc::as_ptr(product).addr()), move || {
+                let output = work();
+                let receipt = crate::check::checker::project_binding_thread_receipt_for_test();
+                (output, receipt)
+            })?;
+        crate::check::checker::merge_project_binding_thread_receipt_for_test(receipt);
+        Ok(output)
+    }
+    #[cfg(not(test))]
+    {
+        on_check_worker_with_identity(Some(Arc::as_ptr(product).addr()), work)
+    }
 }
 
 fn on_check_worker_with_identity<T, W>(
-    _base_identity: Option<usize>,
+    _product_identity: Option<usize>,
     work: W,
 ) -> Result<T, DriverInfrastructureError>
 where
@@ -702,7 +439,7 @@ where
         ));
     }
     #[cfg(test)]
-    test_support::record_worker_start_for_test(_base_identity.unwrap_or_default());
+    test_support::record_worker_start_for_test(_product_identity.unwrap_or_default());
     #[cfg(test)]
     let work = {
         let trace_context = test_support::current_trace_context_for_test();
@@ -740,140 +477,6 @@ where
     })
 }
 
-fn check_source_against_library(
-    base: &FrozenLibraryBase,
-    source: &str,
-) -> Result<CheckOutput, String> {
-    let route_input = FileInput {
-        name: "input.ts".to_owned(),
-        source: source.to_owned(),
-    };
-    match base.route_user_project(std::slice::from_ref(&route_input)) {
-        Err(crate::library::LibraryProjectRouteError::UserParseRejected) => {
-            Ok(parse_only_source_output(source))
-        }
-        Err(error) => Err(error.to_string()),
-        Ok(RoutedLibraryProject::Shared(state)) => {
-            continue_source_with_library_runtime(state, source)
-        }
-        Ok(RoutedLibraryProject::Private(private)) => {
-            #[cfg(test)]
-            crate::check::checker::library_compiler::record_private_replay_route_invocation_for_test();
-            continue_private_source_with_library(private, source)
-        }
-        Ok(RoutedLibraryProject::CompleteSourceFallback(fallback)) => {
-            #[cfg(test)]
-            crate::check::checker::library_compiler::record_private_replay_route_invocation_for_test();
-            continue_complete_source_with_library(
-                *fallback,
-                vec![FileInput {
-                    name: "input.ts".to_owned(),
-                    source: source.to_owned(),
-                }],
-            )
-            .and_then(single_private_source_output)
-        }
-    }
-}
-
-fn parse_only_source_output(source: &str) -> CheckOutput {
-    CheckOutput {
-        diagnostics: Vec::new(),
-        parse_errors: parse_source_errors(source),
-        incomplete: Vec::new(),
-        project_notices: Vec::new(),
-    }
-}
-
-fn continue_private_source_with_library(
-    private: RoutedPrivateLibraryProject,
-    source: &str,
-) -> Result<CheckOutput, String> {
-    let reports = continue_private_project_with_library(
-        private,
-        vec![FileInput {
-            name: "input.ts".to_owned(),
-            source: source.to_owned(),
-        }],
-    )?;
-    single_private_source_output(reports)
-}
-
-fn single_private_source_output(reports: Vec<FileReport>) -> Result<CheckOutput, String> {
-    if reports.len() != 1 {
-        return Err("private single-source check produced an invalid report count".to_owned());
-    }
-    reports
-        .into_iter()
-        .next()
-        .map(|report| report.output)
-        .ok_or_else(|| "private single-source check produced no report".to_owned())
-}
-
-fn continue_source_with_library_runtime(
-    state: crate::check::checker::library_compiler::OwnedLibraryRuntimeState,
-    source: &str,
-) -> Result<CheckOutput, String> {
-    let run = run_source_frontend(source, |program| {
-        crate::check::checker::check_program_with_owned_library(state, program)
-            .map_err(str::to_owned)
-    });
-    match run.product {
-        Some(result) => {
-            let CheckResult {
-                diagnostics,
-                incomplete,
-                ..
-            } = result?;
-            Ok(CheckOutput {
-                diagnostics,
-                parse_errors: run.parse_errors,
-                incomplete,
-                project_notices: Vec::new(),
-            })
-        }
-        None => Ok(CheckOutput {
-            diagnostics: Vec::new(),
-            parse_errors: run.parse_errors,
-            incomplete: Vec::new(),
-            project_notices: Vec::new(),
-        }),
-    }
-}
-
-fn check_project_against_library(
-    base: &FrozenLibraryBase,
-    inputs: Vec<FileInput>,
-) -> Result<Vec<FileReport>, String> {
-    if inputs.is_empty() {
-        return Ok(Vec::new());
-    }
-    match base.route_user_project(&inputs) {
-        Err(crate::library::LibraryProjectRouteError::UserParseRejected) => {
-            Ok(parse_only_project_reports(inputs))
-        }
-        Err(error) => Err(error.to_string()),
-        Ok(RoutedLibraryProject::Shared(state)) => {
-            continue_project_with_library_runtime(state, inputs)
-        }
-        Ok(RoutedLibraryProject::Private(private)) => {
-            #[cfg(test)]
-            crate::check::checker::library_compiler::record_private_replay_route_invocation_for_test();
-            continue_private_project_with_library(private, inputs)
-        }
-        Ok(RoutedLibraryProject::CompleteSourceFallback(fallback)) => {
-            #[cfg(test)]
-            crate::check::checker::library_compiler::record_private_replay_route_invocation_for_test();
-            continue_complete_source_with_library(*fallback, inputs)
-        }
-    }
-}
-
-fn parse_only_project_reports(inputs: Vec<FileInput>) -> Vec<FileReport> {
-    let run = run_project_parse_only(inputs);
-    parse_reports_from_frontend_run(run.inputs, run.parse_errors)
-}
-
 fn parse_reports_from_frontend_run(
     inputs: Vec<FileInput>,
     parse_errors: Vec<Vec<String>>,
@@ -895,19 +498,6 @@ fn parse_reports_from_frontend_run(
         .collect()
 }
 
-fn check_one_file_against_library(
-    base: &FrozenLibraryBase,
-    input: FileInput,
-) -> Result<FileReport, String> {
-    let mut reports = check_project_against_library(base, vec![input])?;
-    if reports.len() != 1 {
-        return Err("single-file check produced an invalid report count".to_owned());
-    }
-    reports
-        .pop()
-        .ok_or_else(|| "single-file check produced no report".to_owned())
-}
-
 fn check_failure(message: String) -> DriverError {
     driver_failure(DriverInfrastructureKind::Check, message).into()
 }
@@ -917,136 +507,6 @@ fn driver_failure(
     message: impl Into<String>,
 ) -> DriverInfrastructureError {
     DriverInfrastructureError::new(kind, message)
-}
-
-fn continue_private_project_with_library(
-    private: RoutedPrivateLibraryProject,
-    inputs: Vec<FileInput>,
-) -> Result<Vec<FileReport>, String> {
-    let runtime = match private.into_runtime_or_complete_source_fallback()? {
-        RoutedPrivateExecution::Sparse(runtime) => *runtime,
-        RoutedPrivateExecution::CompleteSourceFallback(fallback) => {
-            return continue_complete_source_with_library(*fallback, inputs);
-        }
-    };
-    let mut state = runtime.state;
-    let permit = runtime.permit;
-    let fallback_seeds = runtime.fallback_seeds;
-    let fallback_inputs = inputs.clone();
-    let auxiliary = match state.take_private_collision_sources() {
-        Ok(sources) => sources
-            .into_iter()
-            .map(|source| AuxiliarySourceInput {
-                source_ordinal: source.file_ordinal.index(),
-                name: source.name,
-                source: source.source,
-            })
-            .collect(),
-        Err(_) => {
-            let fallback =
-                typokat_library::compile_complete_source_fallback_runtime(permit, &fallback_seeds)?;
-            return continue_complete_source_with_library(fallback, fallback_inputs);
-        }
-    };
-    match check_private_project_reports(state, inputs, auxiliary) {
-        Ok(reports) => Ok(reports),
-        Err(_) => {
-            let fallback =
-                typokat_library::compile_complete_source_fallback_runtime(permit, &fallback_seeds)?;
-            continue_complete_source_with_library(fallback, fallback_inputs)
-        }
-    }
-}
-
-fn continue_complete_source_with_library(
-    fallback: typokat_library::CompleteSourceFallbackRuntime,
-    inputs: Vec<FileInput>,
-) -> Result<Vec<FileReport>, String> {
-    #[cfg(test)]
-    crate::check::checker::library_compiler::record_private_replay_fallback_invocation_for_test();
-    let auxiliary = fallback
-        .sources
-        .iter()
-        .cloned()
-        .map(|source| AuxiliarySourceInput {
-            source_ordinal: source.file_ordinal.index(),
-            name: source.name,
-            source: source.source,
-        })
-        .collect();
-    check_complete_source_project_reports(fallback, inputs, auxiliary).map_err(str::to_owned)
-}
-
-fn check_complete_source_project_reports(
-    fallback: typokat_library::CompleteSourceFallbackRuntime,
-    inputs: Vec<FileInput>,
-    auxiliary: Vec<AuxiliarySourceInput>,
-) -> Result<Vec<FileReport>, &'static str> {
-    let typokat_library::CompleteSourceFallbackRuntime {
-        state,
-        checkpoint,
-        sources: _,
-    } = fallback;
-    let run = run_project_frontend_with_auxiliary(
-        inputs,
-        auxiliary,
-        move |_, library_programs, units| {
-            let project_units_by_slot = units
-                .iter()
-                .map(|unit| unit.module_ordinal.index())
-                .collect::<Vec<_>>();
-            (
-                project_units_by_slot,
-                crate::check::checker::check_complete_source_project_programs_with_library(
-                    state,
-                    checkpoint,
-                    library_programs,
-                    units,
-                ),
-            )
-        },
-    );
-    project_reports_from_frontend_run(run)
-}
-
-fn continue_project_with_library_runtime(
-    state: crate::check::checker::library_compiler::OwnedLibraryRuntimeState,
-    inputs: Vec<FileInput>,
-) -> Result<Vec<FileReport>, String> {
-    check_project_reports(inputs, |_, units| {
-        crate::check::checker::check_project_programs_with_library(state, units)
-    })
-    .map_err(str::to_owned)
-}
-
-fn check_private_project_reports(
-    state: crate::check::checker::library_compiler::OwnedLibraryRuntimeState,
-    inputs: Vec<FileInput>,
-    auxiliary: Vec<AuxiliarySourceInput>,
-) -> Result<Vec<FileReport>, &'static str> {
-    if inputs.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let run = run_project_frontend_with_auxiliary(
-        inputs,
-        auxiliary,
-        move |_, library_programs, units| {
-            let project_units_by_slot = units
-                .iter()
-                .map(|unit| unit.module_ordinal.index())
-                .collect::<Vec<_>>();
-            (
-                project_units_by_slot,
-                crate::check::checker::check_private_project_programs_with_library(
-                    state,
-                    library_programs,
-                    units,
-                ),
-            )
-        },
-    );
-    project_reports_from_frontend_run(run)
 }
 
 #[cfg(test)]
@@ -1088,6 +548,7 @@ where
         .expect("test checker returns complete project result coverage")
 }
 
+#[cfg(test)]
 /// [`check_project_inner_with_checker`] for a checker that can refuse the run outright. A refusal
 /// yields `Err` before any [`FileReport`] is built, so no partial user output precedes it.
 fn check_project_reports<F>(
@@ -1114,6 +575,7 @@ where
     project_reports_from_frontend_run(run)
 }
 
+#[cfg(test)]
 type CheckedProjectFrontendProduct = (Vec<usize>, Result<Vec<CheckResult>, &'static str>);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1147,6 +609,7 @@ impl ProjectReportAssemblyError {
     }
 }
 
+#[cfg(test)]
 fn project_reports_from_frontend_run(
     run: ProjectFrontendRun<CheckedProjectFrontendProduct>,
 ) -> Result<Vec<FileReport>, &'static str> {
@@ -1249,7 +712,7 @@ mod test_support {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub(super) enum ProviderTraceFaultForTest {
         AcquireInsideRayon,
-        ReplaceOneWorkerBase,
+        ReplaceOneWorkerProduct,
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1269,13 +732,15 @@ mod test_support {
         pub reports_exposed: usize,
         pub provider_acquired_before_rayon: bool,
         pub provider_instance_identity: usize,
-        pub published_base_identity: usize,
-        pub worker_base_identities: Vec<usize>,
+        pub published_product_identity: usize,
+        pub worker_product_identities: Vec<usize>,
     }
 
     struct ActiveScope {
         fault: ProductionDriverFaultForTest,
-        provider_result: OnceLock<Result<Arc<FrozenLibraryBase>, Arc<LibraryInitError>>>,
+        provider_result: OnceLock<
+            Result<Arc<typokat_library_product::LibraryDeclarationProduct>, Arc<LibraryInitError>>,
+        >,
         trace: Mutex<ProductionDriverTraceForTest>,
     }
 
@@ -1357,7 +822,9 @@ mod test_support {
 
     pub(super) fn acquire_provider_for_test(
         provider: &'static LazyLock<LibraryBaseProvider>,
-    ) -> Option<Result<Arc<FrozenLibraryBase>, Arc<LibraryInitError>>> {
+    ) -> Option<
+        Result<Arc<typokat_library_product::LibraryDeclarationProduct>, Arc<LibraryInitError>>,
+    > {
         let active = active_scope()?;
         {
             let mut trace = lock(&active.trace);
@@ -1376,11 +843,11 @@ mod test_support {
                             message.clone(),
                         )));
                     }
-                    let base = provider.get()?;
+                    let product = provider.get()?;
                     let mut trace = lock(&active.trace);
                     trace.provider_publications += 1;
-                    trace.published_base_identity = Arc::as_ptr(&base).addr();
-                    Ok(base)
+                    trace.published_product_identity = Arc::as_ptr(&product).addr();
+                    Ok(product)
                 })
                 .clone(),
         )
@@ -1422,7 +889,7 @@ mod test_support {
         }
     }
 
-    pub(super) fn record_worker_start_for_test(base_identity: usize) {
+    pub(super) fn record_worker_start_for_test(product_identity: usize) {
         let Some(active) = active_scope() else {
             return;
         };
@@ -1431,13 +898,13 @@ mod test_support {
         let replace = matches!(
             active.fault,
             ProductionDriverFaultForTest::ProviderTrace(
-                ProviderTraceFaultForTest::ReplaceOneWorkerBase
+                ProviderTraceFaultForTest::ReplaceOneWorkerProduct
             )
-        ) && trace.worker_base_identities.is_empty();
-        trace.worker_base_identities.push(if replace {
-            base_identity.wrapping_add(1)
+        ) && trace.worker_product_identities.is_empty();
+        trace.worker_product_identities.push(if replace {
+            product_identity.wrapping_add(1)
         } else {
-            base_identity
+            product_identity
         });
     }
 
@@ -1482,12 +949,8 @@ mod test_support {
 mod project_report_coverage_spec;
 
 #[cfg(test)]
-#[path = "driver/spec/wu6_benchmark_route_spec.rs"]
-mod wu6_benchmark_route_spec;
-
-#[cfg(test)]
-#[path = "driver/spec/wu5_project_local_shadow_spec.rs"]
-mod wu5_project_local_shadow_spec;
+#[path = "driver/spec/project_session_behavior_spec.rs"]
+mod project_session_behavior_spec;
 
 #[cfg(test)]
 #[path = "driver/spec/wu7_provider_lifecycle_spec.rs"]

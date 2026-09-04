@@ -1,5 +1,12 @@
+#[cfg(any(test, feature = "library-record-census",))]
 mod base;
+#[cfg(any(test, feature = "library-record-census",))]
 mod collision_preflight;
+#[cfg(any(
+    test,
+    feature = "library-record-census",
+    feature = "project-binder-probe"
+))]
 pub mod compiler;
 mod declaration_product;
 pub mod profile;
@@ -12,10 +19,20 @@ mod provider;
 pub mod records;
 
 pub(crate) use typokat_binder::binder;
+#[cfg(any(
+    test,
+    feature = "library-record-census",
+    feature = "project-binder-probe"
+))]
 pub(crate) use typokat_check::check;
 pub(crate) use typokat_core::source;
 #[cfg(any(test, feature = "library-record-census"))]
 pub(crate) use typokat_core::span;
+#[cfg(any(
+    test,
+    feature = "library-record-census",
+    feature = "project-binder-probe"
+))]
 pub(crate) use typokat_frontend::frontend;
 
 #[cfg(test)]
@@ -35,15 +52,15 @@ pub use crate::source::LibraryFileOrdinal;
 /// ```compile_fail
 /// use typokat_library::LayeredUserDelta;
 /// ```
+#[cfg(any(test, feature = "library-record-census",))]
 pub use base::{
     compile_complete_source_fallback_runtime, CompleteSourceFallbackRuntime, FrozenLibraryBase,
     LibraryProjectRouteError, RoutedLibraryProject, RoutedPrivateExecution,
     RoutedPrivateLibraryProject,
 };
-pub use provider::{
-    LibraryBaseProvider, LibraryInitCause, LibraryInitError, LibraryInitStage,
-    LibraryProjectBinderContinuation,
-};
+#[cfg(any(test, feature = "library-record-census",))]
+pub use provider::LibraryProjectBinderContinuation;
+pub use provider::{LibraryBaseProvider, LibraryInitCause, LibraryInitError, LibraryInitStage};
 /// The library's own records are inspectable only by asking for them (ADR-0018); no base,
 /// provider, or check retains one.
 #[cfg(feature = "library-record-census")]
@@ -73,6 +90,7 @@ pub const fn embedded_library_profile_metadata() -> EmbeddedLibraryProfileMetada
     }
 }
 
+#[cfg(any(test, feature = "library-record-census",))]
 /// Load the exact packaged source profile for a same-run complete-source compiler.
 #[doc(hidden)]
 pub fn packaged_library_source_inputs(

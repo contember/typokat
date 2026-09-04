@@ -261,7 +261,6 @@ impl LibrarySemanticIdentities {
         }
     }
 
-    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
     pub(in crate::check::checker) fn select_project_local_exact(
         groups: [Option<TypeGroupId>; 8],
         published: &PublishedTypeEnvironment,

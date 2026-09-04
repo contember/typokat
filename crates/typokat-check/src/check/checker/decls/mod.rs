@@ -4725,7 +4725,6 @@ pub(in crate::check::checker) fn reserve_type_decls_from_inventory<'ast>(
     reserve_type_decls_with_policy(state, inventory, false, None, None, None)
 }
 
-#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 pub(in crate::check::checker) fn reserve_type_decls_for_project_local_user_from_inventory<'ast>(
     state: TypeDeclReservationState<'_, 'ast>,
     inventory: &BoundTypeDeclarationInventory<'ast>,

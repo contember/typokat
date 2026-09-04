@@ -33,7 +33,6 @@ mod functions;
 mod signatures;
 mod type_operators;
 
-#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 pub(in crate::check::checker) fn project_local_well_known_symbol_from_name(
     name: &str,
 ) -> Option<WellKnownSymbol> {

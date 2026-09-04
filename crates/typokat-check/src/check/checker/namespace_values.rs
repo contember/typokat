@@ -128,7 +128,6 @@ pub(in crate::check::checker) enum StandaloneNamespaceTerminal {
     },
 }
 
-#[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
 pub(in crate::check::checker) struct ProjectLocalNamespaceSeed {
     pub(in crate::check::checker) namespace: NamespaceId,
     pub(in crate::check::checker) storage: ValueStorageId,
@@ -740,7 +739,6 @@ impl FrozenNamespaceValueTerminals {
 }
 
 impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
-    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
     pub(in crate::check::checker) fn install_project_local_namespace_seeds(
         &mut self,
         seeds: Vec<ProjectLocalNamespaceSeed>,
@@ -778,7 +776,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         Ok(())
     }
 
-    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
     pub(in crate::check::checker) fn retain_project_local_unsupported_namespace_terminals(
         &mut self,
         demanded: &FxHashSet<NamespaceId>,

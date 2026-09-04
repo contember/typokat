@@ -361,7 +361,7 @@ fn mapped_product_groups(
     bound: &BoundProjectBinder,
 ) -> Result<Vec<ProjectLocalProductRow>, ProjectLocalCandidateErrorForTest> {
     let map = bound
-        .library_product_map_for_test()
+        .library_product_map()
         .ok_or(ProjectLocalCandidateErrorForTest::MissingProductBinderMap)?;
     product
         .groups()

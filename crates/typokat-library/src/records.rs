@@ -12,7 +12,7 @@ use super::profile::ExactLibraryProfile;
 use crate::check::checker::library_compiler::NormalizedCheckerRecordForTest;
 use crate::check::checker::project_local::{
     project_local_semantic_candidate_for_test, ProjectLocalOrderForTest,
-    ProjectLocalSemanticRequestForTest,
+    ProjectLocalSemanticRequestForTest, ProjectSourceReexportPolicy,
 };
 #[cfg(test)]
 use crate::check::checker::reporting_record::CheckerRecord;
@@ -148,7 +148,7 @@ impl LibraryRecordCensus {
                     crate::check::checker::bind_library_product_project_programs(
                         &product_for_run,
                         programs,
-                        source_reexports,
+                        ProjectSourceReexportPolicy::Admit(source_reexports),
                         default_modules,
                     )?;
                 Ok::<_, crate::check::checker::LibraryProductProjectBindingError>(
