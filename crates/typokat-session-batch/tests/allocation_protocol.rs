@@ -66,7 +66,10 @@ fn assert_real_clean_frame(receipt: &Value) {
     let materialized = receipt["materialized_product_owner_count"]
         .as_u64()
         .expect("materialized product owner count");
-    assert!(materialized > 0, "the real session must own demanded library work");
+    assert!(
+        materialized > 0,
+        "the real session must own demanded library work"
+    );
     assert!(
         materialized < 100,
         "a narrow Array frame must not force the full library: {materialized} owners"
