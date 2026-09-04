@@ -807,7 +807,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 )
             })
             .collect();
-        #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
         for group in &class_groups {
             let _ = self.demand_project_local_type_group(*group);
         }

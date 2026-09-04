@@ -171,7 +171,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         symbol: _,
                         kind: ResolvedValueKind::StandaloneNamespace { namespace, storage },
                     } => {
-                        #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
                         if !self.demand_project_local_value(storage) {
                             return Some((well_known.error, span));
                         }
@@ -949,7 +948,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         symbol_id: SymbolId,
         ref_start: u32,
     ) -> TypeId {
-        #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
         if let Some(storage) = self.effective_value_storage_for_symbol(symbol_id) {
             let _ = self.demand_project_local_value(storage);
         }
