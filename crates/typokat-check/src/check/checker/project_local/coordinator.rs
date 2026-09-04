@@ -126,7 +126,8 @@ impl<'a, Commit> ProjectLocalPassDemandGateway<'a, Commit> {
         augmented_groups: &'a BTreeMap<usize, TypeGroupId>,
         native_array_groups: [Option<usize>; 2],
         user_type_products: &'a BTreeMap<TypeGroupId, Vec<usize>>,
-        product_value_bindings: &[(usize, ValueStorageId)],
+        product_value_demands: &[(usize, ValueStorageId)],
+        product_value_publications: &[(usize, ValueStorageId)],
         global_value_products: Vec<usize>,
         commit: Commit,
     ) -> Self {
@@ -143,9 +144,11 @@ impl<'a, Commit> ProjectLocalPassDemandGateway<'a, Commit> {
             .collect();
         let mut value_products = BTreeMap::new();
         let mut value_storages = BTreeMap::<usize, Vec<ValueStorageId>>::new();
-        for (product_group, storage) in product_value_bindings {
+        for (product_group, storage) in product_value_demands {
             let replaced = value_products.insert(storage.index(), *product_group);
             debug_assert!(replaced.is_none() || replaced == Some(*product_group));
+        }
+        for (product_group, storage) in product_value_publications {
             value_storages
                 .entry(*product_group)
                 .or_default()
@@ -171,7 +174,8 @@ impl<'a, Commit> ProjectLocalPassDemandGateway<'a, Commit> {
         augmented_groups: &'a BTreeMap<usize, TypeGroupId>,
         native_array_groups: [Option<usize>; 2],
         user_type_products: &'a BTreeMap<TypeGroupId, Vec<usize>>,
-        product_value_bindings: &[(usize, ValueStorageId)],
+        product_value_demands: &[(usize, ValueStorageId)],
+        product_value_publications: &[(usize, ValueStorageId)],
         global_value_products: Vec<usize>,
         commit: Commit,
     ) -> Self {
@@ -181,7 +185,8 @@ impl<'a, Commit> ProjectLocalPassDemandGateway<'a, Commit> {
             augmented_groups,
             native_array_groups,
             user_type_products,
-            product_value_bindings,
+            product_value_demands,
+            product_value_publications,
             global_value_products,
             commit,
         )

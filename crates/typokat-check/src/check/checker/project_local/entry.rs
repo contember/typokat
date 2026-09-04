@@ -18,9 +18,10 @@ use super::observation::ProjectLocalSemanticPhaseForTest;
 use super::project_local_pass_port::{
     project_local_final_type_dependencies, project_local_published_types,
     project_local_user_augmented_product_groups, run_project_local_user_pass, BoundProjectBinder,
-    CheckResult, ContainerKind, LibraryBinderUnit, LibraryDeclarationProduct, NamespaceId,
-    ProjectLocalFinalTypeDependencies, ProjectLocalNamespaceSeed, ProjectLocalPublishedTypeInputs,
-    ProjectLocalUserPassOutput, ProjectLocalUserPassRequest, ProjectProgram, TypeGroupId,
+    CheckResult, ContainerKind, DeclarationPayload, LibraryBinderUnit, LibraryDeclarationProduct,
+    NamespaceId, ProjectLocalFinalTypeDependencies, ProjectLocalNamespaceSeed,
+    ProjectLocalPublishedTypeInputs, ProjectLocalUserPassOutput, ProjectLocalUserPassRequest,
+    ProjectProgram, TypeGroupId,
 };
 #[cfg(any(test, feature = "test-utils"))]
 use super::project_local_pass_port::{
@@ -689,13 +690,24 @@ where
     let global_value_roots =
         compilation_global_value_product_keys(product, &bound, coordinator.mapped_groups())?;
     let mut product_values_by_storage = std::collections::BTreeMap::new();
+    let mut product_value_publications_by_storage = std::collections::BTreeMap::new();
     for (product_key, group) in product.groups().iter().enumerate() {
-        if let Some(storage) = product
-            .group_key_at(product_key)
-            .and_then(|key| product_map.group(key))
-            .and_then(|binding| binding.value())
-        {
-            product_values_by_storage.insert(storage.index(), (product_key, storage));
+        let has_function = group.fragments.iter().any(|declaration| {
+            matches!(
+                product.declarations()[declaration.index()].payload,
+                DeclarationPayload::Function { .. }
+            )
+        });
+        if !has_function {
+            if let Some(storage) = product
+                .group_key_at(product_key)
+                .and_then(|key| product_map.group(key))
+                .and_then(|binding| binding.value())
+            {
+                product_values_by_storage.insert(storage.index(), (product_key, storage));
+                product_value_publications_by_storage
+                    .insert(storage.index(), (product_key, storage));
+            }
         }
         for declaration in &group.fragments {
             if let Some(storage) = product_map
@@ -703,19 +715,29 @@ where
                 .and_then(|binding| binding.value())
             {
                 product_values_by_storage.insert(storage.index(), (product_key, storage));
+                product_value_publications_by_storage
+                    .insert(storage.index(), (product_key, storage));
             }
         }
     }
     let product_value_bindings = product_values_by_storage.into_values().collect::<Vec<_>>();
-    let product_value_storages = |product_key: usize| {
-        product_value_bindings
-            .iter()
-            .filter_map(|(key, storage)| (*key == product_key).then_some(*storage))
-            .collect::<Vec<_>>()
+    let product_value_publications = product_value_publications_by_storage
+        .into_values()
+        .collect::<Vec<_>>();
+    let product_primary_value_storage = |product_key: usize| {
+        product
+            .group_key_at(product_key)
+            .and_then(|key| product_map.group(key))
+            .and_then(|binding| binding.value())
+            .or_else(|| {
+                product_value_publications
+                    .iter()
+                    .find_map(|(key, storage)| (*key == product_key).then_some(*storage))
+            })
     };
     let certified_library_values = super::project_local_pass_port::CertifiedLibraryValues {
         symbol: certified_well_known_symbol_owner(product)
-            .and_then(|owner| product_value_storages(owner.index()).into_iter().next()),
+            .and_then(|owner| product_primary_value_storage(owner.index())),
     };
     let product_value_types = coordinator
         .mapped_groups()
@@ -727,9 +749,11 @@ where
                 .copied()
                 .flatten()?;
             Some(
-                product_value_storages(row.product_key)
-                    .into_iter()
-                    .map(move |storage| (storage, ty)),
+                product_value_publications
+                    .iter()
+                    .filter_map(move |(key, storage)| {
+                        (*key == row.product_key).then_some((*storage, ty))
+                    }),
             )
         })
         .flatten()
@@ -738,7 +762,7 @@ where
         .iter()
         .filter_map(|product_key| {
             let row = coordinator.mapped_groups().get(*product_key)?;
-            let storage = product_value_storages(*product_key).into_iter().next()?;
+            let storage = product_primary_value_storage(*product_key)?;
             let name = product.strings()[row.name.index()].clone();
             Some((name, storage))
         })
@@ -748,7 +772,7 @@ where
         .iter()
         .filter_map(|row| {
             let namespace = row.local_namespace?;
-            let storage = product_value_storages(row.product_key).into_iter().next()?;
+            let storage = product_primary_value_storage(row.product_key)?;
             let ty = coordinator
                 .semantic_group_value_types()
                 .get(row.product_key)
@@ -773,6 +797,7 @@ where
                 native_array_groups,
                 user_product_dependencies,
                 &product_value_bindings,
+                &product_value_publications,
                 global_value_roots,
                 commit,
             );
