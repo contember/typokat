@@ -1,5 +1,7 @@
 use super::super::decls::alloc_type_param_ids;
 use super::*;
+use crate::class_semantics::DemandOutcome;
+use crate::types::{substitute_with_outcome, SubstitutionOutcome};
 use oxc_ast::ast::TSTypeParameterDeclaration;
 
 #[derive(Default)]
@@ -50,11 +52,22 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let mut unavailable = false;
         for member in members {
             match self.lower_annotation(scope, member) {
-                Some(lowered_member) => self.extract_contextual_this_members(
-                    lowered_member,
-                    &mut structural,
-                    &mut this_type,
-                ),
+                Some(lowered_member) => {
+                    match self.extract_contextual_this_members(
+                        lowered_member,
+                        &mut structural,
+                        &mut this_type,
+                    ) {
+                        DemandOutcome::Ready(()) => {}
+                        DemandOutcome::Exhausted(exhaustion) => {
+                            let _ = self.own_type_demand(
+                                DemandOutcome::Exhausted(exhaustion),
+                                Span::from_oxc(member.span()),
+                            );
+                            unavailable = true;
+                        }
+                    }
+                }
                 None => unavailable = true,
             }
         }
@@ -67,14 +80,51 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         Some(self.interner.intersection(structural))
     }
 
-    /// Flatten only contextual-intersection operands before canonical interning so
-    /// the first syntactic `ThisType` survives aliases and nested intersections.
+    /// Flatten contextual-intersection operands before canonical interning. Alias
+    /// applications remain symbolic everywhere else, but this consumer inspects a
+    /// final alias body so an enclosed `ThisType` marker and its structural siblings
+    /// participate at the alias's original outer-syntax position.
     fn extract_contextual_this_members(
-        &self,
+        &mut self,
         ty: TypeId,
         structural: &mut Vec<TypeId>,
         this_type: &mut Option<TypeId>,
-    ) {
+    ) -> DemandOutcome<()> {
+        self.extract_contextual_this_members_inner(
+            ty,
+            structural,
+            this_type,
+            &mut FxHashSet::default(),
+        )
+    }
+
+    /// Normalize a contextual root after alias publication. The root itself may be a
+    /// transparent alias application whose terminal body is the actual intersection.
+    pub(in crate::check::checker) fn normalize_contextual_intersection(
+        &mut self,
+        ty: TypeId,
+    ) -> DemandOutcome<TypeId> {
+        let mut structural = Vec::new();
+        let mut this_type = None;
+        match self.extract_contextual_this_members(ty, &mut structural, &mut this_type) {
+            DemandOutcome::Ready(()) => {}
+            DemandOutcome::Exhausted(exhaustion) => {
+                return DemandOutcome::Exhausted(exhaustion);
+            }
+        }
+        if let Some(this_type) = this_type {
+            structural.push(this_type);
+        }
+        DemandOutcome::Ready(self.interner.intersection(structural))
+    }
+
+    fn extract_contextual_this_members_inner(
+        &mut self,
+        ty: TypeId,
+        structural: &mut Vec<TypeId>,
+        this_type: &mut Option<TypeId>,
+        active_aliases: &mut FxHashSet<TypeId>,
+    ) -> DemandOutcome<()> {
         if self
             .interner
             .well_known()
@@ -84,15 +134,130 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             if this_type.is_none() {
                 *this_type = Some(ty);
             }
-            return;
+            return DemandOutcome::Ready(());
         }
-        if let Some(members) = self.interner.store().intersection_members(ty) {
-            for &member in members {
-                self.extract_contextual_this_members(member, structural, this_type);
+        if let Some(members) = self
+            .interner
+            .store()
+            .intersection_members(ty)
+            .map(<[TypeId]>::to_vec)
+        {
+            for member in members {
+                match self.extract_contextual_this_members_inner(
+                    member,
+                    structural,
+                    this_type,
+                    active_aliases,
+                ) {
+                    DemandOutcome::Ready(()) => {}
+                    DemandOutcome::Exhausted(exhaustion) => {
+                        return DemandOutcome::Exhausted(exhaustion);
+                    }
+                }
             }
-            return;
+            return DemandOutcome::Ready(());
         }
-        structural.push(ty);
+        let Some(instantiation) = self.interner.store().instantiation_type(ty).cloned() else {
+            structural.push(ty);
+            return DemandOutcome::Ready(());
+        };
+        let Some(alias) = self.interner.store().alias_template_id(instantiation.base) else {
+            structural.push(ty);
+            return DemandOutcome::Ready(());
+        };
+        if !active_aliases.insert(ty) {
+            structural.push(ty);
+            return DemandOutcome::Ready(());
+        }
+        let normalized = if self.type_environment.is_published() {
+            match self.evaluate_type(ty) {
+                DemandOutcome::Ready(evaluated) => evaluated,
+                DemandOutcome::Exhausted(exhaustion) => {
+                    active_aliases.remove(&ty);
+                    return DemandOutcome::Exhausted(exhaustion);
+                }
+            }
+        } else {
+            let Some(surface) = self.construction_contextual_alias_surface(alias) else {
+                active_aliases.remove(&ty);
+                structural.push(ty);
+                return DemandOutcome::Ready(());
+            };
+            if typokat_types::alias_semantics::PublishedAliases::validate_ready_surface(
+                self.interner.store(),
+                alias,
+                &surface,
+            )
+            .is_err()
+                || surface.template() != instantiation.base
+                || surface.type_params().len() != instantiation.args.len()
+                || surface
+                    .type_params()
+                    .iter()
+                    .zip(&instantiation.args)
+                    .any(|(expected, (actual, _))| expected != actual)
+            {
+                active_aliases.remove(&ty);
+                structural.push(ty);
+                return DemandOutcome::Ready(());
+            }
+            let substitutions = instantiation.args.into_iter().collect::<FxHashMap<_, _>>();
+            match substitute_with_outcome(self.interner, surface.body(), &substitutions) {
+                SubstitutionOutcome::CycleClean(normalized)
+                | SubstitutionOutcome::CycleTainted(normalized) => normalized,
+            }
+        };
+        let extracted = if normalized == ty {
+            structural.push(ty);
+            DemandOutcome::Ready(())
+        } else {
+            self.extract_contextual_this_members_inner(
+                normalized,
+                structural,
+                this_type,
+                active_aliases,
+            )
+        };
+        active_aliases.remove(&ty);
+        extracted
+    }
+
+    fn construction_contextual_alias_surface(
+        &self,
+        alias: crate::types::repr::AliasId,
+    ) -> Option<typokat_types::alias_semantics::PublishedAliasSurface> {
+        for (_, declaration) in self.type_decls.changed_entries() {
+            let TypeDecl::Alias {
+                alias_id,
+                alias_template,
+                alias_body,
+                alias_unavailable,
+                params,
+                ..
+            } = declaration
+            else {
+                continue;
+            };
+            if *alias_id != alias {
+                continue;
+            }
+            return match (*alias_body, *alias_unavailable) {
+                (Some(body), None) => {
+                    Some(typokat_types::alias_semantics::PublishedAliasSurface::new(
+                        alias,
+                        *alias_template,
+                        params.clone(),
+                        body,
+                    ))
+                }
+                _ => None,
+            };
+        }
+        self.type_environment
+            .inherited()
+            .aliases()
+            .ready(alias)
+            .cloned()
     }
 
     /// Lower `[A, B, …]` to an ordered interned tuple; `[]` is the empty tuple.
@@ -549,9 +714,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         scope: ScopeId,
         operand: &TSType<'_>,
     ) -> Option<TypeId> {
-        if self.capture_compact_replay_dependencies {
-            let _ = self.compact_type_decl_id_replay(scope, "Array");
-        }
         match operand {
             TSType::TSArrayType(array) => {
                 let element =

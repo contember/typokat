@@ -6,9 +6,6 @@ use crate::binder::declaration::{
     SourceInterfaceOccurrenceKind, SourceTypeFragmentPlacement, TypeFragmentKind,
 };
 use crate::binder::namespace::{source_file_kind, ModuleBindingContext};
-use crate::check::checker::library_compiler::{
-    compile_library_binder_checkpoint, InjectedLibrarySource,
-};
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     BindingPattern, MethodDefinitionKind, PropertyKey, TSLiteral, TSMethodSignatureKind,
@@ -40,13 +37,11 @@ const FORBIDDEN_PRODUCT_TOKENS: &[&str] = &[
     "TypeId",
     "TypeParamId",
     "DeclaredRecipeId",
-    "LibraryBinderCheckpoint",
     "Store",
     "Interner",
     "Event",
     "GlobalObject",
     "Cache",
-    "ReplayOwner",
     "Fingerprint",
     "UnsafeCell",
     "RefCell",
@@ -471,18 +466,12 @@ fn variable_kind_name(kind: VariableDeclarationKind) -> &'static str {
 }
 
 #[test]
-fn full_profile_source_and_binding_census_is_frozen() {
+fn full_profile_source_and_manifest_census_is_pinned() {
     let actual = collect_census();
     assert_eq!(
         actual, EXPECTED_CENSUS,
         "full-profile census drifted\n{actual}"
     );
-}
-
-#[test]
-fn ownership_source_audit_rejects_the_known_broken_control() {
-    let broken = include_str!("../library-declaration-product-forbidden-control.txt");
-    assert_eq!(forbidden_product_tokens(broken), FORBIDDEN_PRODUCT_TOKENS);
 }
 
 #[test]
@@ -576,7 +565,7 @@ fn candidate_product_crate_has_the_closed_dependency_free_boundary() {
     ] {
         assert!(
             product_tests.contains(required_test),
-            "missing candidate lifecycle witness: {required_test}"
+            "missing declaration-product contract witness: {required_test}"
         );
     }
 }
@@ -742,139 +731,6 @@ fn collect_census() -> String {
         counts.insert(format!("ast.{kind}"), count);
     }
 
-    let injected = injected_sources(&profile);
-    let checkpoint = compile_library_binder_checkpoint(&injected)
-        .expect("canonical full-profile binder checkpoint");
-    let ordering = checkpoint.type_group_fragment_ordering_for_test();
-    let attachment_rows = checkpoint.declaration_attachment_rows_for_test();
-    let normalized_attachment_rows = attachment_rows
-        .iter()
-        .map(|row| {
-            format!(
-                "{}|{}|{}|{}|value={}|type={}|namespace={}",
-                row.library_ordinal.index(),
-                declaration_kind_name(row.kind),
-                row.declaration_start,
-                row.binding_start,
-                row.has_value_storage,
-                row.type_group_name.as_deref().unwrap_or("-"),
-                row.has_namespace,
-            )
-        })
-        .collect::<Vec<_>>();
-    let authenticated_value_rows = attachment_rows
-        .iter()
-        .zip(&normalized_attachment_rows)
-        .filter(|(row, _)| row.has_value_storage)
-        .map(|(_, normalized)| normalized.clone())
-        .collect::<Vec<_>>();
-    let authenticated_namespace_rows = attachment_rows
-        .iter()
-        .zip(&normalized_attachment_rows)
-        .filter(|(row, _)| row.has_namespace)
-        .map(|(_, normalized)| normalized.clone())
-        .collect::<Vec<_>>();
-    record_rows_fact(
-        &mut facts,
-        "oracle.current_binder.authenticated_attachment_rows",
-        &normalized_attachment_rows,
-    );
-    record_rows_fact(
-        &mut facts,
-        "oracle.current_binder.authenticated_value_rows",
-        &authenticated_value_rows,
-    );
-    record_rows_fact(
-        &mut facts,
-        "oracle.current_binder.authenticated_namespace_rows",
-        &authenticated_namespace_rows,
-    );
-    let inspection = checkpoint.inspection_for_test();
-    let ends = inspection.ends;
-    counts.insert(
-        "oracle.current_binder.library_units".to_owned(),
-        inspection.library_units.len(),
-    );
-    counts.insert("oracle.current_binder.scopes".to_owned(), ends.scopes);
-    counts.insert("oracle.current_binder.symbols".to_owned(), ends.symbols);
-    counts.insert(
-        "oracle.current_binder.declarations".to_owned(),
-        ends.declarations,
-    );
-    counts.insert(
-        "oracle.current_binder.type_groups".to_owned(),
-        ends.type_groups,
-    );
-    counts.insert(
-        "oracle.current_binder.namespaces".to_owned(),
-        ends.namespaces,
-    );
-    counts.insert(
-        "oracle.current_binder.value_storages".to_owned(),
-        ends.value_storages,
-    );
-    counts.insert(
-        "oracle.current_binder.next_source".to_owned(),
-        ends.next_source,
-    );
-    counts.insert(
-        "oracle.current_binder.ordered_groups".to_owned(),
-        ordering.groups.len(),
-    );
-    counts.insert(
-        "oracle.current_binder.group_fragments".to_owned(),
-        ordering
-            .groups
-            .iter()
-            .map(|group| group.fragments_in_binder.len())
-            .sum(),
-    );
-    counts.insert(
-        "oracle.current_binder.merged_groups".to_owned(),
-        ordering
-            .groups
-            .iter()
-            .filter(|group| group.fragments_in_binder.len() > 1)
-            .count(),
-    );
-    counts.insert(
-        "oracle.current_binder.max_group_fragments".to_owned(),
-        ordering
-            .groups
-            .iter()
-            .map(|group| group.fragments_in_binder.len())
-            .max()
-            .unwrap_or(0),
-    );
-    counts.insert(
-        "oracle.current_binder.library_order_mismatches".to_owned(),
-        ordering
-            .groups
-            .iter()
-            .filter(|group| group.fragments_in_binder != group.fragments_by_library_ordinal)
-            .count(),
-    );
-    let mut group_fragment_rows = Vec::new();
-    for group in &ordering.groups {
-        for fragment in &group.fragments_by_library_ordinal {
-            let ordinal = ordering
-                .units
-                .iter()
-                .find(|unit| unit.source_key == fragment.source_key)
-                .map(|unit| unit.library_ordinal.index())
-                .expect("group fragment belongs to a library unit");
-            group_fragment_rows.push(format!(
-                "{}|{}|{}",
-                group.name, ordinal, fragment.declaration_start
-            ));
-        }
-    }
-    record_rows_fact(
-        &mut facts,
-        "oracle.current_binder.group_fragment_rows",
-        &group_fragment_rows,
-    );
-
     let mut output = String::new();
     output.push_str("schema=1\n");
     output.push_str("typescript_version=6.0.3\n");
@@ -883,9 +739,6 @@ fn collect_census() -> String {
     output.push_str(&format!("raw_concat_sha256={RAW_CONCAT_SHA256}\n"));
     output.push_str(&format!("source_files={}\n", profile.sources().len()));
     output.push_str(&format!("source_bytes={source_bytes}\n"));
-    output.push_str(
-        "oracle.current_binder.note=allocation-local baseline; forbidden from product schema\n",
-    );
     for (name, value) in facts {
         output.push_str(&format!("{name}={value}\n"));
     }
@@ -893,18 +746,6 @@ fn collect_census() -> String {
         output.push_str(&format!("{name}={count}\n"));
     }
     output
-}
-
-fn injected_sources(profile: &ExactLibraryProfile) -> Vec<InjectedLibrarySource<'_>> {
-    profile
-        .sources()
-        .iter()
-        .map(|source| InjectedLibrarySource {
-            file_ordinal: source.ordinal(),
-            name: source.name(),
-            source: std::str::from_utf8(source.bytes()).expect("packaged source is UTF-8"),
-        })
-        .collect()
 }
 
 fn bump(counts: &mut BTreeMap<String, usize>, name: &str, amount: usize) {
@@ -984,11 +825,16 @@ fn interface_occurrence_name(kind: SourceInterfaceOccurrenceKind) -> &'static st
 }
 
 fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("library crate is inside workspace/crates")
-        .to_owned()
+    std::env::current_dir()
+        .expect("test process current directory")
+        .ancestors()
+        .find(|candidate| {
+            fs::read_to_string(candidate.join("Cargo.toml"))
+                .is_ok_and(|manifest| manifest.starts_with("[package]\nname = \"typokat\"\n"))
+                && candidate.join("Cargo.lock").is_file()
+        })
+        .map(Path::to_path_buf)
+        .expect("test process must run within the typokat repository")
 }
 
 fn read_rust_tree(root: &Path) -> String {

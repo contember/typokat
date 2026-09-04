@@ -72,8 +72,7 @@ impl NamespaceTable {
             },
         );
         self.merges.clear_local();
-        // `clear_local` invalidates every suffix index. Keep only sealed-prefix keys so a sparse
-        // continuation can still replace an affected base row at its stable index.
+        // `clear_local` invalidates every suffix index; the sealed prefix remains immutable.
         self.merge_indices.clear_local();
         let changed_merges = self
             .placements

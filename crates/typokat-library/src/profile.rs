@@ -1,8 +1,8 @@
 //! Exact embedded TypeScript 6.0.3 default-library profile.
 //!
 //! This module is the production source authority. It admits one ordered 82-file
-//! registry and validates every embedded byte before exposing it to the library
-//! compiler. Runtime filesystem discovery is deliberately absent.
+//! registry and validates every embedded byte before exposing it to declaration-product
+//! construction. Runtime filesystem discovery is deliberately absent.
 
 use crate::source::LibraryFileOrdinal;
 use sha2::{Digest, Sha256};

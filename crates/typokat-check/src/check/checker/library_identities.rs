@@ -1,14 +1,13 @@
 //! Stable full-library identities used by native-syntax member projection.
 
-use super::context::{Pass, TypeDecl};
-#[cfg(any(test, feature = "test-utils"))]
-use super::replay_index::ReplayOwner;
+use super::context::Pass;
 use super::type_groups::{
     PublishedTypeEnvironment, PublishedTypeGroupSurface, PublishedTypeGroupTerminal,
 };
 use crate::binder::declaration::TypeGroupId;
-use crate::binder::roots::LibraryRootProjection;
+#[cfg(any(test, feature = "test-utils"))]
 use crate::binder::scope::ScopeId;
+#[cfg(any(test, feature = "test-utils"))]
 use crate::binder::Binder;
 use crate::check::query::{
     classify_native_source_surface, LibraryObjectRelationContext, NativeSourceSurface,
@@ -18,12 +17,6 @@ use crate::types::repr::{ClassId, LiteralValue, TypeFlags, TypeParamId, TypeTag,
 use crate::types::store::{Store, TypeId};
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
-
-#[cfg(any(test, feature = "test-utils"))]
-thread_local! {
-    static FORCE_COLLISION_IDENTITY_SELECTION_PENDING: std::cell::Cell<bool> =
-        const { std::cell::Cell::new(false) };
-}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) enum LibraryIdentityUnavailable {
@@ -64,8 +57,6 @@ struct LibrarySemanticIdentityRows {
     callable_function: LibraryIdentityTerminal,
 }
 
-pub(crate) type LibrarySemanticIdentitiesProductParts = [LibraryIdentityTerminal; 8];
-
 /// Which native array syntax a library type group *is*. `Array<T>` and
 /// `ReadonlyArray<T>` name the intrinsic array types themselves; their interface
 /// bodies are only the member surface `project_library_member_surface` projects.
@@ -88,15 +79,6 @@ pub(in crate::check::checker) struct NativeArrayGroups {
 }
 
 impl NativeArrayGroups {
-    pub(in crate::check::checker) fn select_from_library_roots(
-        projection: &LibraryRootProjection,
-    ) -> Self {
-        Self {
-            array: library_root_type_group(projection, "Array"),
-            readonly_array: library_root_type_group(projection, "ReadonlyArray"),
-        }
-    }
-
     pub(in crate::check::checker) fn alias_of(
         self,
         group: TypeGroupId,
@@ -109,124 +91,10 @@ impl NativeArrayGroups {
         }
         None
     }
-
-    pub(in crate::check::checker) fn group_for_alias(
-        self,
-        alias: NativeArrayAlias,
-    ) -> Option<TypeGroupId> {
-        match alias {
-            NativeArrayAlias::Array => self.array,
-            NativeArrayAlias::ReadonlyArray => self.readonly_array,
-        }
-    }
 }
 
 impl LibrarySemanticIdentities {
     #[cfg(any(test, feature = "test-utils"))]
-    pub(crate) fn shares_storage_with(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.inner, &other.inner)
-    }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(in crate::check::checker) fn normalized_projection_for_test(
-        &self,
-        store: &Store,
-    ) -> Vec<String> {
-        [
-            ("Array", &self.inner.array),
-            ("ReadonlyArray", &self.inner.readonly_array),
-            ("String", &self.inner.string),
-            ("Number", &self.inner.number),
-            ("Boolean", &self.inner.boolean),
-            ("RegExp", &self.inner.regexp),
-            ("Object", &self.inner.object),
-            ("CallableFunction", &self.inner.callable_function),
-        ]
-        .into_iter()
-        .map(|(name, terminal)| match terminal {
-            LibraryIdentityTerminal::Ready(identity) => format!(
-                "{name}:{}:{}",
-                identity.parameters.len(),
-                crate::diagnostics::render_type(store, identity.template, false)
-            ),
-            LibraryIdentityTerminal::Unavailable(cause) => {
-                format!("{name}:unavailable:{cause:?}")
-            }
-        })
-        .collect()
-    }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(in crate::check::checker) fn group_for_name_for_test(
-        &self,
-        name: &str,
-    ) -> Option<TypeGroupId> {
-        let terminal = match name {
-            "Array" => &self.inner.array,
-            "ReadonlyArray" => &self.inner.readonly_array,
-            "String" => &self.inner.string,
-            "Number" => &self.inner.number,
-            "Boolean" => &self.inner.boolean,
-            "RegExp" => &self.inner.regexp,
-            "Object" => &self.inner.object,
-            "CallableFunction" => &self.inner.callable_function,
-            _ => return None,
-        };
-        match terminal {
-            LibraryIdentityTerminal::Ready(identity) => Some(identity.group),
-            LibraryIdentityTerminal::Unavailable(_) => None,
-        }
-    }
-
-    /// Select roots once from the library compilation-global scope. Consumer scopes
-    /// never participate, so same-named user declarations cannot hijack native syntax.
-    pub(in crate::check::checker) fn select(
-        binder: &Binder,
-        published: &PublishedTypeEnvironment,
-        store: &Store,
-    ) -> Self {
-        Self::select_from_scope(binder, binder.compilation_global, published, store)
-    }
-
-    pub(in crate::check::checker) fn select_for_collision_publication(
-        binder: &Binder,
-        published: &PublishedTypeEnvironment,
-        store: &Store,
-    ) -> Self {
-        let selected = Self::select(binder, published, store);
-        #[cfg(any(test, feature = "test-utils"))]
-        if FORCE_COLLISION_IDENTITY_SELECTION_PENDING.get() {
-            let mut parts = selected.product_parts();
-            parts[0] =
-                LibraryIdentityTerminal::Unavailable(LibraryIdentityUnavailable::Unpublished);
-            return Self::from_explicit_parts(parts);
-        }
-        selected
-    }
-
-    pub(in crate::check::checker) fn select_from_library_roots(
-        projection: &LibraryRootProjection,
-        published: &PublishedTypeEnvironment,
-        store: &Store,
-    ) -> Self {
-        let select = |name: &str, arity| {
-            let group = library_root_type_group(projection, name);
-            select_exact_group(published, store, group, arity)
-        };
-        Self {
-            inner: Arc::new(LibrarySemanticIdentityRows {
-                array: select("Array", 1),
-                readonly_array: select("ReadonlyArray", 1),
-                string: select("String", 0),
-                number: select("Number", 0),
-                boolean: select("Boolean", 0),
-                regexp: select("RegExp", 0),
-                object: select("Object", 0),
-                callable_function: select("CallableFunction", 0),
-            }),
-        }
-    }
-
     pub(in crate::check::checker) fn select_from_scope(
         binder: &Binder,
         scope: ScopeId,
@@ -281,12 +149,14 @@ impl LibrarySemanticIdentities {
         }
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn all_ready(&self) -> bool {
         self.terminals()
             .into_iter()
             .all(|terminal| matches!(terminal, LibraryIdentityTerminal::Ready(_)))
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn terminals(&self) -> [&LibraryIdentityTerminal; 8] {
         [
             &self.inner.array,
@@ -364,21 +234,8 @@ impl LibrarySemanticIdentities {
         ))
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(in crate::check::checker) fn callable_function_group(&self) -> Option<TypeGroupId> {
-        match &self.inner.callable_function {
-            LibraryIdentityTerminal::Ready(identity) => Some(identity.group),
-            LibraryIdentityTerminal::Unavailable(_) => None,
-        }
-    }
-
     #[cfg(test)]
     pub(crate) fn from_explicit_for_test(terminals: [LibraryIdentityTerminal; 8]) -> Self {
-        Self::from_explicit_parts(terminals)
-    }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    fn from_explicit_parts(terminals: [LibraryIdentityTerminal; 8]) -> Self {
         let [array, readonly_array, string, number, boolean, regexp, object, callable_function] =
             terminals;
         Self {
@@ -394,58 +251,9 @@ impl LibrarySemanticIdentities {
             }),
         }
     }
-
-    pub(crate) fn product_parts(&self) -> LibrarySemanticIdentitiesProductParts {
-        [
-            self.inner.array.clone(),
-            self.inner.readonly_array.clone(),
-            self.inner.string.clone(),
-            self.inner.number.clone(),
-            self.inner.boolean.clone(),
-            self.inner.regexp.clone(),
-            self.inner.object.clone(),
-            self.inner.callable_function.clone(),
-        ]
-    }
-
-    #[cfg(test)]
-    pub(crate) fn from_product_parts(
-        terminals: LibrarySemanticIdentitiesProductParts,
-    ) -> Result<Self, &'static str> {
-        for terminal in &terminals {
-            let LibraryIdentityTerminal::Ready(identity) = terminal else {
-                continue;
-            };
-            let mut parameters = std::collections::BTreeSet::new();
-            if identity
-                .parameters
-                .iter()
-                .any(|parameter| !parameters.insert(*parameter))
-            {
-                return Err("restored semantic identity repeats a parameter id");
-            }
-        }
-        Ok(Self::from_explicit_for_test(terminals))
-    }
 }
 
 #[cfg(any(test, feature = "test-utils"))]
-pub(crate) fn with_forced_collision_identity_selection_pending<T>(run: impl FnOnce() -> T) -> T {
-    struct Reset;
-
-    impl Drop for Reset {
-        fn drop(&mut self) {
-            FORCE_COLLISION_IDENTITY_SELECTION_PENDING.set(false);
-        }
-    }
-
-    FORCE_COLLISION_IDENTITY_SELECTION_PENDING.set(true);
-    let reset = Reset;
-    let result = run();
-    drop(reset);
-    result
-}
-
 fn select_in_scope(
     binder: &Binder,
     scope: ScopeId,
@@ -525,13 +333,6 @@ enum NativeMemberBridge {
 }
 
 impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
-    pub(in crate::check::checker) fn install_early_native_array_groups(
-        &mut self,
-        groups: NativeArrayGroups,
-    ) {
-        self.early_native_array_groups = Some(groups);
-    }
-
     pub(in crate::check::checker) fn install_library_semantic_identities(
         &mut self,
         identities: LibrarySemanticIdentities,
@@ -561,7 +362,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         ty: TypeId,
         span: Span,
     ) -> LibraryMemberProjection {
-        #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
         if let Some(surface) = classify_native_source_surface(self.interner, ty) {
             let identity = match surface {
                 NativeSourceSurface::Array { readonly: true, .. } => 1,
@@ -602,23 +402,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             );
             return LibraryMemberProjection::Unavailable;
         };
-        #[cfg(any(test, feature = "test-utils"))]
-        if super::library_compiler::complete_combined_replay_oracle_is_active() {
-            self.record_replay_demand(ReplayOwner::TypeGroup(identity.group));
-        }
-        if (matches!(self.current_source, crate::source::SourceUnit::User { .. })
-            || self.combined_user_source)
-            && self
-                .private_collision_unavailable_type_groups
-                .contains(&identity.group)
-        {
-            self.record_incomplete(
-                incomplete_id,
-                span,
-                "native member surface is unavailable in the private collision epoch",
-            );
-            return LibraryMemberProjection::Unavailable;
-        }
         let projected = match argument {
             Some(argument) => {
                 let Some(parameter) = identity.parameters.first().copied() else {
@@ -643,43 +426,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
     pub(in crate::check::checker) fn project_library_heritage_surface(
         &mut self,
-        scope: ScopeId,
         ty: TypeId,
     ) -> Option<TypeId> {
-        let Some(identities) = self.library_semantic_identities.clone() else {
-            let NativeSourceSurface::Array {
-                readonly, argument, ..
-            } = classify_native_source_surface(self.interner, ty)?
-            else {
-                return None;
-            };
-            let alias = if readonly {
-                NativeArrayAlias::ReadonlyArray
-            } else {
-                NativeArrayAlias::Array
-            };
-            let group = self
-                .native_array_groups()
-                .group_for_alias(alias)
-                .filter(|group| self.combined_user_library_type_groups.contains(group))?;
-            if !self.type_group_construction_is_frozen(group) {
-                return None;
-            }
-            let parameters = match self.type_decls.get(group.index()) {
-                Some(TypeDecl::Interface {
-                    recovery_params, ..
-                }) => recovery_params.clone(),
-                _ => return None,
-            };
-            let parameter = parameters.first().copied()?;
-            let template = self.resolve_type_decl(scope, group);
-            let substitutions = FxHashMap::from_iter([(parameter, argument)]);
-            return Some(self.substitute_ready_type_group_application(
-                template,
-                &parameters,
-                &substitutions,
-            ));
-        };
+        let identities = self.library_semantic_identities.clone()?;
         let NativeMemberBridge::Generic {
             terminal, argument, ..
         } = native_bridge(self.interner, ty, &identities)?
@@ -689,23 +438,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let LibraryIdentityTerminal::Ready(identity) = terminal else {
             return None;
         };
-        // A private collision rebuild publishes after interface construction. Read its
-        // exact frozen replacement here instead of the still-installed base template.
-        let replacement = (!self.type_environment.is_published()
-            && self.type_decls.has_replacement(identity.group.index())
-            && self.type_group_construction_is_frozen(identity.group))
-        .then(|| match self.type_decls.get(identity.group.index()) {
-            Some(TypeDecl::Interface {
-                recovery_params, ..
-            }) => Some(recovery_params.clone()),
-            _ => None,
-        })
-        .flatten();
-        let (template, parameters) = if let Some(parameters) = replacement {
-            (self.resolve_type_decl(scope, identity.group), parameters)
-        } else {
-            (identity.template, identity.parameters.clone())
-        };
+        let template = identity.template;
+        let parameters = identity.parameters.clone();
         let parameter = parameters.first().copied()?;
         let substitutions = FxHashMap::from_iter([(parameter, argument)]);
         Some(self.substitute_ready_type_group_application(template, &parameters, &substitutions))
@@ -717,8 +451,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         property: &str,
         span: Span,
     ) -> LibraryComposedMember {
-        #[cfg(any(test, feature = "test-utils"))]
-        super::library_compiler::record_private_replay_visibility_query_for_test();
         if self.library_semantic_identities.is_none() {
             return LibraryComposedMember::NotInstalled;
         }
@@ -817,7 +549,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             return LibraryComposedMember::Missing;
         }
 
-        #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
         let _ = self.demand_project_local_library_identity(6);
         let terminal = self
             .library_semantic_identities
@@ -839,7 +570,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     }
 
     pub(in crate::check::checker) fn regexp_literal_type(&mut self, span: Span) -> Option<TypeId> {
-        #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
         let _ = self.demand_project_local_library_identity(5);
         let identities = self.library_semantic_identities.as_ref()?;
         match &identities.inner.regexp {
@@ -854,14 +584,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
         }
     }
-}
-
-fn library_root_type_group(projection: &LibraryRootProjection, name: &str) -> Option<TypeGroupId> {
-    projection
-        .root_rows
-        .iter()
-        .find(|row| row.name == name)
-        .and_then(|row| row.ty)
 }
 
 fn direct_object_member(
@@ -1169,7 +891,7 @@ mod tests {
 
     #[test]
     fn callable_function_identity_wins_over_the_legacy_function_shape() {
-        with_bridge_pass(|pass, identities| {
+        with_bridge_pass(|pass, _| {
             let wk = pass.interner.well_known();
             let native = pass
                 .interner
@@ -1183,7 +905,6 @@ mod tests {
                 composed_property(pass, native, "callResult"),
                 Some(wk.number)
             );
-            assert!(identities.callable_function_group().is_some());
         });
     }
 

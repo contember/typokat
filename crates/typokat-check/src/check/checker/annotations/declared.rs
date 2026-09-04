@@ -26,6 +26,7 @@ struct PlannedRecipe {
     node: PlannedRecipeNode,
     contains_tuple: bool,
     captures_selected_binder: bool,
+    transparent_alias: bool,
 }
 
 struct PlannedApplicationArgument {
@@ -48,6 +49,7 @@ enum PlannedRecipeNode {
         template: TypeId,
         parameters: Vec<TypeParamId>,
         arguments: Vec<PlannedApplicationArgument>,
+        transparent_alias: bool,
     },
 }
 
@@ -57,6 +59,7 @@ impl PlannedRecipe {
             node: PlannedRecipeNode::Type(ty),
             contains_tuple: false,
             captures_selected_binder,
+            transparent_alias: false,
         }
     }
 
@@ -65,6 +68,7 @@ impl PlannedRecipe {
             node: PlannedRecipeNode::Literal(value),
             contains_tuple: false,
             captures_selected_binder: false,
+            transparent_alias: false,
         }
     }
 
@@ -72,6 +76,7 @@ impl PlannedRecipe {
         Self {
             contains_tuple: element.contains_tuple,
             captures_selected_binder: element.captures_selected_binder,
+            transparent_alias: false,
             node: PlannedRecipeNode::Array(Box::new(element)),
         }
     }
@@ -82,6 +87,7 @@ impl PlannedRecipe {
             captures_selected_binder: elements
                 .iter()
                 .any(|element| element.captures_selected_binder),
+            transparent_alias: false,
             node: PlannedRecipeNode::Tuple(elements),
         }
     }
@@ -90,6 +96,7 @@ impl PlannedRecipe {
         Self {
             contains_tuple: operand.contains_tuple,
             captures_selected_binder: operand.captures_selected_binder,
+            transparent_alias: false,
             node: PlannedRecipeNode::Readonly(Box::new(operand)),
         }
     }
@@ -98,6 +105,7 @@ impl PlannedRecipe {
         template: TypeId,
         parameters: Vec<TypeParamId>,
         arguments: Vec<PlannedApplicationArgument>,
+        transparent_alias: bool,
     ) -> Self {
         let contains_tuple = arguments
             .iter()
@@ -108,31 +116,18 @@ impl PlannedRecipe {
         Self {
             contains_tuple,
             captures_selected_binder,
+            transparent_alias,
             node: PlannedRecipeNode::Application {
                 template,
                 parameters,
                 arguments,
+                transparent_alias,
             },
         }
     }
 }
 
 impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
-    #[cfg(any(test, feature = "test-utils"))]
-    fn record_declared_array_dependency_for_oracle(&self) {
-        if !self.capture_compact_replay_dependencies
-            || !super::super::library_compiler::complete_combined_replay_oracle_is_active()
-        {
-            return;
-        }
-        if let Some(group) = self
-            .native_array_groups()
-            .group_for_alias(NativeArrayAlias::Array)
-        {
-            self.record_replay_demand(super::super::replay_index::ReplayOwner::TypeGroup(group));
-        }
-    }
-
     pub(in crate::check::checker) fn try_plan_declared_interface_property_annotation<
         'node,
         'syntax,
@@ -188,23 +183,39 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
     }
 
-    /// Preserve a callable-edge application only when its syntax captures a binder
-    /// that is actually visible at this position. Other annotations stay on their
-    /// established lowering route.
+    /// Preserve callable-edge applications that capture a visible binder or carry
+    /// a constraint. Parameter reservation may additionally retain a ready alias.
     pub(in crate::check::checker) fn try_plan_declared_callable_annotation<'node, 'syntax>(
         &mut self,
         scope: ScopeId,
         annotation: &'node TSType<'syntax>,
     ) -> Option<TypeId> {
+        self.try_plan_declared_callable_annotation_inner(scope, annotation, false)
+    }
+
+    fn try_plan_declared_callable_parameter_annotation<'node, 'syntax>(
+        &mut self,
+        scope: ScopeId,
+        annotation: &'node TSType<'syntax>,
+    ) -> Option<TypeId> {
+        self.try_plan_declared_callable_annotation_inner(scope, annotation, true)
+    }
+
+    fn try_plan_declared_callable_annotation_inner<'node, 'syntax>(
+        &mut self,
+        scope: ScopeId,
+        annotation: &'node TSType<'syntax>,
+        retain_transparent_alias: bool,
+    ) -> Option<TypeId> {
         let selected = self.visible_callable_type_params();
         let plan = self.plan_declared_annotation(scope, annotation, false, Some(&selected));
         let eligible = match &plan.annotation {
-            PlannedAnnotation::Deferred(
-                recipe @ PlannedRecipe {
-                    node: PlannedRecipeNode::Application { .. },
-                    ..
-                },
-            ) => recipe.captures_selected_binder || self.planned_recipe_contains_constraint(recipe),
+            PlannedAnnotation::Deferred(recipe) => {
+                retain_transparent_alias && recipe.transparent_alias
+                    || matches!(&recipe.node, PlannedRecipeNode::Application { .. })
+                        && (recipe.captures_selected_binder
+                            || self.planned_recipe_contains_constraint(recipe))
+            }
             _ => false,
         };
         if !eligible {
@@ -280,6 +291,21 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             self.lower_annotation(scope, annotation)
         }
     }
+    pub(in crate::check::checker) fn lower_callable_parameter_annotation(
+        &mut self,
+        scope: ScopeId,
+        annotation: &TSType<'_>,
+        with_indirection: bool,
+    ) -> Option<TypeId> {
+        if let Some(ty) = self.try_plan_declared_callable_parameter_annotation(scope, annotation) {
+            return Some(ty);
+        }
+        if with_indirection {
+            self.with_indirection(|pass| pass.lower_annotation(scope, annotation))
+        } else {
+            self.lower_annotation(scope, annotation)
+        }
+    }
 
     fn plan_declared_annotation<'node, 'syntax>(
         &mut self,
@@ -343,7 +369,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
         for dependency in plan.dependencies {
             // Replays the demand the planner read untraced, so the replay index records it.
-            self.type_decl_id_replay(dependency.scope, dependency.name);
+            self.type_decl_id(dependency.scope, dependency.name);
         }
         Some(ty)
     }
@@ -375,6 +401,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 template,
                 parameters,
                 arguments,
+                transparent_alias,
             } => {
                 let obligation_index = parameters
                     .iter()
@@ -398,6 +425,21 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         (recipe, ty, argument.span)
                     })
                     .collect::<Vec<_>>();
+                // Substitution treats an alias template as an opaque identity. Wrap
+                // its own binders in an identity instantiation so materializing this
+                // recipe substitutes the written arguments without opening the body.
+                let template = if transparent_alias {
+                    let identity_arguments = parameters
+                        .iter()
+                        .map(|parameter| {
+                            (*parameter, self.interner.intern_type_param(*parameter, ""))
+                        })
+                        .collect();
+                    self.interner
+                        .intern_instantiation(template, identity_arguments)
+                } else {
+                    template
+                };
                 if let Some(index) = obligation_index {
                     constraint_obligations[index] = Some(PlannedConstraintObligation {
                         parameters: parameters.clone(),
@@ -473,10 +515,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 selected_binders,
             ),
             TSType::TSArrayType(array) => {
-                #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
                 let _ = self.demand_project_local_library_identity(0);
-                #[cfg(any(test, feature = "test-utils"))]
-                self.record_declared_array_dependency_for_oracle();
                 let element = self.plan_declared_recipe(
                     scope,
                     &array.element_type,
@@ -487,10 +526,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 Some(PlannedRecipe::array(element))
             }
             TSType::TSTupleType(tuple) => {
-                #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
                 let _ = self.demand_project_local_library_identity(0);
-                #[cfg(any(test, feature = "test-utils"))]
-                self.record_declared_array_dependency_for_oracle();
                 let mut elements = Vec::with_capacity(tuple.element_types.len());
                 for element in &tuple.element_types {
                     elements.push(self.plan_declared_tuple_element(
@@ -579,20 +615,18 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 ));
             }
         }
-        let group = if self.capture_compact_replay_dependencies {
-            self.compact_type_decl_id_replay(scope, name)?
-        } else {
-            self.type_decl_id_replay(scope, name)?
-        };
+        let group = self.type_decl_id(scope, name)?;
         if !self.type_environment.is_published() && !self.type_group_construction_is_frozen(group) {
             return None;
         }
-        if self.binder.type_groups.get(group).is_none_or(|group| {
-            group
-                .fragments
-                .iter()
-                .any(|fragment| fragment.kind != TypeFragmentKind::Interface)
-        }) {
+        let fragments = &self.binder.type_groups.get(group)?.fragments;
+        let interface_group = fragments
+            .iter()
+            .all(|fragment| fragment.kind == TypeFragmentKind::Interface);
+        let alias_group = selected_binders.is_some()
+            && fragments.len() == 1
+            && fragments[0].kind == TypeFragmentKind::TypeAlias;
+        if !interface_group && !alias_group {
             return None;
         }
         // `Array<E>` / `ReadonlyArray<E>` name the native array types, not the library
@@ -615,7 +649,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 NativeArrayAlias::ReadonlyArray => PlannedRecipe::readonly(array),
             });
         }
-        let constructing_interface = if self.type_environment.is_published() {
+        let constructing_reference = if self.type_environment.is_published() {
             None
         } else {
             match self.type_environment.drafts().type_decls.get(group.index()) {
@@ -623,34 +657,64 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     reserved,
                     recovery_params,
                     ..
-                }) => Some((*reserved, recovery_params.clone(), false)),
+                }) if interface_group => Some((*reserved, recovery_params.clone(), false, false)),
+                Some(TypeDecl::Alias {
+                    alias_template,
+                    alias_body: Some(_),
+                    alias_unavailable: None,
+                    params,
+                    ..
+                }) if alias_group => Some((*alias_template, params.clone(), false, true)),
                 _ => None,
             }
         };
-        let (template, parameters, published_template) = match constructing_interface {
-            Some(interface) => interface,
-            None => match self
-                .type_environment
-                .resolution_environment()
-                .groups()
-                .get(group)?
-            {
-                PublishedTypeGroupTerminal::Ready(group) => match group.surface {
-                    PublishedTypeGroupSurface::Template(template) => {
-                        (template, group.parameters.clone(), true)
+        let (template, parameters, published_template, transparent_alias) =
+            match constructing_reference {
+                Some(reference) => reference,
+                None => {
+                    let group = match self
+                        .type_environment
+                        .resolution_environment()
+                        .groups()
+                        .get(group)?
+                    {
+                        PublishedTypeGroupTerminal::Ready(group) => group,
+                        PublishedTypeGroupTerminal::Unavailable(_) => return None,
+                    };
+                    let (template, parameters) = match group.surface {
+                        PublishedTypeGroupSurface::Template(template) => {
+                            (template, group.parameters.clone())
+                        }
+                        PublishedTypeGroupSurface::Enum(enumeration) => (enumeration, Vec::new()),
+                        PublishedTypeGroupSurface::Class(_) => return None,
+                    };
+                    if alias_group {
+                        let alias = self.interner.store().alias_template_id(template)?;
+                        let surface = self
+                            .type_environment
+                            .resolution_environment()
+                            .aliases()
+                            .ready(alias)?;
+                        if surface.template() != template || surface.type_params() != parameters {
+                            return None;
+                        }
                     }
-                    PublishedTypeGroupSurface::Enum(enumeration) => (enumeration, Vec::new(), true),
-                    PublishedTypeGroupSurface::Class(_) => return None,
-                },
-                PublishedTypeGroupTerminal::Unavailable(_) => return None,
-            },
-        };
+                    (template, parameters, true, alias_group)
+                }
+            };
         let recipe = match arguments {
             Some(arguments) if arguments.params.is_empty() && parameters.is_empty() => {
-                PlannedRecipe::ty(template, false)
+                if transparent_alias {
+                    PlannedRecipe::application(template, parameters, Vec::new(), true)
+                } else {
+                    PlannedRecipe::ty(template, false)
+                }
             }
             Some(arguments) if arguments.params.len() == parameters.len() => {
-                if published_template && self.interner.store().tag(template) != TypeTag::Object {
+                if published_template
+                    && !transparent_alias
+                    && self.interner.store().tag(template) != TypeTag::Object
+                {
                     return None;
                 }
                 let mut planned = Vec::with_capacity(arguments.params.len());
@@ -666,9 +730,15 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         span: Span::from_oxc(argument.span()),
                     });
                 }
-                PlannedRecipe::application(template, parameters, planned)
+                PlannedRecipe::application(template, parameters, planned, transparent_alias)
             }
-            None if parameters.is_empty() => PlannedRecipe::ty(template, false),
+            None if parameters.is_empty() => {
+                if transparent_alias {
+                    PlannedRecipe::application(template, parameters, Vec::new(), true)
+                } else {
+                    PlannedRecipe::ty(template, false)
+                }
+            }
             _ => return None,
         };
         dependencies.push(PlannedTypeDependency { scope, name });

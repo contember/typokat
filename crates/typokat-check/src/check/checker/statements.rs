@@ -9,7 +9,6 @@ use super::function_groups::{
     FunctionNamespacePayload,
 };
 use super::lexical_events::{source_ordinal, LexicalOwnerPhase};
-use super::replay_index::ReplayOwner;
 use crate::binder::declaration::{DeclarationKind, ValueStorageId};
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::SymbolId;
@@ -151,8 +150,6 @@ struct NamespaceAliasCandidateCollector<'a> {
     binder: &'a crate::binder::Binder,
     module: ScopeId,
     candidates: Vec<(ValueStorageId, ScopeId, String)>,
-    #[cfg(any(test, feature = "test-utils"))]
-    oracle_owner_sites: Vec<(ValueStorageId, crate::binder::declaration::DeclId, u32)>,
 }
 
 struct LaterObjectBindingReferenceFinder<'a> {
@@ -211,12 +208,6 @@ impl<'ast> Visit<'ast> for NamespaceAliasCandidateCollector<'_> {
                 };
                 self.candidates
                     .push((alias_storage, scope, source.name.to_string()));
-                #[cfg(any(test, feature = "test-utils"))]
-                self.oracle_owner_sites.push((
-                    alias_storage,
-                    alias_declaration.id,
-                    declarator.span.start,
-                ));
             }
         }
         walk::walk_variable_declaration(self, declaration);
@@ -296,22 +287,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         {
             return false;
         }
-        if matches!(self.current_source, crate::source::SourceUnit::User { .. }) {
-            return self
-                .binder
-                .global_augmentation_value_storages(self.current_module, binding_start)
-                .into_iter()
-                .any(|storage| self.decl_type_replay(storage).is_none());
-        }
-        self.private_collision_affected.is_empty()
+        !matches!(self.current_source, crate::source::SourceUnit::User { .. })
             || self
                 .binder
                 .global_augmentation_value_storages(self.current_module, binding_start)
                 .into_iter()
-                .any(|storage| {
-                    self.private_collision_affected
-                        .contains(&ReplayOwner::Value(storage))
-                })
+                .any(|storage| self.decl_type(storage).is_none())
     }
 
     pub(in crate::check::checker) fn precompute_standalone_namespace_value_aliases(
@@ -319,67 +300,22 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         modules: &[(ScopeId, &'ast [Statement<'ast>])],
     ) {
         let mut candidates = Vec::new();
-        #[cfg(any(test, feature = "test-utils"))]
-        let mut oracle_owner_sites = Vec::new();
         for (module, statements) in modules {
             let mut collector = NamespaceAliasCandidateCollector {
                 binder: self.binder,
                 module: *module,
                 candidates: Vec::new(),
-                #[cfg(any(test, feature = "test-utils"))]
-                oracle_owner_sites: Vec::new(),
             };
             for statement in *statements {
                 collector.visit_statement(statement);
             }
             candidates.extend(collector.candidates);
-            #[cfg(any(test, feature = "test-utils"))]
-            oracle_owner_sites.extend(collector.oracle_owner_sites);
         }
-
-        #[cfg(any(test, feature = "test-utils"))]
-        let oracle_owners = if super::library_compiler::complete_combined_replay_oracle_is_active()
-        {
-            let mut owners = FxHashMap::default();
-            for (alias, declaration, source_start) in oracle_owner_sites {
-                let source = self
-                    .lexical_events
-                    .declaration_source(declaration)
-                    .expect("namespace alias candidate has a reserved declaration source");
-                let owner = self
-                    .lexical_events
-                    .owner_at(
-                        super::lexical_events::source_ordinal(source.unit),
-                        source_start,
-                        LexicalOwnerPhase::Immediate,
-                    )
-                    .expect("namespace alias candidate has a preallocated lexical owner")
-                    .ticket;
-                assert!(
-                    owners.insert(alias, owner).is_none(),
-                    "namespace alias oracle owner mapping must be bijective"
-                );
-            }
-            owners
-        } else {
-            FxHashMap::default()
-        };
 
         let mut remaining = candidates
             .into_iter()
             .filter_map(|(alias, scope, source)| {
-                #[cfg(any(test, feature = "test-utils"))]
-                let _oracle_scope = oracle_owners.get(&alias).map(|ticket| {
-                    let trace = self
-                        .replay_trace
-                        .as_ref()
-                        .expect("namespace alias oracle requires an active replay trace");
-                    let owner = trace
-                        .statement_owner((self.pending_effect_key)(*ticket))
-                        .expect("namespace alias oracle ticket must have an exact statement owner");
-                    trace.scope(owner)
-                });
-                self.resolve_value_replay(scope, &source)
+                self.resolve_value_symbol(scope, &source)
                     .and_then(|symbol| self.binder.symbols.get(symbol))
                     .and_then(|symbol| symbol.value)
                     .map(|source| (alias, source))
@@ -389,17 +325,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             let mut next = Vec::new();
             let mut progressed = false;
             for (alias, source) in remaining {
-                #[cfg(any(test, feature = "test-utils"))]
-                let _oracle_scope = oracle_owners.get(&alias).map(|ticket| {
-                    let trace = self
-                        .replay_trace
-                        .as_ref()
-                        .expect("namespace alias oracle requires an active replay trace");
-                    let owner = trace
-                        .statement_owner((self.pending_effect_key)(*ticket))
-                        .expect("namespace alias oracle ticket must have an exact statement owner");
-                    trace.scope(owner)
-                });
                 let root = self
                     .binder
                     .standalone_namespace_for_storage(source)
@@ -417,7 +342,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     continue;
                 };
                 if matches!(
-                    self.standalone_namespace_terminal_replay(namespace),
+                    self.standalone_namespace_terminal(namespace),
                     Some(super::namespace_values::StandaloneNamespaceTerminal::Ready {
                         storage,
                         ..
@@ -521,6 +446,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         );
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     /// Check one statement list using callable surfaces reserved across its whole
     /// lexical container. Switch clauses share one such set while retaining their
     /// own source-local overload grouping.
@@ -1041,7 +967,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                             .map(|(ty, _)| ty)
                             .unwrap_or(self.interner.well_known().error)
                     };
-                    self.publish_copied_decl_type_replay(storage, ty);
+                    self.publish_copied_decl_type(storage, ty);
                 } else {
                     self.record_incomplete(
                         "decl/export-default/self",
@@ -1669,7 +1595,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             let symbol = declaration
                 .site
                 .scope
-                .and_then(|scope| self.resolve_value_replay(scope, identifier.name.as_str()));
+                .and_then(|scope| self.resolve_value_symbol(scope, identifier.name.as_str()));
             let participant = symbol
                 .and_then(|symbol| self.binder.symbols.get(symbol))
                 .is_some_and(|symbol| symbol.declarations.contains(&declaration.id));
@@ -1678,13 +1604,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 .and_then(|symbol| symbol.value)
                 .filter(|_| participant)
                 .unwrap_or(exact_storage);
-            let certified_collision = self
-                .private_collision_value_occurrence_winners
-                .get(&declaration.id)
-                .copied()
-                .flatten()
-                .filter(|_| participant);
-            let effective_storage = certified_collision.unwrap_or(visible_storage);
+            let effective_storage = visible_storage;
             leaves.push(ObjectBindingPendingLeaf {
                 declaration: declaration.id,
                 exact_storage,
@@ -1724,20 +1644,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 .entry(pending.effective_storage)
                 .or_default()
                 .push(reference);
-        }
-        let certified = self.object_binding_pending_groups[group]
-            .leaves
-            .iter()
-            .filter_map(|leaf| {
-                self.private_collision_value_occurrence_winners
-                    .get(&leaf.declaration)
-                    .copied()
-                    .flatten()
-                    .map(|winner| (leaf.exact_storage, winner))
-            })
-            .collect::<Vec<_>>();
-        for (exact, winner) in certified {
-            self.close_authenticated_object_binding_publication(exact, winner);
         }
     }
 
@@ -1974,27 +1880,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 property,
                 &object.properties[property_index.saturating_add(1)..],
             );
-            let projection = if self.replay_trace.is_some() {
-                self.with_replay_owner(ReplayOwner::Value(publication_storage), |pass| {
-                    pass.publish_flat_object_binding_property(
-                        scope,
-                        kind,
-                        property,
-                        publication_storage,
-                        source,
-                        default_references_later,
-                    )
-                })
-            } else {
-                self.publish_flat_object_binding_property(
-                    scope,
-                    kind,
-                    property,
-                    publication_storage,
-                    source,
-                    default_references_later,
-                )
-            };
+            let projection = self.publish_flat_object_binding_property(
+                scope,
+                kind,
+                property,
+                publication_storage,
+                source,
+                default_references_later,
+            );
             match projection {
                 Some(ObjectBindingPropertyProjection::Ready(_)) => {
                     self.close_authenticated_object_binding_publication(
@@ -2206,17 +2099,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         kind: VariableDeclarationKind,
         declarator: &VariableDeclarator<'_>,
     ) {
-        let replay_owner = self.replay_trace.as_ref().and_then(|_| {
-            variable_declaration_decl_id(self.binder, scope, kind, &declarator.id)
-                .map(super::replay_index::ReplayOwner::Value)
-        });
         self.with_lexical_effects(declarator.span.start, LexicalOwnerPhase::Deferred, |pass| {
-            match replay_owner {
-                Some(owner) => pass.with_replay_owner(owner, |pass| {
-                    pass.check_declarator(scope, kind, declarator)
-                }),
-                None => pass.check_declarator(scope, kind, declarator),
-            }
+            pass.check_declarator(scope, kind, declarator)
         });
     }
 
@@ -2239,7 +2123,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let Some(Expression::Identifier(source)) = declarator.init.as_ref() else {
             return;
         };
-        let Some(class_decl) = self.value_decl_id_replay(scope, source.name.as_str()) else {
+        let Some(class_decl) = self.value_decl_id(scope, source.name.as_str()) else {
             return;
         };
         let published = self
@@ -2247,7 +2131,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .get(&class_decl)
             .is_some_and(|binding| {
                 matches!(
-                    self.published_class_replay(binding.class_id),
+                    self.published_class(binding.class_id),
                     crate::class_semantics::DemandOutcome::Ready(_)
                 )
             });
@@ -2313,33 +2197,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 let TSTypeName::IdentifierReference(identifier) = &reference.type_name else {
                     continue;
                 };
-                #[cfg(any(test, feature = "test-utils"))]
-                let _oracle_scope =
-                    if super::library_compiler::complete_combined_replay_oracle_is_active() {
-                        let owner = self
-                            .lexical_events
-                            .owner_at(
-                                super::lexical_events::source_ordinal(self.current_source),
-                                declarator.span.start,
-                                LexicalOwnerPhase::Immediate,
-                            )
-                            .expect("combined replay oracle declarator owner must be preallocated")
-                            .ticket;
-                        let trace = self.replay_trace.as_ref().expect(
-                            "combined replay oracle annotation requires an active replay trace",
-                        );
-                        let statement_owner = trace
-                        .statement_owner((self.pending_effect_key)(owner))
-                        .expect("combined replay oracle annotation ticket must have an exact statement owner");
-                        Some(trace.scope(statement_owner))
-                    } else {
-                        None
-                    };
-                let group = if self.capture_compact_replay_dependencies {
-                    self.compact_type_decl_id_replay(scope, identifier.name.as_str())
-                } else {
-                    self.type_decl_id_replay(scope, identifier.name.as_str())
-                };
+                let group = self.type_decl_id(scope, identifier.name.as_str());
                 let Some(group) = group else {
                     continue;
                 };
@@ -2538,35 +2396,31 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             if self.var_annotation_surfaces.contains_key(&surface_key) {
                 continue;
             }
-            let annotation =
-                self.with_replay_owner(super::replay_index::ReplayOwner::Value(decl_id), |pass| {
-                    let annotation = match reservation {
-                        VarAnnotationReservation::QueryFree => {
-                            pass.query_free_annotation_type(&type_annotation.type_annotation)
-                        }
-                        VarAnnotationReservation::Full => pass.with_lexical_effects(
-                            declarator.span.start,
-                            LexicalOwnerPhase::Immediate,
-                            |pass| {
-                                pass.lower_declared_annotation_or_fallback(
-                                    scope,
-                                    &type_annotation.type_annotation,
-                                    false,
-                                )
-                            },
-                        ),
-                    };
-                    if let Some(annotation) = annotation {
-                        pass.reserve_variable_annotation_type(
+            let annotation = match reservation {
+                VarAnnotationReservation::QueryFree => {
+                    self.query_free_annotation_type(&type_annotation.type_annotation)
+                }
+                VarAnnotationReservation::Full => self.with_lexical_effects(
+                    declarator.span.start,
+                    LexicalOwnerPhase::Immediate,
+                    |pass| {
+                        pass.lower_declared_annotation_or_fallback(
                             scope,
-                            declaration.kind,
-                            &declarator.id,
-                            decl_id,
-                            annotation,
-                        );
-                    }
-                    annotation
-                });
+                            &type_annotation.type_annotation,
+                            false,
+                        )
+                    },
+                ),
+            };
+            if let Some(annotation) = annotation {
+                self.reserve_variable_annotation_type(
+                    scope,
+                    declaration.kind,
+                    &declarator.id,
+                    decl_id,
+                    annotation,
+                );
+            }
             if reservation == VarAnnotationReservation::QueryFree && annotation.is_none() {
                 continue;
             }
@@ -2642,61 +2496,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         decl_id: ValueStorageId,
         ty: TypeId,
     ) {
-        let replay_decl_id = match (kind.is_var(), pattern) {
-            (true, BindingPattern::BindingIdentifier(identifier)) => self
-                .private_collision_value_winners_by_name
-                .get(identifier.name.as_str())
-                .copied()
-                .filter(|winner| {
-                    self.combined_source_library_value_precedence
-                        || self
-                            .private_collision_affected
-                            .contains(&ReplayOwner::Value(*winner))
-                })
-                .unwrap_or(decl_id),
-            _ => decl_id,
-        };
-        if replay_decl_id != decl_id
-            && matches!(
-                self.var_value_type_states.get(&decl_id),
-                Some(VarValueTypeState::ObjectBindingPending)
-            )
-        {
+        self.set_variable_decl_type(scope, kind, pattern, decl_id, ty);
+        if kind.is_var() {
             self.var_value_type_states
                 .insert(decl_id, VarValueTypeState::Source);
-        }
-        if kind.is_var() {
-            if let Some(function_ty) = self.function_value_type_for_var(scope, kind, pattern) {
-                self.set_variable_decl_type(scope, kind, pattern, replay_decl_id, function_ty);
-                self.var_value_type_states
-                    .insert(replay_decl_id, VarValueTypeState::Existing);
-                return;
-            }
-            match self.var_value_type_states.get(&replay_decl_id) {
-                Some(
-                    VarValueTypeState::Source
-                    | VarValueTypeState::Existing
-                    | VarValueTypeState::SyntaxOnlyObjectParameter,
-                ) => {
-                    return;
-                }
-                Some(VarValueTypeState::ObjectBindingPending | VarValueTypeState::Provisional) => {}
-                None if self.decl_type_replay(replay_decl_id).is_some()
-                    && !self
-                        .private_collision_affected
-                        .contains(&ReplayOwner::Value(replay_decl_id)) =>
-                {
-                    self.var_value_type_states
-                        .insert(replay_decl_id, VarValueTypeState::Existing);
-                    return;
-                }
-                None => {}
-            }
-        }
-        self.set_variable_decl_type(scope, kind, pattern, replay_decl_id, ty);
-        if kind.is_var() {
-            self.var_value_type_states
-                .insert(replay_decl_id, VarValueTypeState::Source);
         }
     }
 
@@ -2710,27 +2513,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         decl_id: ValueStorageId,
         ty: TypeId,
     ) {
-        let replay_decl_id = match (kind.is_var(), pattern) {
-            (true, BindingPattern::BindingIdentifier(identifier)) => self
-                .private_collision_value_winners_by_name
-                .get(identifier.name.as_str())
-                .copied()
-                .filter(|winner| {
-                    self.combined_source_library_value_precedence
-                        || self
-                            .private_collision_affected
-                            .contains(&ReplayOwner::Value(*winner))
-                })
-                .unwrap_or(decl_id),
-            _ => decl_id,
-        };
+        let effective_decl_id = decl_id;
         if let Some(function_ty) = self.function_value_type_for_var(scope, kind, pattern) {
-            self.set_variable_decl_type(scope, kind, pattern, replay_decl_id, function_ty);
+            self.set_variable_decl_type(scope, kind, pattern, effective_decl_id, function_ty);
             self.var_value_type_states
-                .insert(replay_decl_id, VarValueTypeState::Existing);
+                .insert(effective_decl_id, VarValueTypeState::Existing);
             return;
         }
-        match self.var_value_type_states.get(&replay_decl_id) {
+        match self.var_value_type_states.get(&effective_decl_id) {
             Some(
                 VarValueTypeState::Source
                 | VarValueTypeState::Existing
@@ -2739,20 +2529,16 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             Some(VarValueTypeState::ObjectBindingPending | VarValueTypeState::Provisional) => {
                 return
             }
-            None if self.decl_type_replay(replay_decl_id).is_some()
-                && !self
-                    .private_collision_affected
-                    .contains(&ReplayOwner::Value(replay_decl_id)) =>
-            {
+            None if self.decl_type(effective_decl_id).is_some() => {
                 self.var_value_type_states
-                    .insert(replay_decl_id, VarValueTypeState::Existing);
+                    .insert(effective_decl_id, VarValueTypeState::Existing);
                 return;
             }
             None => {}
         }
-        self.set_variable_decl_type(scope, kind, pattern, replay_decl_id, ty);
+        self.set_variable_decl_type(scope, kind, pattern, effective_decl_id, ty);
         self.var_value_type_states
-            .insert(replay_decl_id, VarValueTypeState::Provisional);
+            .insert(effective_decl_id, VarValueTypeState::Provisional);
     }
 
     /// A `var` merged with a function keeps the callable surface in the value slot.
@@ -2771,7 +2557,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .function_values
             .iter()
             .rev()
-            .find_map(|decl_id| self.decl_type_replay(*decl_id))
+            .find_map(|decl_id| self.decl_type(*decl_id))
     }
 
     fn set_variable_decl_type(
@@ -2783,7 +2569,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         ty: TypeId,
     ) {
         let previous = self.decl_types.get(decl_id);
-        self.publish_copied_decl_type_replay(decl_id, ty);
+        self.publish_copied_decl_type(decl_id, ty);
         if previous == Some(ty) {
             return;
         }
@@ -2941,34 +2727,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 .participants
                 .sort_by_key(|participant| *participant == tail);
         }
-        let inherited_winner =
-            matches!(self.current_source, crate::source::SourceUnit::User { .. })
-                .then(|| {
-                    self.private_collision_value_winners_by_name
-                        .get(name)
-                        .copied()
-                })
-                .flatten();
-        let inherited_participants = if inherited_winner.is_some() {
-            identity
-                .participants
-                .iter()
-                .copied()
-                .filter(|declaration| self.decl_type_replay(*declaration).is_some())
-                .collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
-        let inherited_call_signatures = inherited_winner
-            .and_then(|declaration| self.decl_type_replay(declaration))
-            .and_then(|ty| {
-                self.interner
-                    .store()
-                    .object_type(ty)
-                    .map(|object| object.call_signatures.clone())
-                    .or_else(|| self.interner.store().function_type(ty).map(|_| vec![ty]))
-            })
-            .unwrap_or_default();
+        let inherited_participants = Vec::new();
+        let inherited_call_signatures = Vec::new();
         self.function_groups.register(identity.clone());
         self.function_groups.seed_inherited_publication(
             identity.symbol,
@@ -3064,16 +2824,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         surfaces: &mut FxHashMap<u32, FunctionReservation<Ticket>>,
         publish_value: bool,
     ) {
-        let replay_owner = self.replay_trace.as_ref().and_then(|_| {
-            self.function_decl_id(func)
-                .map(super::replay_index::ReplayOwner::Value)
-        });
-        match replay_owner {
-            Some(owner) => self.with_replay_owner(owner, |pass| {
-                pass.reserve_function_surface_inner(scope, func, surfaces, publish_value)
-            }),
-            None => self.reserve_function_surface_inner(scope, func, surfaces, publish_value),
-        }
+        self.reserve_function_surface_inner(scope, func, surfaces, publish_value);
     }
 
     fn reserve_function_surface_inner(
@@ -3111,16 +2862,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         surfaces: &mut FxHashMap<u32, FunctionReservation<Ticket>>,
         publish_value: bool,
     ) -> bool {
-        let replay_owner = self.replay_trace.as_ref().and_then(|_| {
-            self.function_decl_id(func)
-                .map(super::replay_index::ReplayOwner::Value)
-        });
-        match replay_owner {
-            Some(owner) => self.with_replay_owner(owner, |pass| {
-                pass.fill_reserved_function_body_inner(scope, func, surfaces, publish_value)
-            }),
-            None => self.fill_reserved_function_body_inner(scope, func, surfaces, publish_value),
-        }
+        self.fill_reserved_function_body_inner(scope, func, surfaces, publish_value)
     }
 
     fn fill_reserved_function_body_inner(
@@ -3213,46 +2955,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     }
 
     fn publish_function_type(&mut self, scope: ScopeId, func: &Function<'_>, function_ty: TypeId) {
-        let root_winner = func.id.as_ref().and_then(|id| {
-            self.private_collision_value_winners_by_name
-                .get(id.name.as_str())
-                .copied()
-        });
-        if matches!(
-            self.current_source,
-            crate::source::SourceUnit::Library { .. }
-        ) {
-            if let Some(winner) = root_winner {
-                self.publish_copied_decl_type_replay(winner, function_ty);
-            }
-        }
         if let Some(decl_id) = self.function_decl_id(func) {
-            let inherited = matches!(self.current_source, crate::source::SourceUnit::User { .. })
-                .then_some(root_winner)
-                .flatten()
-                .and_then(|winner| {
-                    self.decl_type_replay(winner)
-                        .map(|inherited| (winner, inherited))
-                });
-            let function_ty = inherited
-                .map(|(winner, inherited)| {
-                    let merged = if let Some(mut object) =
-                        self.interner.store().object_type(inherited).cloned()
-                    {
-                        object.call_signatures.push(function_ty);
-                        self.interner.intern_object(object)
-                    } else if self.interner.store().function_type(inherited).is_some() {
-                        self.interner.intern_object(ObjectType {
-                            call_signatures: vec![inherited, function_ty],
-                            ..Default::default()
-                        })
-                    } else {
-                        function_ty
-                    };
-                    self.publish_copied_decl_type_replay(winner, merged);
-                    merged
-                })
-                .unwrap_or(function_ty);
             if let Some(symbol_id) = func
                 .id
                 .as_ref()
@@ -3268,25 +2971,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     self.publish_symbol_value_type(merged_decl, function_ty, symbol_id);
                 }
             } else {
-                self.publish_copied_decl_type_replay(decl_id, function_ty);
+                self.publish_copied_decl_type(decl_id, function_ty);
             }
         }
     }
 
     fn publish_ready_function_group(&mut self, symbol: SymbolId) {
-        let replay_owner = self.replay_trace.as_ref().and_then(|_| {
-            self.binder
-                .symbols
-                .get(symbol)
-                .and_then(|binding| binding.value)
-                .map(super::replay_index::ReplayOwner::Value)
-        });
-        match replay_owner {
-            Some(owner) => self.with_replay_owner(owner, |pass| {
-                pass.publish_ready_function_group_inner(symbol)
-            }),
-            None => self.publish_ready_function_group_inner(symbol),
-        }
+        self.publish_ready_function_group_inner(symbol);
     }
 
     fn publish_ready_function_group_inner(&mut self, symbol: SymbolId) {
@@ -3294,31 +2985,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             return;
         };
         assert_eq!(publication.symbol, symbol);
-        let canonical_owner = publication
-            .participants
-            .first()
-            .copied()
-            .map(super::replay_index::ReplayOwner::Value);
-        if let Some(canonical_owner) = canonical_owner {
-            self.with_replay_owner(canonical_owner, |pass| {
-                for declaration in &publication.participants {
-                    let participant = super::replay_index::ReplayOwner::Value(*declaration);
-                    if participant != canonical_owner {
-                        pass.record_replay_demand(participant);
-                    }
-                }
-            });
-        }
         for declaration in &publication.participants {
             if publication.prepublished_participants.contains(declaration) {
                 continue;
             }
             assert!(
-                self.decl_type_replay(*declaration).is_none()
-                    || (self
-                        .private_collision_affected
-                        .contains(&super::replay_index::ReplayOwner::Value(*declaration))
-                        && self.decl_types.is_unoverridden_frozen_slot(*declaration)),
+                self.decl_type(*declaration).is_none(),
                 "function group participant was published before the atomic object"
             );
         }
@@ -3328,13 +3000,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             ..Default::default()
         });
         for declaration in publication.participants {
-            let participant = super::replay_index::ReplayOwner::Value(declaration);
-            self.with_replay_owner(participant, |pass| {
-                if canonical_owner.is_some_and(|canonical| canonical != participant) {
-                    pass.record_replay_demand(canonical_owner.expect("canonical participant"));
-                }
-                pass.publish_copied_decl_type_replay(declaration, ty);
-            });
+            self.publish_copied_decl_type(declaration, ty);
         }
         self.flow_memo
             .retain(|(_, memo_symbol), _| *memo_symbol != symbol);
@@ -3350,7 +3016,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         symbol_id: SymbolId,
     ) {
         let previous = self.decl_types.get(decl_id);
-        self.publish_copied_decl_type_replay(decl_id, ty);
+        self.publish_copied_decl_type(decl_id, ty);
         if previous != Some(ty) {
             self.flow_memo
                 .retain(|(_, memo_symbol), _| *memo_symbol != symbol_id);
@@ -3362,16 +3028,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .fn_decl_ids
             .get(&(self.current_module, func.span.start))
             .copied()
-            .or_else(|| {
-                let crate::source::SourceUnit::Library { file_ordinal } = self.current_source
-                else {
-                    return None;
-                };
-                self.private_library_value_owner_by_site
-                    .get(&(file_ordinal, func.span.start))
-                    .copied()
-                    .flatten()
-            })
     }
 
     fn default_function_value(&self, func: &Function<'_>) -> Option<ValueStorageId> {
@@ -3386,7 +3042,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let Some(declaration_value) = self.function_decl_id(func) else {
             return;
         };
-        if let Some(function_ty) = self.decl_type_replay(declaration_value) {
+        if let Some(function_ty) = self.decl_type(declaration_value) {
             self.publish_default_function_value_copy(default_value, declaration_value, function_ty);
         }
     }
@@ -3400,10 +3056,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         if default_value == implementation_value {
             return;
         }
-        self.with_replay_owner(
-            super::replay_index::ReplayOwner::Value(implementation_value),
-            |pass| pass.publish_copied_decl_type_replay(default_value, function_ty),
-        );
+        self.publish_copied_decl_type(default_value, function_ty);
     }
 
     fn publish_reserved_overload_group(
@@ -3724,7 +3377,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             return;
         };
         if signatures.is_empty() {
-            self.publish_copied_decl_type_replay(implementation_decl, implementation_ty);
+            self.publish_copied_decl_type(implementation_decl, implementation_ty);
             return;
         }
 
@@ -3752,30 +3405,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             if let Some(symbol) = self.binder.symbols.get(symbol_id) {
                 let function_values = symbol.function_values.clone();
                 let merged_decl = symbol.value;
-                let canonical = function_values
-                    .first()
-                    .copied()
-                    .or(implementation_decl)
-                    .or(merged_decl);
-                if let Some(canonical) = canonical {
-                    self.with_replay_owner(
-                        super::replay_index::ReplayOwner::Value(canonical),
-                        |pass| {
-                            for participant in function_values
-                                .iter()
-                                .copied()
-                                .chain(implementation_decl)
-                                .chain(merged_decl)
-                            {
-                                if participant != canonical {
-                                    pass.record_replay_demand(
-                                        super::replay_index::ReplayOwner::Value(participant),
-                                    );
-                                }
-                            }
-                        },
-                    );
-                }
                 let mut published = Vec::new();
                 for decl_id in implementation_decl
                     .into_iter()
@@ -3786,19 +3415,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         continue;
                     }
                     published.push(decl_id);
-                    let participant = super::replay_index::ReplayOwner::Value(decl_id);
-                    self.with_replay_owner(participant, |pass| {
-                        if canonical.is_some_and(|canonical| canonical != decl_id) {
-                            pass.record_replay_demand(super::replay_index::ReplayOwner::Value(
-                                canonical.expect("canonical overload participant"),
-                            ));
-                        }
-                        pass.publish_symbol_value_type(decl_id, overload_ty, symbol_id);
-                    });
+                    self.publish_symbol_value_type(decl_id, overload_ty, symbol_id);
                 }
             }
         } else if let Some(implementation_decl) = implementation_decl {
-            self.publish_copied_decl_type_replay(implementation_decl, overload_ty);
+            self.publish_copied_decl_type(implementation_decl, overload_ty);
         }
     }
 
@@ -4351,7 +3972,7 @@ mod satisfies_obligation_tests {
     }
 
     #[test]
-    fn direct_satisfies_union_headline_uses_the_complete_source() {
+    fn direct_satisfies_union_headline_uses_the_full_union() {
         let mut interner = Interner::with_intrinsics();
         let wk = interner.well_known();
         let src = interner.union(vec![wk.string, wk.boolean]);

@@ -69,15 +69,8 @@ pub fn check_project(inputs: Vec<FileInput>) -> Vec<FileReport> {
         return Vec::new();
     }
     let failed_inputs = inputs.clone();
-    match on_raw_check_worker(move || {
-        let reports = check_project_inner(inputs);
-        let receipt = super::checker::project_binding_thread_receipt_for_test();
-        (reports, receipt)
-    }) {
-        Ok((reports, receipt)) => {
-            super::checker::merge_project_binding_thread_receipt_for_test(receipt);
-            reports
-        }
+    match on_raw_check_worker(move || check_project_inner(inputs)) {
+        Ok(reports) => reports,
         Err(context) => failed_inputs
             .into_iter()
             .map(|input| FileReport {
@@ -117,19 +110,6 @@ where
         (module_ordinals, check_project(interner, units))
     });
     reports_from_run(run.inputs, run.parse_errors, run.product)
-}
-
-pub fn check_project_with_owned_checker_for_test<F>(
-    inputs: Vec<FileInput>,
-    check_project: F,
-) -> Vec<FileReport>
-where
-    F: for<'ast> FnOnce(&[ProjectProgram<'ast>]) -> Vec<CheckResult>,
-{
-    check_project_with_checker(inputs, |_, units| {
-        super::checker::library_compiler::record_user_source_parses_for_test(units.len());
-        check_project(units)
-    })
 }
 
 /// Run test-only work on the same large stack as raw checker entry points.

@@ -100,7 +100,7 @@ fn rejects_cache_retention_through_the_live_runner() {
 #[test]
 fn typed_fault_receipts_come_from_the_live_session_lifecycle() {
     let product = LibraryBaseProvider::new()
-        .declaration_product_for_session_bench()
+        .get()
         .expect("declaration product");
     let mut identity_triples = Vec::new();
     for (fault, seam) in [

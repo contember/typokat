@@ -166,7 +166,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 let AssignmentTarget::AssignmentTargetIdentifier(target) = &assign.left else {
                     return None;
                 };
-                let symbol = self.resolve_value_replay(scope, target.name.as_str())?;
+                let symbol = self.resolve_value_symbol(scope, target.name.as_str())?;
                 Some(GuardFact {
                     symbol,
                     op: NarrowOp::Truthy,
@@ -411,7 +411,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         if ident.name.as_str() == "undefined" {
             return None;
         }
-        self.resolve_value_replay(scope, ident.name.as_str())
+        self.resolve_value_symbol(scope, ident.name.as_str())
     }
 
     /// Analyze `"prop" in x` as an M8 guard. The left side must be a string literal

@@ -3977,7 +3977,6 @@ mod tests {
     use oxc_allocator::Allocator;
     use oxc_parser::Parser;
     use oxc_span::SourceType;
-    use typokat_library_product::LibraryProductValidationScopeForTest;
 
     #[test]
     fn projection_resolves_nested_duplicate_names_and_type_parameters_exactly() {
@@ -4642,21 +4641,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn immutable_declaration_product_is_certified_only_during_construction() {
-        let construction = LibraryProductValidationScopeForTest::start();
-        let product = project_test_source("certification.d.ts", "interface Box<T> { value: T }");
-        assert_eq!(construction.finish(), 1);
-
-        let instantiation = LibraryProductValidationScopeForTest::start();
-        for _ in 0..2 {
-            let (_, units) = ProjectBinderBuilder::from_library_declaration_product(&product)
-                .expect("immutable declaration product instantiates");
-            assert_eq!(units.len(), 1);
-        }
-        assert_eq!(instantiation.finish(), 0);
     }
 
     fn padded_source(body: &str, byte_len: usize) -> String {

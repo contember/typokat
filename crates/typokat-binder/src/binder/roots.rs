@@ -16,31 +16,6 @@ use crate::span::Span;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-/// Stable semantic target of one sparse frozen-prefix binder replacement.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FrozenLibraryMutationOwner {
-    TypeGroup(TypeGroupId),
-    Value(ValueStorageId),
-    Namespace(NamespaceId),
-}
-
-impl PartialOrd for FrozenLibraryMutationOwner {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for FrozenLibraryMutationOwner {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        let key = |owner: &Self| match owner {
-            Self::TypeGroup(id) => (0_u8, id.0),
-            Self::Value(id) => (1, id.0),
-            Self::Namespace(id) => (2, id.0),
-        };
-        key(self).cmp(&key(other))
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RootIndexError {
     MissingCompilationGlobalScope,

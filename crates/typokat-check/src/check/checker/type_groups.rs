@@ -1,12 +1,11 @@
 use super::context::{
     ConstructionDrafts, Pass, PublishedTypeDecl, TypeDecl, TypeDeclTable, TypeResolvedTable,
 };
-use super::replay_index::{ReplayClassLookup, ReplayOwner};
 use crate::binder::declaration::TypeGroupId;
 use crate::binder::declaration::ValueStorageId;
 use crate::check::query::PublishedClassLookup;
 use crate::class_semantics::OwnedPublishedClassTerminal;
-use crate::class_semantics::{DemandOutcome, PublishedClassSurface, PublishedClasses};
+use crate::class_semantics::{DemandOutcome, Exhaustion, PublishedClassSurface, PublishedClasses};
 use crate::types::layered::LayeredVec;
 use crate::types::repr::{AliasId, ClassId, TypeParamId};
 use crate::types::store::TypeId;
@@ -14,9 +13,75 @@ use crate::types::substitute;
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
 use typokat_types::alias_semantics::{PublishedAliasTerminal, PublishedAliases};
+pub(in crate::check::checker) struct ConstructionClassLookup<'a> {
+    staged: &'a PublishedClasses,
+    inherited: Option<&'a PublishedClasses>,
+    staged_aliases: &'a PublishedAliases,
+    inherited_aliases: Option<&'a PublishedAliases>,
+    semantic_publication_identity: &'a Arc<()>,
+}
+
+impl<'a> ConstructionClassLookup<'a> {
+    pub(in crate::check::checker) fn new(
+        staged: &'a PublishedClasses,
+        inherited: Option<&'a PublishedClasses>,
+        staged_aliases: &'a PublishedAliases,
+        inherited_aliases: Option<&'a PublishedAliases>,
+        semantic_publication_identity: &'a Arc<()>,
+    ) -> Self {
+        Self {
+            staged,
+            inherited,
+            staged_aliases,
+            inherited_aliases,
+            semantic_publication_identity,
+        }
+    }
+}
+
+impl PublishedClassLookup for ConstructionClassLookup<'_> {
+    fn published_class(&self, class: ClassId) -> DemandOutcome<&PublishedClassSurface> {
+        match self.staged.published_class(class) {
+            outcome @ DemandOutcome::Exhausted(Exhaustion::ClassNotPublished {
+                class: missing,
+                ..
+            }) if missing == class => self
+                .inherited
+                .map_or(outcome, |classes| classes.published_class(class)),
+            outcome => outcome,
+        }
+    }
+
+    fn require_class(&self, class: ClassId) -> DemandOutcome<()> {
+        match self.staged.require(class) {
+            outcome @ DemandOutcome::Exhausted(Exhaustion::ClassNotPublished {
+                class: missing,
+                ..
+            }) if missing == class => self
+                .inherited
+                .map_or(outcome, |classes| classes.require(class)),
+            outcome => outcome,
+        }
+    }
+
+    fn publication_identity(&self) -> &Arc<()> {
+        self.semantic_publication_identity
+    }
+
+    fn published_alias(&self, alias: AliasId) -> Option<&PublishedAliasTerminal> {
+        self.staged_aliases.terminal(alias).or_else(|| {
+            self.inherited_aliases
+                .and_then(|aliases| aliases.terminal(alias))
+        })
+    }
+
+    fn published_class_lookup_is_observational(&self) -> bool {
+        false
+    }
+}
 
 fn project_local_row_is_writable<T>(rows: &LayeredVec<T>, index: usize) -> bool {
-    index < rows.len() && (index >= rows.base_len() || rows.prefix_overrides_enabled())
+    index >= rows.base_len() && index < rows.len()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -96,13 +161,6 @@ impl PublishedTypeGroups {
     ) -> Option<&PublishedTypeGroupTerminal> {
         self.entries.get(group.index())
     }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(in crate::check::checker) fn is_replaced_for_test(&self, group: TypeGroupId) -> bool {
-        self.entries
-            .changed_iter()
-            .any(|(index, _)| index == group.index())
-    }
 }
 
 /// The only query-visible type environment. Class and named-type registries become
@@ -127,29 +185,6 @@ pub(in crate::check::checker) enum TypeEnvironmentState<'ast> {
         drafts: Option<Box<ConstructionDrafts<'ast>>>,
     },
     Published(PublishedTypeEnvironment),
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(in crate::check::checker) enum TypeGroupPublicationOutcome {
-    Ready { publication_validations: usize },
-    LibraryIdentitySelectionPending { publication_validations: usize },
-}
-
-impl TypeGroupPublicationOutcome {
-    pub(in crate::check::checker) fn publication_validations(self) -> usize {
-        match self {
-            Self::Ready {
-                publication_validations,
-            }
-            | Self::LibraryIdentitySelectionPending {
-                publication_validations,
-            } => publication_validations,
-        }
-    }
-
-    pub(in crate::check::checker) fn library_identity_selection_pending(self) -> bool {
-        matches!(self, Self::LibraryIdentitySelectionPending { .. })
-    }
 }
 
 impl<'ast> TypeEnvironmentState<'ast> {
@@ -423,6 +458,11 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
                 inherited.install_project_local_alias_snapshot(&aliases)?;
                 for (group, terminal) in type_terminals {
                     let (declaration, resolution) = construction_terminal(&terminal);
+                    drafts
+                        .type_group_construction
+                        .as_mut()
+                        .ok_or("project-local type-group construction is unavailable")?
+                        .install_project_local_terminal(group, terminal.clone())?;
                     inherited.install_project_local_terminal(group, terminal)?;
                     drafts
                         .type_decls
@@ -486,16 +526,12 @@ impl PublishedTypeEnvironment {
         entries: Vec<PublishedTypeGroupTerminal>,
         aliases: PublishedAliases,
     ) -> Self {
-        let mut environment = Self {
+        Self {
             classes: PublishedClasses::empty(),
             aliases,
             groups: published_type_groups_from_terminals(entries),
             semantic_publication_identity: Arc::new(()),
-        };
-        environment.groups.entries.enable_prefix_overrides();
-        environment.groups.declarations.enable_prefix_overrides();
-        environment.groups.resolved.enable_prefix_overrides();
-        environment
+        }
     }
 
     #[cfg(test)]
@@ -577,6 +613,27 @@ impl PublishedTypeEnvironment {
             .ok_or("project-local resolution is outside the published prefix")? = resolution;
         Ok(())
     }
+    fn replace_project_local_class_surface(
+        &mut self,
+        replacement: PublishedClassSurface,
+    ) -> Result<(), &'static str> {
+        let class = replacement.class();
+        let mut terminals = self
+            .classes
+            .owned_terminals()
+            .ok_or("published class registry contains a non-terminal state")?;
+        let terminal = terminals
+            .iter_mut()
+            .find(|(candidate, _)| *candidate == class)
+            .ok_or("project-local class surface is outside the published registry")?;
+        if !matches!(terminal.1, OwnedPublishedClassTerminal::Ready(_)) {
+            return Err("project-local class surface cannot replace a poisoned class");
+        }
+        terminal.1 = OwnedPublishedClassTerminal::Ready(replacement);
+        self.classes = PublishedClasses::from_owned_terminals(terminals)?;
+        self.semantic_publication_identity = Arc::new(());
+        Ok(())
+    }
 
     pub(in crate::check::checker) fn construction_prefix<'ast>(
         &self,
@@ -598,142 +655,6 @@ impl PublishedTypeEnvironment {
             aliases: self.aliases.owned_terminals(),
             groups: self.groups.entries.iter().cloned().collect(),
         })
-    }
-
-    #[cfg(test)]
-    pub(in crate::check::checker) fn from_product_parts(
-        parts: PublishedTypeEnvironmentProductParts,
-    ) -> Result<Self, &'static str> {
-        for terminal in &parts.groups {
-            let PublishedTypeGroupTerminal::Ready(group) = terminal else {
-                continue;
-            };
-            if group.parameters.len() != group.parameter_names.len()
-                || group.parameters.len() != group.parameter_defaults.len()
-            {
-                return Err("restored type-group parameter columns have different lengths");
-            }
-            let mut parameters = std::collections::BTreeSet::new();
-            if group
-                .parameters
-                .iter()
-                .any(|parameter| !parameters.insert(*parameter))
-            {
-                return Err("restored type group repeats a parameter id");
-            }
-        }
-        Ok(Self {
-            classes: PublishedClasses::from_owned_terminals(parts.classes)?,
-            aliases: PublishedAliases::from_owned_terminals(parts.aliases)?,
-            groups: published_type_groups_from_terminals(parts.groups),
-            semantic_publication_identity: Arc::new(()),
-        })
-    }
-
-    pub(in crate::check::checker) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
-        self.classes.freeze_as_base()?;
-        self.aliases.freeze_as_base()?;
-        self.groups.entries.freeze_as_base()?;
-        self.groups.declarations.freeze_as_base()?;
-        self.groups.resolved.freeze_as_base()
-    }
-
-    pub(in crate::check::checker) fn fork_delta(&self) -> Result<Self, &'static str> {
-        Ok(Self {
-            classes: self.classes.fork_delta()?,
-            aliases: self.aliases.fork_delta()?,
-            groups: PublishedTypeGroups {
-                entries: self.groups.entries.fork_delta()?,
-                declarations: self.groups.declarations.fork_delta()?,
-                resolved: self.groups.resolved.fork_delta()?,
-            },
-            semantic_publication_identity: Arc::clone(&self.semantic_publication_identity),
-        })
-    }
-
-    pub(in crate::check::checker) fn fork_sparse_delta(&self) -> Result<Self, &'static str> {
-        Ok(Self {
-            classes: self.classes.fork_sparse_delta()?,
-            aliases: self.aliases.fork_delta()?,
-            groups: PublishedTypeGroups {
-                entries: self.groups.entries.fork_sparse_delta()?,
-                declarations: self.groups.declarations.fork_sparse_delta()?,
-                resolved: self.groups.resolved.fork_sparse_delta()?,
-            },
-            semantic_publication_identity: Arc::clone(&self.semantic_publication_identity),
-        })
-    }
-
-    #[cfg(test)]
-    pub(in crate::check::checker) fn shares_base_with(&self, other: &Self) -> bool {
-        self.classes.shares_base_with(&other.classes)
-            && Arc::ptr_eq(self.aliases.identity(), other.aliases.identity())
-            && self.groups.entries.shares_base_with(&other.groups.entries)
-            && self
-                .groups
-                .declarations
-                .shares_base_with(&other.groups.declarations)
-            && self
-                .groups
-                .resolved
-                .shares_base_with(&other.groups.resolved)
-    }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(in crate::check::checker) fn base_family_sharing_with(&self, other: &Self) -> [bool; 2] {
-        [
-            self.groups.entries.shares_base_with(&other.groups.entries)
-                && self
-                    .groups
-                    .declarations
-                    .shares_base_with(&other.groups.declarations)
-                && self
-                    .groups
-                    .resolved
-                    .shares_base_with(&other.groups.resolved),
-            self.classes.shares_base_with(&other.classes),
-        ]
-    }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(in crate::check::checker) fn local_family_row_counts_for_test(&self) -> [usize; 2] {
-        [
-            self.groups.entries.local_len()
-                + self.groups.declarations.local_len()
-                + self.groups.resolved.local_len(),
-            self.classes.local_row_count_for_test(),
-        ]
-    }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(in crate::check::checker) fn replacement_family_row_counts_for_test(&self) -> [usize; 2] {
-        [
-            self.groups.entries.replacement_len()
-                + self.groups.declarations.replacement_len()
-                + self.groups.resolved.replacement_len(),
-            self.classes.replacement_row_count_for_test(),
-        ]
-    }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(in crate::check::checker) fn changed_group_terminals(
-        &self,
-    ) -> impl Iterator<Item = (TypeGroupId, &PublishedTypeGroupTerminal)> {
-        self.groups
-            .entries
-            .changed_iter()
-            .filter_map(|(index, terminal)| {
-                u32::try_from(index)
-                    .ok()
-                    .map(|index| (TypeGroupId(index), terminal))
-            })
-    }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(in crate::check::checker) fn changed_class_terminals(
-        &self,
-    ) -> Vec<(ClassId, OwnedPublishedClassTerminal)> {
-        self.classes.changed_owned_terminals()
     }
 }
 
@@ -844,52 +765,10 @@ impl TypeGroupConstruction {
         assert!(self.base.is_none());
         assert!(base.len() <= self.expected);
         self.base_len = base.len();
-        let sparse = base.entries.prefix_overrides_enabled();
-        let mut entries = if base.entries.is_sealed() {
-            base.entries
-                .fork_delta()
-                .expect("installed type-group base has no suffix")
-        } else {
-            let mut entries: LayeredVec<PublishedTypeGroupTerminal> =
-                base.entries.iter().cloned().collect::<Vec<_>>().into();
-            entries
-                .freeze_as_base()
-                .expect("source-compiled type-group prefix seals once");
-            entries
-        };
-        if sparse {
-            entries.enable_prefix_overrides();
-        }
-        let (mut declarations, mut resolved) = if base.entries.is_sealed() {
-            (
-                base.declarations
-                    .fork_delta()
-                    .expect("installed type declaration base has no suffix"),
-                base.resolved
-                    .fork_delta()
-                    .expect("installed type resolution base has no suffix"),
-            )
-        } else {
-            let mut declarations: LayeredVec<PublishedTypeDecl> =
-                base.declarations.iter().cloned().collect::<Vec<_>>().into();
-            declarations
-                .freeze_as_base()
-                .expect("source-compiled declaration prefix seals once");
-            let mut resolved: LayeredVec<Option<TypeId>> =
-                base.resolved.iter().copied().collect::<Vec<_>>().into();
-            resolved
-                .freeze_as_base()
-                .expect("source-compiled resolution prefix seals once");
-            (declarations, resolved)
-        };
-        if sparse {
-            declarations.enable_prefix_overrides();
-            resolved.enable_prefix_overrides();
-        }
         self.base = Some(PublishedTypeGroups {
-            entries,
-            declarations,
-            resolved,
+            entries: base.entries.iter().cloned().collect::<Vec<_>>().into(),
+            declarations: base.declarations.iter().cloned().collect::<Vec<_>>().into(),
+            resolved: base.resolved.iter().copied().collect::<Vec<_>>().into(),
         });
         if self.slots.is_empty() {
             self.slots = vec![TypeGroupConstructionSlot::Pending; self.expected - self.base_len];
@@ -902,6 +781,31 @@ impl TypeGroupConstruction {
                 .all(|slot| *slot == TypeGroupConstructionSlot::Pending));
             self.slots = suffix;
         }
+    }
+
+    fn install_project_local_terminal(
+        &mut self,
+        group: TypeGroupId,
+        terminal: PublishedTypeGroupTerminal,
+    ) -> Result<(), &'static str> {
+        let base = self
+            .base
+            .as_mut()
+            .ok_or("project-local type-group base is unavailable")?;
+        let (declaration, resolution) = construction_terminal(&terminal);
+        *base
+            .entries
+            .get_mut_local(group.index())
+            .ok_or("project-local terminal is outside the published prefix")? = terminal;
+        *base
+            .declarations
+            .get_mut_local(group.index())
+            .ok_or("project-local declaration is outside the published prefix")? = declaration;
+        *base
+            .resolved
+            .get_mut_local(group.index())
+            .ok_or("project-local resolution is outside the published prefix")? = resolution;
+        Ok(())
     }
 
     fn begin(&mut self, group: TypeGroupId) {
@@ -995,11 +899,10 @@ impl TypeGroupConstruction {
             .is_some_and(|slot| matches!(slot, TypeGroupConstructionSlot::Frozen(_)))
     }
 
-    fn consume(self, expected: usize) -> Option<(PublishedTypeGroups, usize)> {
+    fn consume(self, expected: usize) -> Option<PublishedTypeGroups> {
         if self.expected != expected || self.base_len + self.slots.len() != expected {
             return None;
         }
-        let mut publication_validations = 0;
         let (mut entries, mut declarations, mut resolved) = match self.base {
             Some(base) => (base.entries, base.declarations, base.resolved),
             None => (
@@ -1012,35 +915,25 @@ impl TypeGroupConstruction {
             let TypeGroupConstructionSlot::Frozen(terminal) = slot else {
                 return None;
             };
-            publication_validations += 1;
             let (declaration, resolution) = construction_terminal(&terminal);
             *entries.get_mut_local(index)? = terminal;
             *declarations.get_mut_local(index)? = declaration;
             *resolved.get_mut_local(index)? = resolution;
         }
         for slot in self.slots {
-            let terminal = match slot {
-                TypeGroupConstructionSlot::Frozen(terminal) => {
-                    publication_validations += 1;
-                    terminal
-                }
-                TypeGroupConstructionSlot::Pending | TypeGroupConstructionSlot::Building => {
-                    return None
-                }
+            let TypeGroupConstructionSlot::Frozen(terminal) = slot else {
+                return None;
             };
             let (declaration, resolution) = construction_terminal(&terminal);
             entries.push_local(terminal);
             declarations.push_local(declaration);
             resolved.push_local(resolution);
         }
-        Some((
-            PublishedTypeGroups {
-                entries,
-                declarations,
-                resolved,
-            },
-            publication_validations,
-        ))
+        Some(PublishedTypeGroups {
+            entries,
+            declarations,
+            resolved,
+        })
     }
 
     fn unfinished_groups(&self) -> Vec<(usize, &'static str)> {
@@ -1178,12 +1071,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         if augmentation_parameters.len() != published.parameters.len() {
             return InheritedClassAugmentation::Unavailable;
         }
-        let class_lookup = ReplayClassLookup::new(
-            self.type_environment.inherited().classes(),
-            self.replay_trace.clone(),
-        );
-        let DemandOutcome::Ready(surface) =
-            PublishedClassLookup::published_class(&class_lookup, class)
+        let DemandOutcome::Ready(surface) = self
+            .type_environment
+            .inherited()
+            .classes()
+            .published_class(class)
         else {
             return InheritedClassAugmentation::Unavailable;
         };
@@ -1222,14 +1114,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .type_environment
             .inherited_mut()
             .is_some_and(|environment| {
-                let replaced = environment
-                    .classes
-                    .replace_published_surface(replacement)
-                    .is_ok();
-                if replaced {
-                    environment.semantic_publication_identity = Arc::new(());
-                }
-                replaced
+                environment
+                    .replace_project_local_class_surface(replacement)
+                    .is_ok()
             });
         if replaced {
             InheritedClassAugmentation::Ready(published)
@@ -1238,6 +1125,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     pub(in crate::check::checker) fn install_published_type_environment_base(
         &mut self,
         base: PublishedTypeEnvironment,
@@ -1396,7 +1284,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             } => {
                 if let Some(overlay) = project_local_overlay {
                     if overlay.unavailable || recovery_params.len() != overlay.parameters.len() {
-                        self.freeze_project_local_unavailable_type_group(group)
+                        self.freeze_project_local_unavailable_type_group()
                     } else {
                         let substitutions = recovery_params
                             .iter()
@@ -1430,18 +1318,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                             conflict_alternatives: alternatives,
                         })
                     }
-                } else if self
-                    .private_collision_affected
-                    .contains(&ReplayOwner::TypeGroup(group))
-                {
-                    PublishedTypeGroupTerminal::Ready(PublishedTypeGroup {
-                        name,
-                        surface: PublishedTypeGroupSurface::Template(*reserved),
-                        parameters: recovery_params.clone(),
-                        parameter_names: recovery_names.clone(),
-                        parameter_defaults: recovery_defaults.clone(),
-                        conflict_alternatives: conflict_alternatives.clone(),
-                    })
                 } else {
                     match self.augment_inherited_class_surface(group, *reserved, recovery_params) {
                         InheritedClassAugmentation::Ready(mut inherited) => {
@@ -1574,11 +1450,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .freeze(group, terminal);
     }
 
-    fn freeze_project_local_unavailable_type_group(
-        &mut self,
-        group: TypeGroupId,
-    ) -> PublishedTypeGroupTerminal {
-        self.private_collision_unavailable_type_groups.insert(group);
+    fn freeze_project_local_unavailable_type_group(&mut self) -> PublishedTypeGroupTerminal {
         PublishedTypeGroupTerminal::Unavailable(PublishedTypeGroupUnavailable {
             cause: TypeGroupUnavailableCause::UnsupportedComposition,
         })
@@ -1599,22 +1471,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
     }
 
-    pub(in crate::check::checker) fn publish_type_groups(&mut self) -> TypeGroupPublicationOutcome {
-        #[cfg(any(test, feature = "test-utils"))]
-        super::library_compiler::record_complete_source_publication_entry_for_test();
-        self.publish_type_groups_inner(false)
-    }
-
-    pub(in crate::check::checker) fn publish_project_local_user_type_groups(
-        &mut self,
-    ) -> TypeGroupPublicationOutcome {
-        self.publish_type_groups_inner(true)
-    }
-
-    fn publish_type_groups_inner(
-        &mut self,
-        allow_partial_library_identities: bool,
-    ) -> TypeGroupPublicationOutcome {
+    pub(in crate::check::checker) fn publish_type_groups(&mut self) {
         let alias_terminals = self
             .type_decls
             .changed_entries()
@@ -1676,7 +1533,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .type_group_construction
             .take()
             .expect("type-group construction is consumed exactly once");
-        let replaced_prefix = !construction.replacements.is_empty();
         let unfinished: Vec<_> = construction
             .unfinished_groups()
             .into_iter()
@@ -1695,7 +1551,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             unfinished.is_empty(),
             "every type group must be explicitly frozen before publication: {unfinished:?}"
         );
-        let (groups, publication_validations) = construction
+        let groups = construction
             .consume(self.type_decls.len())
             .expect("every type group must be explicitly frozen before publication");
         let staged_classes = self
@@ -1706,48 +1562,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .staged_published_aliases
             .take()
             .expect("alias registry must be staged before type publication");
-        let mut identity_selection_pending = false;
-        let groups = if replaced_prefix {
-            let identities_were_installed = self.library_semantic_identities.is_some();
-            let preview = PublishedTypeEnvironment {
-                classes: self.type_environment.inherited().classes.clone(),
-                aliases: self.type_environment.inherited().aliases.clone(),
-                groups,
-                semantic_publication_identity: Arc::new(()),
-            };
-            let selected =
-                super::library_identities::LibrarySemanticIdentities::select_for_collision_publication(
-                    self.binder,
-                    &preview,
-                    self.interner.store(),
-                );
-            let relation_context = selected.object_relation_context();
-            if (selected.all_ready() && relation_context.is_some())
-                || allow_partial_library_identities
-            {
-                self.semantic_queries
-                    .set_library_object_context(relation_context);
-                self.library_semantic_identities = Some(selected);
-            } else {
-                self.semantic_queries.set_library_object_context(None);
-                identity_selection_pending = identities_were_installed;
-                self.library_semantic_identities = None;
-            }
-            preview.groups
-        } else {
-            groups
-        };
         self.type_environment
             .publish(groups, staged_classes, staged_aliases);
-        if identity_selection_pending {
-            TypeGroupPublicationOutcome::LibraryIdentitySelectionPending {
-                publication_validations,
-            }
-        } else {
-            TypeGroupPublicationOutcome::Ready {
-                publication_validations,
-            }
-        }
     }
 }
 
@@ -1862,72 +1678,11 @@ mod tests {
             parameter_defaults: vec![PublishedTypeParameterDefault::Absent],
             conflict_alternatives: Vec::new(),
         });
-        let mut base = published_type_groups_from_terminals(vec![terminal.clone()]);
-        base.entries
-            .freeze_as_base()
-            .expect("test base entries seal");
-        base.declarations
-            .freeze_as_base()
-            .expect("test base declarations seal");
-        base.resolved
-            .freeze_as_base()
-            .expect("test base resolutions seal");
+        let base = published_type_groups_from_terminals(vec![terminal.clone()]);
         let mut construction = TypeGroupConstruction::new(1);
         construction.install_base(&base);
 
-        let (inherited, publication_validations) =
-            construction.consume(1).expect("installed base is terminal");
-        assert_eq!(publication_validations, 0);
+        let inherited = construction.consume(1).expect("installed base is terminal");
         assert_eq!(inherited.get(TypeGroupId(0)), Some(&terminal));
-    }
-
-    #[test]
-    fn published_environment_shares_base_and_constructs_only_a_dense_suffix() {
-        let base_terminal =
-            PublishedTypeGroupTerminal::Unavailable(PublishedTypeGroupUnavailable {
-                cause: TypeGroupUnavailableCause::UnsupportedComposition,
-            });
-        let mut base =
-            PublishedTypeEnvironment::from_explicit_terminals_for_test(vec![base_terminal.clone()]);
-        base.freeze_as_base().expect("published base seals");
-        let first = base.fork_delta().expect("first published suffix");
-        let second = base.fork_delta().expect("second published suffix");
-        assert!(first.shares_base_with(&second));
-
-        let mut construction = TypeGroupConstruction::new(3);
-        construction.install_base(first.groups());
-        for index in 1..3 {
-            let group = TypeGroupId(index);
-            construction.begin(group);
-            construction.freeze(group, base_terminal.clone());
-        }
-        let (published, validations) = construction.consume(3).expect("dense suffix publishes");
-        assert_eq!(validations, 2);
-        assert_eq!(published.entries.base_len(), 1);
-        assert_eq!(published.entries.local_len(), 2);
-        assert_eq!(published.get(TypeGroupId(0)), Some(&base_terminal));
-        assert_eq!(second.groups().len(), 1);
-    }
-
-    #[test]
-    fn sparse_publication_validates_only_replacements_and_dense_suffix_rows() {
-        let terminal = PublishedTypeGroupTerminal::Unavailable(PublishedTypeGroupUnavailable {
-            cause: TypeGroupUnavailableCause::UnsupportedComposition,
-        });
-        let mut base =
-            PublishedTypeEnvironment::from_explicit_terminals_for_test(vec![terminal.clone(); 64]);
-        base.freeze_as_base().expect("published base seals");
-        let sparse = base.fork_sparse_delta().expect("sparse publication epoch");
-        let mut construction = TypeGroupConstruction::new(65);
-        construction.install_base(sparse.groups());
-        construction.begin(TypeGroupId(17));
-        construction.freeze(TypeGroupId(17), terminal.clone());
-        construction.begin(TypeGroupId(64));
-        construction.freeze(TypeGroupId(64), terminal);
-
-        let (published, validations) = construction.consume(65).expect("changed rows publish");
-        assert_eq!(validations, 2);
-        assert_eq!(published.entries.replacement_len(), 1);
-        assert_eq!(published.entries.local_len(), 1);
     }
 }

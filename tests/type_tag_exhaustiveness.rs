@@ -334,10 +334,6 @@ fn production_type_tag_wildcards_adjudicate_enum_variants() {
             "enum nodes are already evaluated values",
         ),
         (
-            "crates/typokat-check/src/check/checker/library_compiler/probes.rs#1:match store.tag(ty)",
-            "the test probe returns no call signatures for enum nodes",
-        ),
-        (
             "crates/typokat-check/src/check/checker/namespace_values.rs#1:match self.interner.store().tag(property.ty)",
             "enum namespace properties do not contribute call-signature overload rows",
         ),

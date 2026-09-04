@@ -2,7 +2,6 @@
 
 use super::application::{ClassTypeParameter, ClassTypeParameterDefault};
 use super::retained::RetainedClassCallable;
-use crate::check::checker::replay_index::ReplayClassLookup;
 use crate::class_semantics::{
     ClassConstructionState, DemandOutcome, Exhaustion, PublishedClassPoison, PublishedClassSurface,
     PublishedClasses,
@@ -69,13 +68,6 @@ pub(in crate::check::checker) struct DraftClassTypeParameter<Ticket> {
     constraint: Option<TypeId>,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(in crate::check::checker) struct DraftClassTypeParameterSnapshot {
-    pub(in crate::check::checker) id: TypeParamId,
-    pub(in crate::check::checker) constraint: Option<TypeId>,
-    pub(in crate::check::checker) default: ClassTypeParameterDefault<()>,
-}
-
 impl<Ticket> DraftClassTypeParameter<Ticket> {
     /// Source class defaults are deliberately always unavailable in this cutover.
     pub(in crate::check::checker) fn source(
@@ -129,29 +121,6 @@ impl<Ticket> DraftClassTypeParameter<Ticket> {
                 },
             },
             constraint: self.constraint,
-        }
-    }
-}
-
-impl DraftClassTypeParameter<()> {
-    pub(in crate::check::checker) fn snapshot_parts(self) -> DraftClassTypeParameterSnapshot {
-        DraftClassTypeParameterSnapshot {
-            id: self.application.id,
-            constraint: self.constraint,
-            default: self.application.default,
-        }
-    }
-
-    #[cfg(test)]
-    pub(in crate::check::checker) fn from_snapshot_parts(
-        parts: DraftClassTypeParameterSnapshot,
-    ) -> Self {
-        Self {
-            application: ClassTypeParameter {
-                id: parts.id,
-                default: parts.default,
-            },
-            constraint: parts.constraint,
         }
     }
 }
@@ -414,7 +383,7 @@ impl ClassGraph {
         store: &Store,
         roots: &ReservedSurfaceRoots,
         drafts: &BTreeMap<ClassId, ClassDraft<Ticket>>,
-        inherited: &ReplayClassLookup<'_>,
+        inherited: &PublishedClasses,
     ) -> Result<Self, ClassPublicationError> {
         let registered: BTreeSet<ClassId> = drafts.keys().copied().collect();
         let mut graph = ClassGraph::default();
@@ -435,7 +404,7 @@ impl ClassGraph {
             if let Some(target) = edges.ordinary.union(&edges.heritage).find(|target| {
                 !registered.contains(target)
                     && matches!(
-                        inherited.published_class_for(class, **target),
+                        inherited.published_class(**target),
                         DemandOutcome::Exhausted(Exhaustion::ClassNotPublished { .. })
                     )
             }) {
@@ -515,14 +484,14 @@ impl<Ticket: Copy> ClassConstruction<Ticket> {
         interner: &mut Interner,
     ) -> Result<ClassPublication<Ticket>, ClassPublicationError> {
         let inherited = PublishedClasses::empty();
-        let inherited = ReplayClassLookup::new(&inherited, None);
-        self.finish_with_inherited(interner, &inherited)
+        let inherited = &inherited;
+        self.finish_with_inherited(interner, inherited)
     }
 
     pub(in crate::check::checker) fn finish_with_inherited(
         self,
         interner: &mut Interner,
-        inherited: &ReplayClassLookup<'_>,
+        inherited: &PublishedClasses,
     ) -> Result<ClassPublication<Ticket>, ClassPublicationError> {
         for draft in self.drafts.values() {
             let mut previous_overload = None;
@@ -587,7 +556,7 @@ impl<Ticket: Copy> ClassConstruction<Ticket> {
                     };
                     for heritage in draft.heritage.iter().chain(&draft.instance_heritage) {
                         let inherited_poisoned = matches!(
-                            inherited.published_class_for(*class, heritage.target),
+                            inherited.published_class(heritage.target),
                             DemandOutcome::Exhausted(
                                 Exhaustion::ClassHeritagePoison { .. }
                                     | Exhaustion::ClassInitializerPoison { .. }
@@ -649,7 +618,7 @@ impl<Ticket: Copy> ClassConstruction<Ticket> {
                     let (mut instance_template, static_template, inherited_constructor) =
                         if let Some(heritage) = draft.heritage {
                             match surfaces.get(&heritage.target).cloned().or_else(
-                                || match inherited.published_class_for(*class, heritage.target) {
+                                || match inherited.published_class(heritage.target) {
                                     DemandOutcome::Ready(surface) => Some(surface.clone()),
                                     DemandOutcome::Exhausted(_) => None,
                                 },
@@ -704,7 +673,7 @@ impl<Ticket: Copy> ClassConstruction<Ticket> {
                         };
                     for heritage in &draft.instance_heritage {
                         let Some(base) = surfaces.get(&heritage.target).cloned().or_else(|| {
-                            match inherited.published_class_for(*class, heritage.target) {
+                            match inherited.published_class(heritage.target) {
                                 DemandOutcome::Ready(surface) => Some(surface.clone()),
                                 DemandOutcome::Exhausted(_) => None,
                             }
@@ -1359,10 +1328,10 @@ mod tests {
         local.add_identity_root(inherited_application);
         let mut construction = ClassConstruction::default();
         construction.register(local.finish()).unwrap();
-        let inherited = ReplayClassLookup::new(&inherited, None);
+        let inherited = &inherited;
 
         let publication = construction
-            .finish_with_inherited(&mut interner, &inherited)
+            .finish_with_inherited(&mut interner, inherited)
             .unwrap();
 
         assert!(publication
@@ -1407,10 +1376,10 @@ mod tests {
         }));
         let mut construction = ClassConstruction::default();
         construction.register(local.finish()).unwrap();
-        let inherited = ReplayClassLookup::new(&inherited, None);
+        let inherited = &inherited;
 
         let publication = construction
-            .finish_with_inherited(&mut interner, &inherited)
+            .finish_with_inherited(&mut interner, inherited)
             .unwrap();
         let DemandOutcome::Ready(surface) = publication.published.published_class(ClassId(2))
         else {
@@ -1447,10 +1416,10 @@ mod tests {
         }));
         let mut construction = ClassConstruction::default();
         construction.register(local.finish()).unwrap();
-        let inherited = ReplayClassLookup::new(&inherited, None);
+        let inherited = &inherited;
 
         let publication = construction
-            .finish_with_inherited(&mut interner, &inherited)
+            .finish_with_inherited(&mut interner, inherited)
             .unwrap();
 
         assert!(matches!(

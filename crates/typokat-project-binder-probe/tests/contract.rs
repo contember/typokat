@@ -1,8 +1,7 @@
 use serde_json::Value;
 use std::process::{Command, Output};
 use typokat_library::project_binder_probe::{
-    with_project_binder_probe, ProbeSetupControl, ProjectBinderPhaseCountersV1,
-    ProjectBinderProbeSetupCountersV1,
+    with_project_binder_probe, ProjectBinderPhaseCountersV1, ProjectBinderProbeSetupCountersV1,
 };
 
 const PRODUCT_DIGEST: &str = "a3e543680440ed88755d4d43f5a5a02c071052a061705e378d29d03a313d6c82";
@@ -33,11 +32,7 @@ fn successful_receipt(arguments: &[&str]) -> Value {
 fn setup_counters_json(counters: ProjectBinderProbeSetupCountersV1) -> Value {
     serde_json::json!({
         "declaration_product_initializations": counters.declaration_product_initializations,
-        "semantic_base_initializations": counters.semantic_base_initializations,
-        "retained_setup_control_bytes": counters.retained_setup_control_bytes,
         "user_parses": counters.user_parses,
-        "user_binds": counters.user_binds,
-        "user_checks": counters.user_checks,
     })
 }
 
@@ -45,28 +40,13 @@ fn phase_counters_json(counters: ProjectBinderPhaseCountersV1) -> Value {
     serde_json::json!({
         "constructions": counters.constructions,
         "declaration_product_initializations": counters.declaration_product_initializations,
-        "semantic_base_initializations": counters.semantic_base_initializations,
         "product_consumptions": counters.product_consumptions,
         "fresh_binder_entries": counters.fresh_binder_entries,
         "bound_library_units": counters.bound_library_units,
         "bound_user_units": counters.bound_user_units,
         "typed_binding_products": counters.typed_binding_products,
         "heavy_binding_projections": counters.heavy_binding_projections,
-        "user_parses": counters.user_parses,
-        "user_binds": counters.user_binds,
-        "user_checks": counters.user_checks,
         "source_manifest_builds": counters.source_manifest_builds,
-        "library_frontend_entries": counters.library_frontend_entries,
-        "library_parse_units": counters.library_parse_units,
-        "library_bind_batches": counters.library_bind_batches,
-        "library_ast_bind_units": counters.library_ast_bind_units,
-        "library_full_source_products_consumed": counters.library_full_source_products_consumed,
-        "library_checkpoint_products_consumed": counters.library_checkpoint_products_consumed,
-        "compiler_compiles": counters.compiler_compiles,
-        "compiler_parses": counters.compiler_parses,
-        "compiler_binds": counters.compiler_binds,
-        "compiler_checks": counters.compiler_checks,
-        "user_delta_forks": counters.user_delta_forks,
         "event_reservations": counters.event_reservations,
         "query_cache_writes": {
             "projection": counters.query_cache_writes.projection,
@@ -77,8 +57,8 @@ fn phase_counters_json(counters: ProjectBinderPhaseCountersV1) -> Value {
     })
 }
 
-fn typed_one_sample(control: ProbeSetupControl) -> Value {
-    with_project_binder_probe(control, |probe| {
+fn typed_one_sample() -> Value {
+    with_project_binder_probe(|probe| {
         let setup = setup_counters_json(probe.setup_receipt().counters());
         let sample = probe.bind_one().expect("one typed phase sample");
         let measured = phase_counters_json(sample.phase_receipt().counters());
@@ -147,7 +127,7 @@ fn assert_binary_uses_typed_receipts() {
 }
 
 fn assert_common_receipt(receipt: &Value, mode: &str) {
-    assert_eq!(receipt["schema"], 2);
+    assert_eq!(receipt["schema"], 3);
     assert_eq!(
         receipt["route"],
         "immutable-library-product-to-fresh-project-binder"
@@ -170,10 +150,7 @@ fn assert_common_receipt(receipt: &Value, mode: &str) {
         receipt["setup_work"]["declaration_product_initializations"],
         1
     );
-    assert_eq!(receipt["setup_work"]["semantic_base_initializations"], 0);
     assert_eq!(receipt["setup_work"]["user_parses"], 1);
-    assert_eq!(receipt["setup_work"]["user_binds"], 0);
-    assert_eq!(receipt["setup_work"]["user_checks"], 0);
     assert_eq!(receipt["result"]["product_arc_reused"], true);
     assert_eq!(receipt["result"]["binder_digest"], BINDER_DIGEST);
 }
@@ -181,28 +158,13 @@ fn assert_common_receipt(receipt: &Value, mode: &str) {
 fn assert_exact_phase_work(work: &Value, invocations: u64) {
     assert_eq!(work["constructions"], invocations);
     assert_eq!(work["declaration_product_initializations"], 0);
-    assert_eq!(work["semantic_base_initializations"], 0);
     assert_eq!(work["product_consumptions"], invocations);
     assert_eq!(work["fresh_binder_entries"], invocations);
     assert_eq!(work["bound_library_units"], invocations * 82);
     assert_eq!(work["bound_user_units"], invocations);
     assert_eq!(work["typed_binding_products"], invocations);
     assert_eq!(work["heavy_binding_projections"], 0);
-    assert_eq!(work["user_parses"], 0);
-    assert_eq!(work["user_binds"], invocations);
-    assert_eq!(work["user_checks"], 0);
     assert_eq!(work["source_manifest_builds"], invocations);
-    assert_eq!(work["library_frontend_entries"], 0);
-    assert_eq!(work["library_parse_units"], 0);
-    assert_eq!(work["library_bind_batches"], 0);
-    assert_eq!(work["library_ast_bind_units"], 0);
-    assert_eq!(work["library_full_source_products_consumed"], 0);
-    assert_eq!(work["library_checkpoint_products_consumed"], 0);
-    assert_eq!(work["compiler_compiles"], 0);
-    assert_eq!(work["compiler_parses"], 0);
-    assert_eq!(work["compiler_binds"], 0);
-    assert_eq!(work["compiler_checks"], 0);
-    assert_eq!(work["user_delta_forks"], 0);
     assert_eq!(work["event_reservations"], 0);
     assert_eq!(work["query_cache_writes"]["projection"], 0);
     assert_eq!(work["query_cache_writes"]["evaluator"], 0);
@@ -255,7 +217,7 @@ fn heap_stat(receipt: &Value, field: &str) -> u64 {
 #[cfg(feature = "jemalloc-wall")]
 #[test]
 fn cli_receipt_uses_the_opaque_library_phase_receipt() {
-    let typed = typed_one_sample(ProbeSetupControl::None);
+    let typed = typed_one_sample();
     let cli = successful_receipt(&["wall", "--warmups", "0", "--samples", "1"]);
 
     assert_eq!(cli["setup_work"], typed["setup_work"]);
@@ -280,7 +242,6 @@ fn wall_probe_emits_authenticated_production_receipt() {
     assert_eq!(receipt["allocator"], "tikv-jemallocator");
     assert_eq!(receipt["run"]["warmups"], 10);
     assert_eq!(receipt["run"]["samples"], 31);
-    assert_eq!(receipt["setup_work"]["retained_setup_control_bytes"], 0);
     assert_exact_phase_work(&receipt["warmup_work"], 10);
     assert_exact_phase_work(&receipt["measured_work"], 31);
 
@@ -303,7 +264,6 @@ fn wall_probe_emits_authenticated_production_receipt() {
 fn every_wall_sample_constructs_one_fresh_binder() {
     let receipt = successful_receipt(&["wall", "--warmups", "0", "--samples", "2"]);
     assert_common_receipt(&receipt, "wall");
-    assert_eq!(receipt["setup_work"]["retained_setup_control_bytes"], 0);
     assert_exact_phase_work(&receipt["warmup_work"], 0);
     assert_exact_phase_work(&receipt["measured_work"], 2);
     assert_eq!(
@@ -335,12 +295,10 @@ fn wall_cli_rejects_unknown_duplicate_missing_and_zero_arguments() {
 #[cfg(feature = "dhat-heap")]
 #[test]
 fn heap_probe_excludes_setup_and_includes_measured_control_allocation() {
-    let typed_baseline = typed_one_sample(ProbeSetupControl::None);
-    let typed_setup = typed_one_sample(ProbeSetupControl::RetainedOneMiB);
+    let typed = typed_one_sample();
     let baseline = successful_receipt(&["heap"]);
-    let setup = successful_receipt(&["heap", "--control", "setup-retained-1m"]);
     let phase = successful_receipt(&["heap", "--control", "phase-retained-1m"]);
-    for receipt in [&baseline, &setup, &phase] {
+    for receipt in [&baseline, &phase] {
         assert_common_receipt(receipt, "heap");
         assert_eq!(receipt["allocator"], "dhat");
         assert_eq!(receipt["run"]["warmups"], 0);
@@ -350,34 +308,17 @@ fn heap_probe_excludes_setup_and_includes_measured_control_allocation() {
         assert!(receipt["wall"].is_null());
     }
     assert_eq!(baseline["heap"]["control"], "none");
-    assert_eq!(setup["heap"]["control"], "setup-retained-1m");
     assert_eq!(phase["heap"]["control"], "phase-retained-1m");
+    assert_eq!(baseline["setup_work"], typed["setup_work"]);
+    assert_eq!(baseline["measured_work"], typed["measured_work"]);
     assert_eq!(
-        typed_baseline["setup_work"]["retained_setup_control_bytes"],
-        0
+        baseline["result"]["binder_digest"],
+        typed["result"]["binder_digest"]
     );
     assert_eq!(
-        typed_setup["setup_work"]["retained_setup_control_bytes"],
-        PHASE_CONTROL_BYTES
+        baseline["result"]["product_arc_reused"],
+        typed["result"]["product_arc_reused"]
     );
-    assert_eq!(baseline["setup_work"]["retained_setup_control_bytes"], 0);
-    assert_eq!(
-        setup["setup_work"]["retained_setup_control_bytes"],
-        PHASE_CONTROL_BYTES
-    );
-    assert_eq!(phase["setup_work"]["retained_setup_control_bytes"], 0);
-    for (cli, typed) in [(&baseline, &typed_baseline), (&setup, &typed_setup)] {
-        assert_eq!(cli["setup_work"], typed["setup_work"]);
-        assert_eq!(cli["measured_work"], typed["measured_work"]);
-        assert_eq!(
-            cli["result"]["binder_digest"],
-            typed["result"]["binder_digest"]
-        );
-        assert_eq!(
-            cli["result"]["product_arc_reused"],
-            typed["result"]["product_arc_reused"]
-        );
-    }
     assert_binary_uses_typed_receipts();
 
     for field in [
@@ -387,7 +328,6 @@ fn heap_probe_excludes_setup_and_includes_measured_control_allocation() {
         "peak_live_bytes",
     ] {
         assert!(heap_stat(&baseline, field) > 0);
-        assert_eq!(heap_stat(&setup, field), heap_stat(&baseline, field));
     }
     assert_eq!(
         heap_stat(&phase, "allocation_calls"),

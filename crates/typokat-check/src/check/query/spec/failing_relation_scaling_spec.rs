@@ -207,12 +207,8 @@ fn nested_failing_union_target_keeps_its_flat_headline() {
     assert_single_assignment_failure(&run);
     assert_eq!(
         run.diagnostics[0].rendered_text(),
-        "error[TK2322]: Type '{ payload: { payload: { payload: number; type: \"t0\" }; \
-         type: \"a0\" }; type: \"a0\" }' is not assignable to type \
-         '{ payload: { payload: { payload: string; type: \"t0\" }; type: \"a0\" } | \
-         { payload: { payload: string; type: \"t0\" }; type: \"a1\" }; type: \"a0\" } | \
-         { payload: { payload: { payload: string; type: \"t0\" }; type: \"a0\" } | \
-         { payload: { payload: string; type: \"t0\" }; type: \"a1\" }; type: \"a1\" }'"
+        "error[TK2322]: Type '{ payload: S1; type: \"a0\" }' is not assignable to type \
+         '{ payload: T1; type: \"a0\" } | { payload: T1; type: \"a1\" }'"
     );
 }
 

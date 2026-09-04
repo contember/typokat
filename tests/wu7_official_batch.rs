@@ -73,7 +73,7 @@ fn official_batch_cases_share_the_worker_process_but_not_user_state() {
         );
         assert_eq!(response["schema"], 1);
         assert_eq!(response["worker_pid"].as_u64(), Some(u64::from(worker_pid)));
-        assert_eq!(response["provider_route"], "production-default-library");
+        assert_eq!(response["provider_route"], "production-checker-session");
         assert_eq!(response["profile_sha256"], PROFILE_SHA256);
     }
     assert_eq!(responses[0]["case_id"], "defines-global");
@@ -127,7 +127,7 @@ fn official_batch_reports_unchecked_class_static_blocks_without_inventory_failur
     };
     assert_eq!(response["case_id"], "auto-accessor-static-block");
     assert_eq!(response["exit_code"], 3);
-    assert_eq!(response["provider_route"], "production-default-library");
+    assert_eq!(response["provider_route"], "production-checker-session");
     let stderr = response["stderr"].as_str().expect("case stderr is text");
     assert!(
         stderr.contains("incomplete[class/static-block/self]"),

@@ -25,7 +25,7 @@ use super::type_syntax::{
     SurfaceTypeResolver, TypeSyntaxLowerer,
 };
 use super::visibility::{has_public_constructor, lower_visibility};
-use crate::binder::declaration::{DeclarationKind, TypeGroupId};
+use crate::binder::declaration::DeclarationKind;
 use crate::binder::scope::ScopeId;
 use crate::check::checker::context::{
     CheckerEffects, ClassNamespacePropertyPayload, ClassNamespacePropertySourceOrder,
@@ -38,7 +38,6 @@ use crate::check::checker::lexical_events::{
     source_ordinal, ClassReservation, LexicalReservations,
 };
 use crate::check::checker::library_identities::NativeArrayGroups;
-use crate::check::checker::replay_index::{ReplayClassLookup, ReplayOwner};
 use crate::check::checker::reporting_record::CheckerRecord;
 use crate::class_semantics::{ClassApplicationArguments, DemandOutcome, Exhaustion};
 use crate::diagnostics::{render_type, Diagnostic, IncompleteSurface};
@@ -285,44 +284,20 @@ struct Resolver<'a, 'ast, Ticket: Copy> {
     /// empty on the prelude path. Keyed on identity, never spelling.
     native_array_groups: NativeArrayGroups,
     application_checks: Vec<StagedClassApplicationCheck<Ticket>>,
-    replay_trace: Option<super::super::replay_index::ReplayDependencyTrace>,
 }
 
 impl<Ticket: Copy + PartialEq> Resolver<'_, '_, Ticket> {
     fn resolve_value_type(&self, name: &str, values: &DeclTypes) -> Option<TypeId> {
-        if let Some(trace) = &self.replay_trace {
-            trace.demand_root_slot(name, super::super::replay_index::RootSlotKind::Value);
-        }
         let storage = self
             .binder
             .resolve_value(self.scope, name)
             .and_then(|symbol| self.binder.symbols.get(symbol))
             .and_then(|symbol| symbol.value)?;
-        let ty = values.get(storage)?;
-        if let Some(trace) = &self.replay_trace {
-            trace.demand_at(ReplayOwner::Value(storage), "class-surface-value-terminal");
-        }
-        Some(ty)
+        values.get(storage)
     }
 
     fn resolve_type_group_id(&self, name: &str) -> Option<crate::binder::declaration::TypeGroupId> {
-        if let Some(trace) = &self.replay_trace {
-            let _observation = trace.observe_typed_demand("class-surface-type-binding");
-            let symbol = self.binder.resolve_type_traced(self.scope, name, || {
-                trace.demand_root_slot(name, super::super::replay_index::RootSlotKind::Type);
-            });
-            symbol
-                .and_then(|symbol| self.binder.symbols.get(symbol))
-                .and_then(|binding| binding.ty)
-                .inspect(|group| {
-                    trace.demand_at(
-                        ReplayOwner::TypeGroup(*group),
-                        "class-surface-type-terminal",
-                    );
-                })
-        } else {
-            type_decl_id(self.binder, self.scope, name)
-        }
+        type_decl_id(self.binder, self.scope, name)
     }
 
     fn class_default_owner(&self, class: ClassId, index: usize) -> Ticket {
@@ -556,39 +531,9 @@ impl<Ticket: Copy + PartialEq> SurfaceTypeResolver<Ticket> for Resolver<'_, '_, 
     }
 
     fn resolve_qualified_name(&mut self, segments: &[&str]) -> SurfaceNameResolution<Ticket> {
-        let resolution = if let Some(trace) = &self.replay_trace {
-            let _observation = trace.observe_typed_demand("class-surface-qualified-binding");
-            let resolution = self.binder.resolve_qualified_type_path_traced(
-                self.scope,
-                segments,
-                || {
-                    if let Some(root) = segments.first() {
-                        trace.demand_root_slot(
-                            root,
-                            super::super::replay_index::RootSlotKind::Namespace,
-                        );
-                    }
-                },
-                |namespace| {
-                    trace.demand_at(
-                        ReplayOwner::Namespace(namespace),
-                        "class-surface-qualified-namespace",
-                    );
-                },
-            );
-            if let crate::binder::namespace::QualifiedTypePathResolution::TypeGroup(group) =
-                resolution
-            {
-                trace.demand_at(
-                    ReplayOwner::TypeGroup(group),
-                    "class-surface-qualified-terminal",
-                );
-            }
-            resolution
-        } else {
-            self.binder
-                .resolve_qualified_type_path(self.scope, segments)
-        };
+        let resolution = self
+            .binder
+            .resolve_qualified_type_path(self.scope, segments);
         if let crate::binder::namespace::QualifiedTypePathResolution::TypeGroup(group) = resolution
         {
             let endpoint = self.resolve_group(group);
@@ -682,15 +627,11 @@ impl SurfaceInitializerContext for InitializerContext {
 }
 
 impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
-    fn staged_published_class_replay(
+    fn staged_published_class(
         &self,
         class: ClassId,
-        boundary: &'static str,
+        _boundary: &'static str,
     ) -> DemandOutcome<&crate::class_semantics::PublishedClassSurface> {
-        if let Some(trace) = &self.replay_trace {
-            let _observation = trace.observe_typed_demand(boundary);
-            trace.demand_at(ReplayOwner::Class(class), boundary);
-        }
         self.staged_published_classes
             .as_ref()
             .expect("class publication is staged")
@@ -719,7 +660,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let error = self.interner.well_known().error;
         let native_array_groups = self.native_array_groups_for_source(self.current_source);
         let source = source_ordinal(self.current_source);
-        let replay_trace = self.replay_trace.clone();
         let (result, child_failures, application_checks) = {
             // Reach the drafts by field, not through `Deref`: `Deref` borrows all of `self` and
             // would force a per-member copy of the declaration tables just to free the interner.
@@ -736,7 +676,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 qualified_outer_type_parameters_visible: true,
                 native_array_groups,
                 application_checks: Vec::new(),
-                replay_trace,
             };
             let mut factory = SurfaceTypeFactory::new(self.interner);
             let (result, child_failures) = lower_type(&mut factory, &mut resolver, annotation, &[]);
@@ -761,7 +700,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let error = self.interner.well_known().error;
         let native_array_groups = self.native_array_groups_for_source(self.current_source);
         let source = source_ordinal(self.current_source);
-        let replay_trace = self.replay_trace.clone();
         let (result, child_failures, application_checks) = {
             // Reach the drafts by field, not through `Deref`: `Deref` borrows all of `self` and
             // would force a per-member copy of the declaration tables just to free the interner.
@@ -778,7 +716,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 qualified_outer_type_parameters_visible: true,
                 native_array_groups,
                 application_checks: Vec::new(),
-                replay_trace,
             };
             let mut factory = SurfaceTypeFactory::new(self.interner);
             let (result, child_failures) = lower_callable(
@@ -822,17 +759,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     )
                 })
                 .collect();
-            let owner = self.current_replay_owner();
             self.effect_stack
                 .last_mut()
                 .expect("namespace surface constraint requires a lexical owner")
-                .push_constraint_check(
-                    ConstraintCheckObligation {
-                        checks,
-                        substitutions,
-                    },
-                    owner,
-                );
+                .push_constraint_check(ConstraintCheckObligation {
+                    checks,
+                    substitutions,
+                });
         }
     }
 
@@ -905,7 +838,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 &self.lexical_events,
                 error,
                 native_array_groups,
-                self.replay_trace.clone(),
             );
         }
 
@@ -933,10 +865,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             let scope = *scope;
             let declaration = *declaration;
             let class_id = *class_id;
-            let _replay_owner_scope = self
-                .replay_trace
-                .as_ref()
-                .map(|trace| trace.scope(ReplayOwner::Class(class_id)));
             let params = params.clone();
             let class_params = class_params.clone();
             let recovery_names = recovery_names.clone();
@@ -1019,7 +947,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 qualified_outer_type_parameters_visible: true,
                 native_array_groups,
                 application_checks: Vec::new(),
-                replay_trace: self.replay_trace.clone(),
             };
             let mut class_conflict_surface = None;
             let mut class_heritage_conflict_surface = None;
@@ -1483,7 +1410,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     constructor,
                 );
                 if let Some((parent, base)) = heritage {
-                    self.record_replay_demand(ReplayOwner::Class(parent));
                     lowerer.set_heritage(HeritageDependency {
                         target: parent,
                         identity_root: base,
@@ -1535,12 +1461,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
         }
 
-        let inherited_classes = ReplayClassLookup::new(
-            self.type_environment.inherited().classes(),
-            self.replay_trace.clone(),
-        );
         let publication = construction
-            .finish_with_inherited(self.interner, &inherited_classes)
+            .finish_with_inherited(self.interner, self.type_environment.inherited().classes())
             .expect("class publication must preserve reserved identities");
         self.staged_published_classes = Some(publication.published);
         if self.staged_published_aliases.is_none() {
@@ -1570,10 +1492,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             );
         }
         for (group, class_object) in &class_conflict_surfaces {
-            let _replay_owner_scope = self
-                .replay_trace
-                .as_ref()
-                .map(|trace| trace.scope(ReplayOwner::TypeGroup(*group)));
             let Some(interface_fragments) = prepared_interface_groups.get(group) else {
                 continue;
             };
@@ -1585,7 +1503,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 .unwrap_or_else(|| "<class>".to_string());
             for prepared in interface_fragments {
                 for heritage in &prepared.instance_heritage {
-                    let surface = match self.staged_published_class_replay(
+                    let surface = match self.staged_published_class(
                         heritage.dependency.target,
                         "class-conflict-heritage",
                     ) {
@@ -1670,18 +1588,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             );
         }
         for group in class_groups {
-            let TypeDecl::Class { class_id, .. } = self
+            let TypeDecl::Class { .. } = self
                 .type_decls
                 .get(group.index())
                 .expect("class group remains present through publication")
             else {
                 unreachable!("class group remains class-owned through publication")
             };
-            let _replay_owner_scope = self
-                .replay_trace
-                .as_ref()
-                .map(|trace| trace.scope(ReplayOwner::TypeGroup(group)));
-            self.record_replay_demand(ReplayOwner::Class(*class_id));
             self.freeze_type_group(group);
         }
         for reservation in self.lexical_events.classes() {
@@ -1689,15 +1602,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 continue;
             };
             if let Some(value_decl) = binding.value_decl {
-                let affected = self
-                    .private_collision_affected
-                    .contains(&ReplayOwner::Class(binding.class_id))
-                    || self
-                        .private_collision_affected
-                        .contains(&ReplayOwner::Value(value_decl))
-                    || self
-                        .private_collision_affected
-                        .contains(&ReplayOwner::TypeGroup(binding.type_decl));
                 assert!(
                     self.class_value_bindings
                         .insert_local(
@@ -1708,18 +1612,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                             },
                         )
                         .expect("class value bindings cannot replace a frozen base row")
-                        .is_none()
-                        || affected,
+                        .is_none(),
                     "class value bindings publish once"
                 );
             }
             if let Some(value_decl) = binding.value_decl {
-                let _replay_owner_scope = self
-                    .replay_trace
-                    .as_ref()
-                    .map(|trace| trace.scope(ReplayOwner::Value(value_decl)));
                 if let DemandOutcome::Ready(surface) =
-                    self.staged_published_class_replay(binding.class_id, "class-value-publication")
+                    self.staged_published_class(binding.class_id, "class-value-publication")
                 {
                     self.decl_types.set(value_decl, surface.static_template());
                 }
@@ -1737,10 +1636,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             else {
                 continue;
             };
-            let _replay_owner_scope = self
-                .replay_trace
-                .as_ref()
-                .map(|trace| trace.scope(ReplayOwner::Class(*class_id)));
             let (ctor_visibility, ctor_declaring_class) =
                 effective_constructor_access(*class_id, class, &type_decls, &self.class_parents);
             self.class_new_metadata
@@ -1774,10 +1669,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             self.type_environment.is_published(),
             "class validation requires the complete immutable type-group registry"
         );
-        let replay_class_owners = self
-            .replay_trace
-            .as_ref()
-            .map(|_| self.lexical_events.class_ticket_owners());
         let StagedClassValidation {
             mut records,
             default_checks,
@@ -1787,13 +1678,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .take()
             .expect("class validation is consumed exactly once");
         for check in application_checks {
-            let replay_owner = replay_class_owners
-                .as_ref()
-                .and_then(|owners| owners.get(&check.owner))
-                .copied()
-                .map(ReplayOwner::Class);
-            let _replay_owner_scope = replay_owner
-                .and_then(|owner| self.replay_trace.as_ref().map(|trace| trace.scope(owner)));
             let substitutions = check
                 .parameters
                 .iter()
@@ -1814,23 +1698,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 })
                 .collect();
             let mut effects = CheckerEffects::new(check.owner);
-            effects.push_constraint_check(
-                ConstraintCheckObligation {
-                    checks,
-                    substitutions,
-                },
-                self.current_replay_owner(),
-            );
+            effects.push_constraint_check(ConstraintCheckObligation {
+                checks,
+                substitutions,
+            });
             self.enqueue_effects(effects);
         }
         for (owner, source, target, span) in default_checks {
-            let replay_owner = replay_class_owners
-                .as_ref()
-                .and_then(|owners| owners.get(&owner))
-                .copied()
-                .map(ReplayOwner::Class);
-            let _replay_owner_scope = replay_owner
-                .and_then(|owner| self.replay_trace.as_ref().map(|trace| trace.scope(owner)));
             let outcome = self.is_assignable(source, target);
             let failed = match outcome {
                 RelationOutcome::Yes => false,
@@ -1867,13 +1741,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
         records.sort_by_key(|record| (record.owner, record.source_start));
         for record in records {
-            let replay_owner = replay_class_owners
-                .as_ref()
-                .and_then(|owners| owners.get(&record.owner))
-                .copied()
-                .map(ReplayOwner::Class);
-            let _replay_owner_scope = replay_owner
-                .and_then(|owner| self.replay_trace.as_ref().map(|trace| trace.scope(owner)));
             self.enqueue_ticket_record(record.owner, record.record);
         }
     }
@@ -1905,10 +1772,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             let scope = *scope;
             let class_id = *class_id;
             let class = *class;
-            let _replay_owner_scope = self
-                .replay_trace
-                .as_ref()
-                .map(|trace| trace.scope(ReplayOwner::Class(class_id)));
             let Some(parent) = self.class_parents.get(&class_id).copied() else {
                 continue;
             };
@@ -1924,8 +1787,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 continue;
             }
             let (derived_object, base_object) = match (
-                self.staged_published_class_replay(class_id, "override-derived-class"),
-                self.staged_published_class_replay(parent, "override-base-class"),
+                self.staged_published_class(class_id, "override-derived-class"),
+                self.staged_published_class(parent, "override-base-class"),
             ) {
                 (DemandOutcome::Ready(derived), DemandOutcome::Ready(base)) => (
                     self.interner
@@ -3253,7 +3116,6 @@ fn register_reserved_surface_roots<'ast, Ticket: Copy + PartialEq>(
     reservations: &LexicalReservations<Ticket>,
     error: TypeId,
     native_array_groups: NativeArrayGroups,
-    replay_trace: Option<super::super::replay_index::ReplayDependencyTrace>,
 ) {
     for (local_index, declaration) in declarations.iter().enumerate() {
         let index = declarations.published_len() + local_index;
@@ -3279,9 +3141,6 @@ fn register_reserved_surface_roots<'ast, Ticket: Copy + PartialEq>(
                 extends,
                 ..
             } => {
-                let _replay_owner_scope = replay_trace
-                    .as_ref()
-                    .map(|trace| trace.scope(ReplayOwner::TypeGroup(TypeGroupId(index as u32))));
                 let Some(source) = reservations.declaration_source(*declaration) else {
                     let _ = construction.roots_mut().register(
                         *reserved,
@@ -3308,7 +3167,6 @@ fn register_reserved_surface_roots<'ast, Ticket: Copy + PartialEq>(
                     qualified_outer_type_parameters_visible: true,
                     native_array_groups,
                     application_checks: Vec::new(),
-                    replay_trace: replay_trace.clone(),
                 };
                 let frame = param_decl
                     .iter()

@@ -57,13 +57,11 @@ pub struct Scope {
 
 impl Clone for Scope {
     fn clone(&self) -> Self {
-        let mut symbols = self.symbols.clone();
-        symbols.enable_prefix_overrides();
         Self {
             parent: self.parent,
             namespace_public: self.namespace_public,
             kind: self.kind,
-            symbols,
+            symbols: self.symbols.clone(),
         }
     }
 }
@@ -148,11 +146,6 @@ impl ScopeGraph {
             })
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
-    pub fn replacement_row_count_for_test(&self) -> usize {
-        self.scopes.replacement_len()
-    }
-
     pub(crate) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
         for scope in self.scopes.local_iter_mut() {
             scope.symbols.freeze_as_base()?;
@@ -163,12 +156,6 @@ impl ScopeGraph {
     pub(crate) fn fork_delta(&self) -> Result<Self, &'static str> {
         Ok(Self {
             scopes: self.scopes.fork_delta()?,
-        })
-    }
-
-    pub(crate) fn fork_sparse_delta(&self) -> Result<Self, &'static str> {
-        Ok(Self {
-            scopes: self.scopes.fork_sparse_delta()?,
         })
     }
 
@@ -204,7 +191,7 @@ impl ScopeGraph {
         self.get_mut(scope)
             .ok_or(FrozenScopeWrite)?
             .symbols
-            .remove_visible(name)
+            .remove_local(name)
             .map_err(|_| FrozenScopeWrite)
     }
 

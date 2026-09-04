@@ -2,8 +2,8 @@
 //!
 //! Enumerates every identity edge the binder holds as `(owner_domain, target_domain,
 //! field, owner, target)` rows, either over the whole state or over a delta's local
-//! rows only. It backs the binder integrity specs and the base/delta leak check in
-//! `library_compiler`; nothing here produces bytes.
+//! rows only. It backs the binder integrity specs and base/delta leak checks; nothing here
+//! produces bytes.
 
 use super::bind::Binder;
 use super::declaration::{LexicalDeclaration, TypeGroup};

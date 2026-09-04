@@ -6,9 +6,8 @@ forbidden_flags = ["--noLib", "--skipLibCheck", "--skipDefaultLibCheck", "--noCh
 
 [provider_probe]
 args = ["library-info", "--format", "json"]
-schema = 2
-check_route = "production-complete-source-once"
-provider_route = "production-default-library"
+schema = 3
+route = "production-checker-session"
 
 [profile]
 typescript_version = "6.0.3"

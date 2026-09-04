@@ -72,10 +72,9 @@ fn reserve_class_interface_headers(source: &str) -> ReservedClassInterfaceHeader
         binder.module,
         source,
         manifest,
-        None,
     )
     .expect("publication fixture inventory");
-    let receipt = crate::check::checker::decls::reserve_type_decls_from_inventory(
+    crate::check::checker::decls::reserve_type_decls_from_inventory(
         &mut interner,
         &binder,
         &inventory,
@@ -84,7 +83,6 @@ fn reserve_class_interface_headers(source: &str) -> ReservedClassInterfaceHeader
         &mut declarations,
         &mut resolved,
     );
-    assert!(receipt.preserved_classes.is_empty());
     let TypeDecl::Class {
         declaration,
         class_id,

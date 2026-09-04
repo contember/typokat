@@ -210,7 +210,7 @@ OK_EXIT_CODES = (0, 1, 3)
 OFFICIAL_BATCH_SCHEMA = 1
 OFFICIAL_BATCH_MAX_FRAME_BYTES = 2 * 1024 * 1024
 OFFICIAL_BATCH_MAX_OUTPUT_BYTES = 1024 * 1024
-OFFICIAL_BATCH_PROVIDER_ROUTE = "production-default-library"
+OFFICIAL_BATCH_ROUTE = "production-checker-session"
 OFFICIAL_BATCH_PROFILE_SHA256 = (
     "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d"
 )
@@ -507,7 +507,7 @@ def _exchange_batch_case(process, name, frame, timeout):
     if type(worker_pid) is not int or worker_pid <= 0 or worker_pid != process.pid:
         raise HarnessFailure(f"{name}: invalid official-batch worker PID {worker_pid!r}")
     if (not isinstance(response["provider_route"], str)
-            or response["provider_route"] != OFFICIAL_BATCH_PROVIDER_ROUTE):
+            or response["provider_route"] != OFFICIAL_BATCH_ROUTE):
         raise HarnessFailure(
             f"{name}: untrusted provider route {response['provider_route']!r}"
         )

@@ -319,7 +319,7 @@ fn reversed_member_order_preserves_the_verdict_and_demands_the_late_sibling() {
 
     assert_eq!(outcome, DemandOutcome::Ready(false));
     assert!(
-        work.demand.evaluation_expansions >= u64::try_from(DEFERRED_DEPTH).unwrap(),
+        work.demand.durable_evaluation_inserts >= u64::try_from(DEFERRED_DEPTH).unwrap(),
         "a mismatch after the recursive sibling must traverse that sibling: {work:#?}"
     );
 }

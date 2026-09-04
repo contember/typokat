@@ -173,7 +173,6 @@ pub(super) fn project_local_final_type_dependencies(
                 *module,
                 source,
                 manifest,
-                None,
             )
             .map_err(|_| "project-local user declaration inventory is unavailable")
         })
@@ -619,6 +618,7 @@ pub(super) struct ProjectLocalUserPassRequest<'a, 'ast> {
     pub(super) programs: &'a [ProjectProgram<'ast>],
     pub(super) published_types: PublishedTypeEnvironment,
     pub(super) product_value_types: Vec<(ValueStorageId, TypeId)>,
+    pub(super) product_global_values: Vec<(String, ValueStorageId)>,
     pub(super) product_namespace_seeds: Vec<ProjectLocalNamespaceSeed>,
     pub(super) product_type_overlays: Vec<(TypeGroupId, ProjectLocalTypeOverlayDraft)>,
     pub(super) user_namespace_demands: Vec<String>,
@@ -678,6 +678,7 @@ fn run_project_local_user_pass_inner<'ast>(
         programs,
         published_types,
         product_value_types,
+        product_global_values,
         product_namespace_seeds,
         product_type_overlays,
         user_namespace_demands,
@@ -696,6 +697,7 @@ fn run_project_local_user_pass_inner<'ast>(
             bound,
             published_types,
             product_value_types,
+            product_global_values,
             product_namespace_seeds,
             product_type_overlays,
             user_namespace_demands,

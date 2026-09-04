@@ -4,8 +4,6 @@ version.workspace = true
 edition.workspace = true
 
 [features]
-project-local-driver-shadow = []
-session-bench = []
 library-record-census = [
     "typokat-binder/test-utils",
     "typokat-check/test-utils",
@@ -38,16 +36,9 @@ typokat-types = { workspace = true, optional = true }
 oxc_ast.workspace = true
 oxc_ast_visit.workspace = true
 serde_json.workspace = true
-syn.workspace = true
-toml.workspace = true
 typokat-binder = { workspace = true, features = ["test-utils"] }
-typokat-check = { workspace = true, features = ["test-utils"] }
-typokat-core = { workspace = true, features = ["test-utils"] }
 typokat-diagnostics.workspace = true
-typokat-frontend = { workspace = true, features = ["test-utils"] }
 typokat-library-product = { workspace = true, features = ["test-utils"] }
-typokat-relate = { workspace = true, features = ["test-utils"] }
-typokat-types = { workspace = true, features = ["test-utils"] }
 
 [lints]
 workspace = true

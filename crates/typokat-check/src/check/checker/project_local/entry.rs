@@ -356,6 +356,31 @@ fn final_type_dependencies(
     .map_err(ProjectLocalCandidateErrorForTest::UserPass)
 }
 
+fn compilation_global_value_product_keys(
+    product: &LibraryDeclarationProduct,
+    bound: &BoundProjectBinder,
+    mapped: &[ProjectLocalProductRow],
+) -> Result<Vec<usize>, ProjectLocalCandidateErrorForTest> {
+    let map = bound
+        .library_product_map()
+        .ok_or(ProjectLocalCandidateErrorForTest::MissingProductBinderMap)?;
+    Ok(mapped
+        .iter()
+        .filter_map(|row| {
+            let group = product.groups().get(row.product_key)?;
+            let is_compilation_global = group.fragments.iter().any(|fragment| {
+                product
+                    .declarations()
+                    .get(fragment.index())
+                    .and_then(|declaration| product.regions().get(declaration.region.index()))
+                    .and_then(|region| map.container(region.container))
+                    == Some(bound.binder.compilation_global)
+            });
+            (row.local_value.is_some() && is_compilation_global).then_some(row.product_key)
+        })
+        .collect())
+}
+
 fn mapped_product_groups(
     product: &LibraryDeclarationProduct,
     bound: &BoundProjectBinder,
@@ -390,6 +415,39 @@ fn mapped_product_groups(
             })
         })
         .collect()
+}
+
+fn compilation_global_type_product_binding(
+    product: &LibraryDeclarationProduct,
+    bound: &BoundProjectBinder,
+    name: &str,
+) -> Option<(usize, TypeGroupId)> {
+    let map = bound.library_product_map()?;
+    let mut matches = product
+        .groups()
+        .iter()
+        .enumerate()
+        .filter_map(|(product_key, group)| {
+            if !group.slots.r#type
+                || product.strings()[group.name.index()].as_str() != name
+                || map.container(group.container) != Some(bound.binder.compilation_global)
+                || !group.fragments.iter().any(|fragment| {
+                    product
+                        .declarations()
+                        .get(fragment.index())
+                        .and_then(|declaration| product.regions().get(declaration.region.index()))
+                        .and_then(|region| map.container(region.container))
+                        == Some(bound.binder.compilation_global)
+                })
+            {
+                return None;
+            }
+            let key = product.group_key_at(product_key)?;
+            let local_group = map.group(key)?.ty()?;
+            Some((product_key, local_group))
+        });
+    let binding = matches.next()?;
+    matches.next().is_none().then_some(binding)
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -441,7 +499,7 @@ where
         bound,
         programs,
     } = inputs;
-    let library_identity_groups = [
+    let library_identity_bindings = [
         "Array",
         "ReadonlyArray",
         "String",
@@ -451,28 +509,19 @@ where
         "Object",
         "CallableFunction",
     ]
-    .map(|name| {
-        coordinator
-            .mapped_groups()
-            .iter()
-            .find(|row| {
-                row.compilation_global && product.strings()[row.name.index()].as_str() == name
-            })
-            .and_then(|row| row.local_type_group)
-            .map(|index| {
-                TypeGroupId(u32::try_from(index).expect("local type group identity fits u32"))
-            })
-    });
-    let native_array_groups =
-        [library_identity_groups[0], library_identity_groups[1]].map(|identity| {
-            identity.and_then(|identity| {
-                coordinator
-                    .mapped_groups()
-                    .iter()
-                    .find(|row| row.local_type_group == Some(identity.index()))
-                    .map(|row| row.product_key)
-            })
-        });
+    .map(|name| compilation_global_type_product_binding(product, &bound, name));
+    let library_identity_groups =
+        library_identity_bindings.map(|binding| binding.map(|(_, local_group)| local_group));
+    let native_array_groups = [library_identity_bindings[0], library_identity_bindings[1]]
+        .map(|binding| binding.map(|(product_key, _)| product_key));
+    let global_value_roots =
+        compilation_global_value_product_keys(product, &bound, coordinator.mapped_groups())?;
+    let _ = coordinator.demand_product_groups(
+        product,
+        &global_value_roots,
+        &augmented_product_groups,
+        native_array_groups,
+    );
     let augmented_roots = augmented_product_groups.keys().copied().collect::<Vec<_>>();
     for root in augmented_roots {
         let _ = coordinator.demand_product_groups(
@@ -674,6 +723,18 @@ where
             ))
         })
         .collect();
+    let product_global_values =
+        compilation_global_value_product_keys(product, &bound, coordinator.mapped_groups())?
+            .into_iter()
+            .filter_map(|product_key| {
+                let row = coordinator.mapped_groups().get(product_key)?;
+                let storage = ValueStorageId(
+                    u32::try_from(row.local_value?).expect("local value identity fits u32"),
+                );
+                let name = product.strings()[row.name.index()].clone();
+                Some((name, storage))
+            })
+            .collect();
     let product_namespace_seeds = coordinator
         .mapped_groups()
         .iter()
@@ -714,6 +775,7 @@ where
                     programs,
                     published_types,
                     product_value_types,
+                    product_global_values,
                     product_namespace_seeds,
                     product_type_overlays,
                     user_namespace_demands,

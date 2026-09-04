@@ -1,8 +1,6 @@
 use super::layered::assert_idempotent_overlay_publication;
 use super::*;
-use crate::binder::bind::{
-    Binder, ImportedSymbol, LibraryBinderCheckpoint, LibraryBinderUnit, ProjectBinderBuilder,
-};
+use crate::binder::bind::{Binder, ImportedSymbol, ProjectBinderBuilder};
 use crate::binder::declaration::{DeclarationKind, TypeFragmentKind, ValueStorageId};
 use crate::binder::scope::{ScopeId, ScopeKind};
 use crate::binder::symbol::{Symbol, SymbolId};
@@ -46,37 +44,7 @@ fn compilation_origin_index_preserves_layers_and_rejects_invalid_republication()
         })
     );
 
-    let mut sparse = base
-        .fork_sparse_delta()
-        .expect("sparse namespace delta forks");
-    sparse.record_compilation_origin(inherited_source, inherited_origin);
-    assert_eq!(sparse.validate_compilation_origin_index(), Ok(()));
-    assert_eq!(
-        sparse.local_family_row_counts_for_test(),
-        [0, 1],
-        "the sparse same-key override is epoch-owned index work"
-    );
-    assert_eq!(
-        sparse.compilation_origin_for_source(inherited_source),
-        Some(inherited_origin)
-    );
-
     let attempted = CompilationOrigin::Library(LibraryFileOrdinal::new(18));
-    sparse.record_compilation_origin(inherited_source, attempted);
-    assert_eq!(
-        sparse.validate_compilation_origin_index(),
-        Err(CompilationOriginIndexConflict::ConflictingOrigin {
-            source: inherited_source,
-            retained: inherited_origin,
-            attempted,
-        })
-    );
-    assert_eq!(
-        sparse.compilation_origin_for_source(inherited_source),
-        Some(inherited_origin),
-        "a rejected origin cannot replace the retained exact owner"
-    );
-
     let mut conflicted_base = NamespaceTable::default();
     conflicted_base.record_compilation_origin(inherited_source, inherited_origin);
     conflicted_base.record_compilation_origin(inherited_source, attempted);
@@ -155,133 +123,6 @@ fn library_compilation_unit_retains_declaration_context_and_origin() {
     let unit = CompilationUnit::library(SourceUnitKey(82), file_ordinal, &parsed.program);
     assert_eq!(unit.origin, CompilationOrigin::Library(file_ordinal));
     assert!(unit.binding.declaration_file());
-}
-
-#[test]
-fn statement_lexical_root_uses_sparse_source_keys_in_frozen_continuation(
-) -> Result<(), &'static str> {
-    let prelude_allocator = Allocator::default();
-    let library_allocator = Allocator::default();
-    let user_allocator = Allocator::default();
-    let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
-    let library = Parser::new(
-        &library_allocator,
-        "interface FrozenSparseMarker {}",
-        SourceType::d_ts(),
-    )
-    .parse();
-    let user = Parser::new(&user_allocator, "const local = 1;", SourceType::ts()).parse();
-    assert!(!prelude.panicked && !library.panicked && !user.panicked);
-
-    let mut base_builder = ProjectBinderBuilder::new(&prelude.program);
-    let library_unit = CompilationUnit::library(
-        SourceUnitKey(899),
-        LibraryFileOrdinal::new(0),
-        &library.program,
-    );
-    let library_modules = base_builder.add_library_modules(&[(&library.program, library_unit)]);
-    let library_module = library_modules
-        .first()
-        .copied()
-        .ok_or("library binder retains its module")?;
-    let mut base = base_builder.finish(library_module);
-    base.freeze_as_base()?;
-
-    let delta = base.fork_sparse_collision_delta()?;
-    let (mut builder, _) = ProjectBinderBuilder::resume_frozen_library(delta);
-    let user_unit = CompilationUnit::implementation(SourceUnitKey(900), &user.program);
-    builder.reserve_script_namespace_roots([(&user.program, user_unit)]);
-    let (module, _) = builder.add_module(&user.program, &[], user_unit);
-    let binder = builder.finish_frozen_library_continuation(Some(module))?;
-    let expected = binder
-        .graph
-        .get(binder.script_namespace_root)
-        .and_then(|scope| scope.parent)
-        .ok_or("script namespace root retains its compilation parent")?;
-
-    assert_eq!(binder.statement_lexical_root(module), expected);
-    Ok(())
-}
-
-#[test]
-fn direct_script_global_this_conflict_survives_frozen_library_continuation(
-) -> Result<(), &'static str> {
-    let prelude_allocator = Allocator::default();
-    let library_allocator = Allocator::default();
-    let user_allocator = Allocator::default();
-    let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
-    let library = Parser::new(
-        &library_allocator,
-        "declare var ExistingLibraryGlobal: number;",
-        SourceType::d_ts(),
-    )
-    .parse();
-    let source = "declare namespace globalThis { let rejected: number; }";
-    let user = Parser::new(&user_allocator, source, SourceType::d_ts()).parse();
-    assert!(!library.panicked && !user.panicked);
-
-    let mut base_builder = ProjectBinderBuilder::new(&prelude.program);
-    let library_unit = CompilationUnit::library(
-        SourceUnitKey(1),
-        LibraryFileOrdinal::new(0),
-        &library.program,
-    );
-    let library_modules = base_builder.add_library_modules(&[(&library.program, library_unit)]);
-    assert_eq!(library_modules.len(), 1);
-    let mut base = base_builder.finish(library_modules[0]);
-    assert!(base.freeze_as_base().is_ok());
-
-    let delta = base.fork_sparse_collision_delta()?;
-    let (mut builder, source_key) = ProjectBinderBuilder::resume_frozen_library(delta);
-    let user_unit = CompilationUnit::implementation(source_key, &user.program);
-    builder.reserve_script_namespace_roots([(&user.program, user_unit)]);
-    let (module, _) = builder.add_module(&user.program, &[], user_unit);
-    let binder = builder.finish_frozen_library_continuation(Some(module))?;
-    let binding_start = source
-        .find("globalThis")
-        .ok_or("fixture contains the globalThis binding")?;
-    let binding_start = u32::try_from(binding_start).map_err(|_| "binding offset fits u32")?;
-    assert!(binder.direct_script_global_this_conflict(
-        module,
-        binding_start,
-        DeclarationKind::Namespace,
-    ));
-    assert_eq!(
-        binder.resolve_value_binding(module, "globalThis"),
-        crate::binder::bind::ValueResolution::Missing
-    );
-
-    let mut checkpoint_builder = ProjectBinderBuilder::new(&prelude.program);
-    let checkpoint_modules =
-        checkpoint_builder.add_library_modules(&[(&library.program, library_unit)]);
-    let checkpoint_module = checkpoint_modules
-        .first()
-        .copied()
-        .ok_or("library checkpoint contains its module")?;
-    let checkpoint_binder = checkpoint_builder.finish(checkpoint_module);
-    let checkpoint = LibraryBinderCheckpoint::new(
-        checkpoint_binder,
-        vec![LibraryBinderUnit {
-            ordinal: LibraryFileOrdinal::new(0),
-            source: SourceUnitKey(1),
-            module: checkpoint_module,
-        }],
-    );
-    let (mut builder, _) = checkpoint.into_continuation();
-    let user_unit = CompilationUnit::implementation(SourceUnitKey(2), &user.program);
-    builder.reserve_script_namespace_roots([(&user.program, user_unit)]);
-    let (module, _) = builder.add_module(&user.program, &[], user_unit);
-    let binder = builder.finish_frozen_library_continuation(Some(module))?;
-    assert!(binder.direct_script_global_this_conflict(
-        module,
-        binding_start,
-        DeclarationKind::Namespace,
-    ));
-    assert_eq!(
-        binder.resolve_value_binding(module, "globalThis"),
-        crate::binder::bind::ValueResolution::Missing
-    );
-    Ok(())
 }
 
 fn bind(source: &str, declaration_file: bool) -> Binder {
@@ -464,7 +305,7 @@ fn placement_rows_are_scanned_only_by_the_one_shot_instance_state_pass() {
     assert_eq!(
         production.matches("placements.local_values_mut()").count(),
         0,
-        "the canonical-order pass must not bypass sparse prefix overrides"
+        "the canonical-order pass must use the changed-row abstraction"
     );
     assert_eq!(
         production.matches("placements.local_iter()").count(),
@@ -801,7 +642,7 @@ fn non_merging_sweep(modules: usize) -> Vec<String> {
 /// One placement row per declaration is the floor: the group has to hold the declaration
 /// somewhere. The merge record per single-declaration group is a **deliberate** deferral,
 /// not a floor — backlog 94 keeps it because five production loops iterate the record set
-/// (`namespace_values`, `library_compiler`, three in `bind`) and dropping records would
+/// (`namespace_values`, project binding, and three in `bind`) and dropping records would
 /// change what they see. Pinned here at exactly one apiece so it cannot grow unnoticed.
 #[test]
 fn declarations_that_merge_with_nothing_are_never_copied_into_merge_substrate() {

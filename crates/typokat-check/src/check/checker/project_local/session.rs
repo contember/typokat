@@ -390,6 +390,7 @@ impl fmt::Display for CheckerSessionError {
 impl std::error::Error for CheckerSessionError {}
 
 pub(super) struct SessionCore {
+    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
     project: u64,
     publisher: u64,
     #[cfg(feature = "session-bench")]
@@ -400,12 +401,14 @@ pub(super) struct SessionCore {
 
 impl SessionCore {
     pub(super) fn start() -> Rc<Self> {
+        #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
         let project = next_identity();
         let publisher = next_identity();
         #[cfg(feature = "session-bench")]
         let cache_identity = next_identity();
         let cache = Rc::new(DurableCache::new(publisher));
         let session = Rc::new(Self {
+            #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
             project,
             publisher,
             #[cfg(feature = "session-bench")]
@@ -421,6 +424,7 @@ impl SessionCore {
         session
     }
 
+    #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
     pub(super) const fn project_identity(&self) -> u64 {
         self.project
     }

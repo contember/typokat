@@ -159,7 +159,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             Expression::Identifier(ident) => {
                 let span = Span::from_oxc(ident.span);
                 let name = ident.name.as_str();
-                match self.resolve_value_binding_replay(scope, name) {
+                match self.resolve_value_binding(scope, name) {
                     ValueResolution::TypeOnlyNamespace { .. } => {
                         self.emit_diagnostic(Diagnostic::cannot_use_namespace_as_value(
                             span,
@@ -175,7 +175,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         if !self.demand_project_local_value(storage) {
                             return Some((well_known.error, span));
                         }
-                        match self.standalone_namespace_terminal_replay(namespace) {
+                        match self.standalone_namespace_terminal(namespace) {
                             Some(super::namespace_values::StandaloneNamespaceTerminal::Ready {
                                 storage: terminal_storage,
                                 ty,
@@ -205,12 +205,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         symbol: symbol_id,
                         kind: ResolvedValueKind::Ordinary,
                     } => {
-                        if let Some(storage) =
-                            self.effective_value_storage_for_symbol_replay(symbol_id)
-                        {
+                        if let Some(storage) = self.effective_value_storage_for_symbol(symbol_id) {
                             self.account_untyped_parameter_binding_use(storage);
                             if self.account_object_binding_identifier_demand(storage)
-                                && self.decl_type_replay(storage).is_none()
+                                && self.decl_type(storage).is_none()
                             {
                                 self.emit_diagnostic(Diagnostic::cannot_find_name(span, name));
                                 return Some((well_known.error, span));
@@ -240,7 +238,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                                 return Some((global_object, span));
                             }
                         }
-                        match self.demand_function_group_replay(symbol_id) {
+                        match self.demand_function_group(symbol_id) {
                             FunctionGroupDemand::Ready(ty)
                             | FunctionGroupDemand::PrivateSelf(ty) => Some((ty, span)),
                             FunctionGroupDemand::Pending { report_use } => {
@@ -262,7 +260,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     }
                     ValueResolution::Missing => {
                         let type_only_import = self
-                            .resolve_type_replay(scope, name)
+                            .resolve_type_symbol(scope, name)
                             .and_then(|symbol| self.binder.symbols.get(symbol))
                             .is_some_and(|symbol| symbol.type_only_value_absence);
                         if type_only_import {
@@ -510,7 +508,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 if ident.name.as_str() == "undefined" {
                     return;
                 }
-                match self.resolve_value_binding_replay(scope, ident.name.as_str()) {
+                match self.resolve_value_binding(scope, ident.name.as_str()) {
                     ValueResolution::Resolved {
                         kind: ResolvedValueKind::StandaloneNamespace { .. },
                         ..
@@ -587,11 +585,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let ValueResolution::Resolved {
             symbol,
             kind: ResolvedValueKind::Ordinary,
-        } = self.resolve_value_binding_replay(scope, identifier.name.as_str())
+        } = self.resolve_value_binding(scope, identifier.name.as_str())
         else {
             return;
         };
-        let Some(storage) = self.effective_value_storage_for_symbol_replay(symbol) else {
+        let Some(storage) = self.effective_value_storage_for_symbol(symbol) else {
             return;
         };
         self.account_object_binding_private_field_demand(storage);
@@ -950,7 +948,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         ref_start: u32,
     ) -> TypeId {
         #[cfg(any(test, feature = "test-utils", feature = "session-bench"))]
-        if let Some(storage) = self.effective_value_storage_for_symbol_replay(symbol_id) {
+        if let Some(storage) = self.effective_value_storage_for_symbol(symbol_id) {
             let _ = self.demand_project_local_value(storage);
         }
         let flow = self
@@ -1389,6 +1387,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     DemandOutcome::Ready(context) => {
                         contextual_literal_target(pass.interner.store(), context)
                     }
+                    DemandOutcome::Exhausted(exhaustion) => {
+                        return DemandOutcome::Exhausted(exhaustion);
+                    }
+                };
+                let context = match pass.normalize_contextual_intersection(context) {
+                    DemandOutcome::Ready(context) => context,
                     DemandOutcome::Exhausted(exhaustion) => {
                         return DemandOutcome::Exhausted(exhaustion);
                     }
@@ -2562,7 +2566,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             Expression::Identifier(identifier) => identifier,
             _ => return None,
         };
-        let value_decl = self.value_decl_id_replay(scope, identifier.name.as_str())?;
+        let value_decl = self.value_decl_id(scope, identifier.name.as_str())?;
         let class_decl = self
             .class_value_aliases
             .get(&value_decl)
@@ -2573,7 +2577,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             return None;
         }
         let class_id = binding.class_id;
-        Some(match self.published_class_replay(class_id) {
+        Some(match self.published_class(class_id) {
             DemandOutcome::Ready(_) => DemandOutcome::Ready(()),
             DemandOutcome::Exhausted(exhaustion) => DemandOutcome::Exhausted(exhaustion),
         })
@@ -2803,7 +2807,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             Expression::Identifier(identifier) => identifier,
             _ => return None,
         };
-        let symbol = self.resolve_value_replay(scope, identifier.name.as_str())?;
+        let symbol = self.resolve_value_symbol(scope, identifier.name.as_str())?;
         if self.function_groups.contains_symbol(symbol)
             || self.named_function_symbols.contains(&symbol)
         {
@@ -2832,7 +2836,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let Some(application) = self.interner.store().class_instance_type(base_ty) else {
             return DemandOutcome::Ready(None);
         };
-        let surface = match self.published_class_replay(application.class) {
+        let surface = match self.published_class(application.class) {
             DemandOutcome::Ready(surface) => surface,
             DemandOutcome::Exhausted(exhaustion) => {
                 return DemandOutcome::Exhausted(exhaustion);

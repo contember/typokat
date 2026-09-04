@@ -19,11 +19,11 @@ use crate::frontend::{run_project_frontend, ProjectFrontendRun, ProjectProgram};
 use crate::library::{LibraryBaseProvider, LibraryInitError};
 #[cfg(test)]
 use crate::span::Span;
-#[cfg(test)]
-use crate::types::Interner;
 use rayon::prelude::*;
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
+#[cfg(test)]
+use typokat_types::types::Interner;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DriverInfrastructureKind {
@@ -406,21 +406,7 @@ where
     T: Send,
     W: FnOnce() -> T + Send,
 {
-    #[cfg(test)]
-    {
-        let (output, receipt) =
-            on_check_worker_with_identity(Some(Arc::as_ptr(product).addr()), move || {
-                let output = work();
-                let receipt = crate::check::checker::project_binding_thread_receipt_for_test();
-                (output, receipt)
-            })?;
-        crate::check::checker::merge_project_binding_thread_receipt_for_test(receipt);
-        Ok(output)
-    }
-    #[cfg(not(test))]
-    {
-        on_check_worker_with_identity(Some(Arc::as_ptr(product).addr()), work)
-    }
+    on_check_worker_with_identity(Some(Arc::as_ptr(product).addr()), work)
 }
 
 fn on_check_worker_with_identity<T, W>(
@@ -2246,8 +2232,8 @@ mod tests {
             namespace_storage: Option<crate::binder::declaration::ValueStorageId>,
             terminal_storage: Option<crate::binder::declaration::ValueStorageId>,
             terminal: &'static str,
-            ty: Option<crate::types::store::TypeId>,
-            published: Option<crate::types::store::TypeId>,
+            ty: Option<typokat_types::types::store::TypeId>,
+            published: Option<typokat_types::types::store::TypeId>,
         }
 
         type ReplayProjection = (usize, u32, usize, usize, String);

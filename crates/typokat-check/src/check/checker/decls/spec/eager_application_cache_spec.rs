@@ -8,11 +8,11 @@
 //! The cache key is exactly the immutable template `TypeId` plus the complete
 //! `(TypeParamId, TypeId)` pairs in declaration order. It is owned by one `Pass`,
 //! and therefore by one type universe. It contains only completed `TypeId` values:
-//! there are no negative or in-flight entries. A local group is eligible only once
-//! frozen; an inherited/current published group is eligible only through a `Ready`
-//! terminal. Partial maps, pending/building/unfinished groups, and lazy template
-//! families bypass lookup and insertion. Lazy families are `Conditional`, `Mapped`,
-//! and `Instantiation`, plus the trusted string-intrinsic markers, `ThisType`, and
+//! an eager structural local group is eligible only once frozen; an inherited/current
+//! published group is eligible only through a `Ready` terminal. Partial maps,
+//! pending/building/unfinished groups, and lazy template families bypass lookup and
+//! insertion. Lazy families are `AliasTemplate`, `Conditional`, `Mapped`, and
+//! `Instantiation`, plus the trusted string-intrinsic markers, `ThisType`, and
 //! `OmitThisParameter`.
 //!
 //! `crate::types::substitute_with_outcome` is an internal boundary API and returns
@@ -733,18 +733,23 @@ fn constructed_lazy_tags_and_trusted_markers_bypass_before_lookup() {
 #[test]
 fn default_completion_precedes_keying_and_distinct_completed_defaults_do_not_collide() {
     const BASE: &str = "\
-type CacheDefaulted<A = string, B = A> = { first: A; second: B };
+interface CacheDefaulted<A = string, B = A> { first: A; second: B }
+type CacheDefaultApplications = {};
 ";
     const IDENTICAL: &str = "\
-type CacheDefaulted<A = string, B = A> = { first: A; second: B };
-declare const omitted: CacheDefaulted;
-declare const oneExplicit: CacheDefaulted<string>;
-declare const allExplicit: CacheDefaulted<string, string>;
+interface CacheDefaulted<A = string, B = A> { first: A; second: B }
+type CacheDefaultApplications = {
+  omitted: CacheDefaulted;
+  oneExplicit: CacheDefaulted<string>;
+  allExplicit: CacheDefaulted<string, string>;
+};
 ";
     const DISTINCT: &str = "\
-type CacheDefaulted<A = string, B = A> = { first: A; second: B };
-declare const strings: CacheDefaulted;
-declare const numbers: CacheDefaulted<number>;
+interface CacheDefaulted<A = string, B = A> { first: A; second: B }
+type CacheDefaultApplications = {
+  strings: CacheDefaulted;
+  numbers: CacheDefaulted<number>;
+};
 ";
 
     let (_, baseline) = measured(BASE);
@@ -781,11 +786,11 @@ declare const numbers: CacheDefaulted<number>;
 #[test]
 fn frozen_local_template_is_eligible_before_atomic_environment_publication() {
     const BASE: &str = "\
-type CacheFrozen<T> = { value: T };
+interface CacheFrozen<T> { value: T }
 type CacheConsumer<T> = {};
 ";
     const SOURCE: &str = "\
-type CacheFrozen<T> = { value: T };
+interface CacheFrozen<T> { value: T }
 type CacheConsumer<T> = {
   first: CacheFrozen<T>;
   second: CacheFrozen<T>;
@@ -810,7 +815,7 @@ type CacheConsumer<T> = {
 }
 
 #[test]
-fn unfinished_and_every_lazy_template_family_bypass_the_cache() {
+fn unfinished_groups_bypass_the_cache() {
     const UNFINISHED: &str = "\
 interface CacheRecursive<T> {
   first: CacheRecursive<T>;
@@ -823,22 +828,6 @@ interface CacheForwardConsumer<T> {
   second: CacheForwardTarget<T>;
 }
 interface CacheForwardTarget<T> { value: T }
-";
-    const LAZY_BASE: &str = "\
-type CacheConditional<T> = T extends string ? T : never;
-type CacheMapped<T> = { [K in keyof T]: T[K] };
-type CacheInstantiation<T> = CacheConditional<T>;
-";
-    const LAZY_APPLICATIONS: &str = "\
-type CacheConditional<T> = T extends string ? T : never;
-type CacheMapped<T> = { [K in keyof T]: T[K] };
-type CacheInstantiation<T> = CacheConditional<T>;
-declare const conditional: CacheConditional<string>;
-declare const mapped: CacheMapped<{ value: string }>;
-declare const instantiation: CacheInstantiation<string>;
-declare const intrinsic: Uppercase<\"cache\">;
-declare const thisType: ThisType<{ value: string }>;
-declare const omitThis: OmitThisParameter<(this: { value: string }) => string>;
 ";
 
     let (_, empty_baseline) = measured("");
@@ -868,18 +857,6 @@ declare const omitThis: OmitThisParameter<(this: { value: string }) => string>;
             ..Default::default()
         },
         "forward Pending groups cannot publish a lookup or insertion"
-    );
-
-    let (_, lazy_baseline) = measured(LAZY_BASE);
-    let (lazy_output, lazy) = measured(LAZY_APPLICATIONS);
-    assert!(lazy_output.diagnostics.is_empty());
-    assert!(lazy_output.incomplete.is_empty());
-    assert_eq!(
-        delta(&lazy, &lazy_baseline),
-        CacheCounters {
-            lazy_bypasses: 6,
-            ..Default::default()
-        }
     );
 }
 
@@ -1011,21 +988,30 @@ fn inherited_ready_terminal_is_eager_eligible_while_non_ready_returns_early() {
 #[test]
 fn cache_hits_never_own_or_deduplicate_occurrence_diagnostics() {
     const BASE: &str = "\
-type CacheConstrained<T extends { kind: string }> = { value: T };
-type CachePair<A, B> = { first: A; second: B };
-type CacheBox<T> = { value: T };
+interface CacheConstrained<T extends { kind: string }> { value: T }
+interface CachePair<A, B> { first: A; second: B }
+interface CacheBox<T> { value: T }
+interface CacheMemberBox { value: string }
+type CacheApplications = {};
 ";
     const SOURCE: &str = "\
-type CacheConstrained<T extends { kind: string }> = { value: T };
-type CachePair<A, B> = { first: A; second: B };
-type CacheBox<T> = { value: T };
+interface CacheConstrained<T extends { kind: string }> { value: T }
+interface CachePair<A, B> { first: A; second: B }
+interface CacheBox<T> { value: T }
+interface CacheMemberBox { value: string }
+type CacheApplications = {
+  constrainedFirst: CacheConstrained<{ kind: string }>;
+  constrainedSecond: CacheConstrained<{ kind: string }>;
+  boxFirst: CacheBox<string>;
+  boxSecond: CacheBox<string>;
+};
 declare const badConstraintFirst: CacheConstrained<number>;
 declare const badConstraintSecond: CacheConstrained<number>;
 declare const badArityFirst: CachePair<string>;
 declare const badAritySecond: CachePair<string>;
-declare const memberFirst: CacheBox<string>;
+declare const memberFirst: CacheMemberBox;
 memberFirst.missing;
-declare const memberSecond: CacheBox<string>;
+declare const memberSecond: CacheMemberBox;
 memberSecond.missing;
 ";
 

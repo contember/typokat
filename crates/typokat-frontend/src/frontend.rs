@@ -1007,8 +1007,11 @@ fn run_prepared_project_frontend_with_parse_work_inner<Product>(
                             match candidate_original_order(&inputs, &default_modules) {
                                 Ok(order) => {
                                     let AccountedModulePlan {
-                                        paths, raw_imports, ..
+                                        paths,
+                                        mut raw_imports,
+                                        ..
                                     } = plan;
+                                    preserve_explicit_js_imports_as_missing(&mut raw_imports);
                                     let mut units =
                                         project_programs_from_accounted_imports_in_order(
                                             &inputs,
@@ -1059,9 +1062,10 @@ fn run_prepared_project_frontend_with_parse_work_inner<Product>(
                                     let AccountedModulePlan {
                                         inventory,
                                         paths,
-                                        raw_imports,
+                                        mut raw_imports,
                                         ..
                                     } = plan;
+                                    preserve_explicit_js_imports_as_missing(&mut raw_imports);
                                     let mut units =
                                         project_programs_from_accounted_imports_in_order(
                                             &inputs,
@@ -1814,6 +1818,17 @@ fn project_programs_from_accounted_imports_with_reexports<'ast>(
 ) -> Vec<ProjectProgram<'ast>> {
     let order = dependency_order_with_reexports(&raw_imports, reexport_edges);
     project_programs_from_accounted_imports_in_order(inputs, programs, paths, raw_imports, &order)
+}
+
+fn preserve_explicit_js_imports_as_missing(raw_imports: &mut [Vec<RawImport>]) {
+    for import in raw_imports.iter_mut().flatten() {
+        if Path::new(&import.specifier)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("js"))
+        {
+            import.source = RawImportSource::Missing;
+        }
+    }
 }
 
 fn project_programs_from_accounted_imports_in_order<'ast>(

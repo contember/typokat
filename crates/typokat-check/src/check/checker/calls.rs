@@ -24,14 +24,14 @@ use crate::diagnostics::{render_reason_chain, render_type, Diagnostic};
 use crate::relate::RelationOutcome;
 use crate::span::Span;
 use crate::types::repr::{
-    ClassId, FunctionType, GenericTypeParam, IntrinsicKind, ParameterType, TupleRestType,
-    TupleType, TypeParamId, TypeTag,
+    ClassId, DeclaredRecipeNode, FunctionType, GenericTypeParam, IntrinsicKind, ParameterType,
+    TupleRestType, TupleType, TypeParamId, TypeTag,
 };
 use crate::types::store::TypeId;
 use crate::types::{instantiate_function, substitute, Interner, WellKnown};
 use oxc_ast::ast::{
     Argument, ArrowFunctionExpression, BindingPattern, CallExpression, Expression, FormalParameter,
-    FormalParameterRest, FormalParameters, Function, FunctionBody, NewExpression,
+    FormalParameterRest, FormalParameters, Function, FunctionBody, NewExpression, TSTypeAnnotation,
     TSTypeParameterInstantiation,
 };
 use oxc_span::GetSpan;
@@ -160,18 +160,16 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
     /// may not be memoized at all.
     ///
     /// The refusals are the other half of the completeness argument: rather than model
-    /// the type-lowering, replay-evidence, and loop-fixpoint contexts, a walk running
-    /// in any of them is simply never memoized. Each of them is rare and none of them
-    /// occurs in the shapes this memo exists for.
+    /// every type-lowering and loop-fixpoint context, a walk running in any of them is
+    /// simply never memoized. Each is rare and none occurs in the shapes this memo exists for.
     fn argument_walk_environment(&self, scope: ScopeId, span: Span) -> Option<WalkEnvironment> {
         // Only inside a call/`new` argument frame: that frame owns the memo's lifetime
         // and is the only place the declaration observation log is open.
         if self.argument_walk_depth == 0 {
             return None;
         }
-        // Replay evidence records what each walk demanded; skipping a walk would drop
-        // its dependencies. Suppressed effects are prelude lowering, not user checking.
-        if self.replay_trace.is_some() || self.suppress_effects {
+        // Suppressed effects are prelude lowering, not user checking.
+        if self.suppress_effects {
             return None;
         }
         // Type-declaration lowering contexts. A walk under any of these resolves names
@@ -648,17 +646,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         if !self.building_template && self.annotation_depth == 0 {
             return false;
         }
-        let owner = self.current_replay_owner();
         self.effect_stack
             .last_mut()
             .expect("deferred constraint check requires a lexical owner")
-            .push_constraint_check(
-                ConstraintCheckObligation {
-                    checks: checks.to_vec(),
-                    substitutions: substitutions.clone(),
-                },
-                owner,
-            );
+            .push_constraint_check(ConstraintCheckObligation {
+                checks: checks.to_vec(),
+                substitutions: substitutions.clone(),
+            });
         true
     }
 
@@ -1072,8 +1066,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
         let direct_function_group = match callee {
             Expression::Identifier(identifier) => self
-                .resolve_value_replay(scope, identifier.name.as_str())
-                .map(|symbol| self.demand_function_group_replay(symbol))
+                .resolve_value_symbol(scope, identifier.name.as_str())
+                .map(|symbol| self.demand_function_group(symbol))
                 .filter(|demand| !matches!(demand, FunctionGroupDemand::NotGroup)),
             _ => None,
         };
@@ -2045,6 +2039,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             };
             return match self.instantiate_signature_candidate(SignatureCandidateRequest {
                 scope,
+                span,
                 signature_ty: signature,
                 type_arguments,
                 args,
@@ -2073,6 +2068,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             let (built, effects) = self.capture_speculative_candidate_effects(|pass| {
                 pass.instantiate_signature_candidate(SignatureCandidateRequest {
                     scope,
+                    span,
                     signature_ty: *signature,
                     type_arguments,
                     args,
@@ -2137,6 +2133,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     let (committed, effects) = self.capture_candidate_effects(|pass| {
                         pass.instantiate_signature_candidate(SignatureCandidateRequest {
                             scope,
+                            span,
                             signature_ty: *signature,
                             type_arguments,
                             args,
@@ -2208,6 +2205,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     ) -> Result<CallCandidate, CandidateBuildFailure> {
         let SignatureCandidateRequest {
             scope,
+            span,
             signature_ty,
             type_arguments,
             args,
@@ -2364,7 +2362,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     } else {
                         params.clone()
                     };
-                    let contextual_params = match self.evaluate_parameters(contextual_params) {
+                    let contextual_params = match self.evaluate_parameters(contextual_params, span)
+                    {
                         DemandOutcome::Ready(params) => params,
                         DemandOutcome::Exhausted(exhaustion) => {
                             return Err(CandidateBuildFailure::Exhausted(exhaustion))
@@ -2432,7 +2431,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let params = func.params.clone();
         let ret = func.ret;
         let receiver = func.receiver;
-        let params = match self.evaluate_parameters(params) {
+        let params = match self.evaluate_parameters(params, span) {
             DemandOutcome::Ready(params) => params,
             DemandOutcome::Exhausted(exhaustion) => {
                 return Err(CandidateBuildFailure::Exhausted(exhaustion))
@@ -2667,7 +2666,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             // Defensive: the constructor is always interned as a function in `fill_class`.
             None => return Some((wk.error, call_span)),
         };
-        let params = match self.evaluate_parameters(params) {
+        let params = match self.evaluate_parameters(params, call_span) {
             DemandOutcome::Ready(params) => params,
             DemandOutcome::Exhausted(exhaustion) => {
                 self.own_type_demand(DemandOutcome::Exhausted(exhaustion), call_span);
@@ -2925,9 +2924,27 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     fn evaluate_parameters(
         &mut self,
         params: Vec<ParameterType>,
+        span: Span,
     ) -> DemandOutcome<Vec<ParameterType>> {
         let mut evaluated = Vec::with_capacity(params.len());
         for mut parameter in params {
+            if let Some(body) = self.symbolic_declared_alias_body(parameter.ty) {
+                if let DemandOutcome::Exhausted(exhaustion) = self.evaluate_type(body) {
+                    match exhaustion {
+                        Exhaustion::EvaluationInvalidNode { ty }
+                            if self.interner.reserved_enum_semantic_frontier(ty) =>
+                        {
+                            self.own_type_demand(
+                                DemandOutcome::Exhausted(Exhaustion::EvaluationInvalidNode { ty }),
+                                span,
+                            );
+                        }
+                        exhaustion => return DemandOutcome::Exhausted(exhaustion),
+                    }
+                }
+                evaluated.push(parameter);
+                continue;
+            }
             parameter.ty = match self.evaluate_call_boundary_type(parameter.ty) {
                 DemandOutcome::Ready(ty) => ty,
                 DemandOutcome::Exhausted(exhaustion) => {
@@ -2943,6 +2960,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         if self.interner.store().tag(ty) == TypeTag::ClassInstance {
             return self.with_semantic_query(|query| query.normalize_class_application(ty));
         }
+
         if let Some(mut function) = self.interner.store().function_type(ty).cloned() {
             for parameter in &mut function.params {
                 parameter.ty = match self.evaluate_type(parameter.ty) {
@@ -2970,6 +2988,62 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             return DemandOutcome::Ready(self.interner.intern_function(function));
         }
         self.evaluate_type(ty)
+    }
+
+    /// Keep planner-authenticated alias identities opaque while selecting a call.
+    /// Their ready body is probed only to retain a pending-enum frontier receipt;
+    /// the committed argument obligation evaluates the symbolic application later.
+    fn symbolic_declared_alias_body(&self, ty: TypeId) -> Option<TypeId> {
+        let store = self.interner.store();
+        let declared = store.declared_type(ty)?;
+        let recipe = store.declared_recipe(declared.recipe)?;
+        let DeclaredRecipeNode::Application {
+            template,
+            parameters,
+            arguments,
+        } = &recipe.node
+        else {
+            return None;
+        };
+        if parameters.len() != arguments.len() {
+            return None;
+        }
+        let identity = store.instantiation_type(*template)?;
+        let alias = store.alias_template_id(identity.base)?;
+        if identity.args.len() != parameters.len()
+            || identity.args.iter().any(|(argument_parameter, argument)| {
+                !parameters.contains(argument_parameter)
+                    || store.type_param(*argument).map(|ty| ty.id) != Some(*argument_parameter)
+            })
+        {
+            return None;
+        }
+        if self.type_environment.is_published() {
+            return self
+                .type_environment
+                .resolution_environment()
+                .aliases()
+                .ready(alias)
+                .filter(|surface| {
+                    surface.template() == identity.base && surface.type_params() == parameters
+                })
+                .map(|surface| surface.body());
+        }
+        self.type_decls.iter().find_map(|declaration| {
+            let TypeDecl::Alias {
+                alias_id,
+                alias_template,
+                alias_body: Some(body),
+                alias_unavailable: None,
+                params,
+                ..
+            } = declaration
+            else {
+                return None;
+            };
+            (*alias_id == alias && *alias_template == identity.base && params == parameters)
+                .then_some(*body)
+        })
     }
 
     fn check_call_arity(&mut self, params: &[ParameterType], got: usize, span: Span) {
@@ -3568,7 +3642,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             // Defensive: the constructor is always interned as a function in `fill_class`.
             None => Vec::new(),
         };
-        let params = match self.evaluate_parameters(params) {
+        let params = match self.evaluate_parameters(params, new_span) {
             DemandOutcome::Ready(params) => params,
             DemandOutcome::Exhausted(exhaustion) => {
                 self.own_type_demand(DemandOutcome::Exhausted(exhaustion), new_span);
@@ -3595,7 +3669,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 return self.class_new_target(scope, &paren.expression)
             }
             Expression::Identifier(ident) => {
-                let Some(value_decl) = self.value_decl_id_replay(scope, ident.name.as_str()) else {
+                let Some(value_decl) = self.value_decl_id(scope, ident.name.as_str()) else {
                     return DemandOutcome::Ready(None);
                 };
                 let class_decl = self
@@ -3617,7 +3691,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     return DemandOutcome::Ready(None);
                 }
                 let root_is_namespace_value = self
-                    .resolve_value_replay(scope, segments[0])
+                    .resolve_value_symbol(scope, segments[0])
                     .and_then(|symbol| self.binder.symbols.get(symbol))
                     .and_then(|symbol| symbol.value)
                     .is_some_and(|storage| {
@@ -3629,7 +3703,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     return DemandOutcome::Ready(None);
                 }
                 let QualifiedTypePathResolution::TypeGroup(group) =
-                    self.resolve_qualified_type_path_replay(scope, &segments)
+                    self.resolve_qualified_type_path(scope, &segments)
                 else {
                     return DemandOutcome::Ready(None);
                 };
@@ -3646,7 +3720,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
             _ => return DemandOutcome::Ready(None),
         };
-        let surface = match self.published_class_replay(class_id) {
+        let surface = match self.published_class(class_id) {
             DemandOutcome::Ready(surface) => surface,
             DemandOutcome::Exhausted(exhaustion) => return DemandOutcome::Exhausted(exhaustion),
         };
@@ -3679,7 +3753,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         if !has_source_overloads {
             return Vec::new();
         }
-        let surface = match self.published_class_replay(info.class_id) {
+        let surface = match self.published_class(info.class_id) {
             DemandOutcome::Ready(surface) => surface,
             DemandOutcome::Exhausted(_) => return Vec::new(),
         };
@@ -4128,7 +4202,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 .get(&(pass.current_module, func.span.start))
                 .copied();
             let body_scope = fn_scope.unwrap_or(enclosing);
-            pass.bind_retained_parameter_types(fn_scope, &func.params, &surface.params);
+            pass.bind_retained_parameter_types(enclosing, fn_scope, &func.params, &surface.params);
             pass.check_reserved_parameter_initializers(body_scope, &func.params, &surface.params);
             let saved_this = pass.current_this;
             if let Some(receiver) = receiver {
@@ -4171,7 +4245,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     .get(&(pass.current_module, func.span.start))
                     .copied();
                 let body_scope = fn_scope.unwrap_or(enclosing);
-                pass.bind_partial_retained_parameter_types(fn_scope, &func.params, params);
+                pass.bind_partial_retained_parameter_types(
+                    enclosing,
+                    fn_scope,
+                    &func.params,
+                    params,
+                );
                 pass.check_partial_retained_parameter_initializers(
                     body_scope,
                     &func.params,
@@ -4417,7 +4496,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     .and_then(|symbol_id| self.binder.symbols.get(symbol_id))
                     .and_then(|symbol| symbol.value)
                 {
-                    self.publish_copied_decl_type_replay(decl_id, ty);
+                    self.publish_copied_decl_type(decl_id, ty);
                 }
             }
             lowered.push(syntax.with_type(name, ty));
@@ -4597,7 +4676,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     // Annotated type, or the error type for an un-annotated parameter. Type
                     // references in the annotation resolve from the enclosing scope.
                     let annotation_ty = parameter.type_annotation.as_ref().and_then(|ann| {
-                        self.lower_callable_annotation(enclosing, &ann.type_annotation, false)
+                        self.lower_callable_parameter_annotation(
+                            enclosing,
+                            &ann.type_annotation,
+                            false,
+                        )
                     });
                     let ty = if parameter.type_annotation.is_some() {
                         annotation_ty
@@ -4652,9 +4735,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     ty
                 }
                 ParameterSyntax::Rest { parameter } => match parameter.type_annotation.as_ref() {
-                    Some(ann) => {
-                        self.lower_callable_annotation(enclosing, &ann.type_annotation, false)
-                    }
+                    Some(ann) => self.lower_callable_parameter_annotation(
+                        enclosing,
+                        &ann.type_annotation,
+                        false,
+                    ),
                     None => Some(error_ty),
                 },
             };
@@ -4669,7 +4754,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     .and_then(|symbol_id| self.binder.symbols.get(symbol_id))
                     .and_then(|s| s.value)
                 {
-                    self.publish_copied_decl_type_replay(decl_id, parameter.ty);
+                    self.publish_copied_decl_type(decl_id, parameter.ty);
                 }
             }
 
@@ -4698,7 +4783,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .collect();
         if storages
             .iter()
-            .any(|storage| self.decl_type_replay(*storage).is_some())
+            .any(|storage| self.decl_type(*storage).is_some())
         {
             return;
         }
@@ -4711,7 +4796,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
         let error = self.interner.well_known().error;
         for storage in storages {
-            self.publish_copied_decl_type_replay(storage, error);
+            self.publish_copied_decl_type(storage, error);
         }
     }
 
@@ -4750,7 +4835,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         ) {
             return;
         }
-        if self.decl_type_replay(storage).is_some() {
+        if self.decl_type(storage).is_some() {
             return;
         }
         let binding_span = self
@@ -4771,7 +4856,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             "parameter object binding pattern not typed",
         );
         let error = self.interner.well_known().error;
-        self.publish_copied_decl_type_replay(storage, error);
+        self.publish_copied_decl_type(storage, error);
     }
 
     fn mark_syntax_only_object_parameters(
@@ -4804,6 +4889,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
     fn bind_retained_parameter_types(
         &mut self,
+        annotation_scope: ScopeId,
         fn_scope: Option<ScopeId>,
         params: &FormalParameters<'_>,
         lowered: &[ParameterType],
@@ -4819,7 +4905,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             else {
                 continue;
             };
-            self.publish_copied_decl_type_replay(decl_id, lowered.ty);
+            let ty = self.retained_parameter_body_type(
+                annotation_scope,
+                parameter.type_annotation.as_deref(),
+                lowered.ty,
+            );
+            self.publish_copied_decl_type(decl_id, ty);
         }
         if let (Some(rest), Some(lowered)) = (params.rest.as_ref(), lowered.get(params.items.len()))
         {
@@ -4830,12 +4921,18 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             else {
                 return;
             };
-            self.publish_copied_decl_type_replay(decl_id, lowered.ty);
+            let ty = self.retained_parameter_body_type(
+                annotation_scope,
+                rest.type_annotation.as_deref(),
+                lowered.ty,
+            );
+            self.publish_copied_decl_type(decl_id, ty);
         }
     }
 
     fn bind_partial_retained_parameter_types(
         &mut self,
+        annotation_scope: ScopeId,
         fn_scope: Option<ScopeId>,
         params: &FormalParameters<'_>,
         lowered: &[Option<ParameterType>],
@@ -4854,7 +4951,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             else {
                 continue;
             };
-            self.publish_copied_decl_type_replay(decl_id, lowered.ty);
+            let ty = self.retained_parameter_body_type(
+                annotation_scope,
+                parameter.type_annotation.as_deref(),
+                lowered.ty,
+            );
+            self.publish_copied_decl_type(decl_id, ty);
         }
         if let (Some(rest), Some(Some(lowered))) =
             (params.rest.as_ref(), lowered.get(params.items.len()))
@@ -4866,8 +4968,28 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             else {
                 return;
             };
-            self.publish_copied_decl_type_replay(decl_id, lowered.ty);
+            let ty = self.retained_parameter_body_type(
+                annotation_scope,
+                rest.type_annotation.as_deref(),
+                lowered.ty,
+            );
+            self.publish_copied_decl_type(decl_id, ty);
         }
+    }
+    fn retained_parameter_body_type(
+        &mut self,
+        scope: ScopeId,
+        annotation: Option<&TSTypeAnnotation<'_>>,
+        retained: TypeId,
+    ) -> TypeId {
+        if self.symbolic_declared_alias_body(retained).is_none() {
+            return retained;
+        }
+        annotation
+            .and_then(|annotation| {
+                self.lower_callable_annotation(scope, &annotation.type_annotation, false)
+            })
+            .unwrap_or(retained)
     }
 
     fn check_partial_retained_parameter_initializers(
@@ -4938,7 +5060,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             return false;
         };
         let Some(value) = self
-            .resolve_value_replay(scope, name)
+            .resolve_value_symbol(scope, name)
             .and_then(|symbol| self.binder.symbols.get(symbol))
             .and_then(|symbol| symbol.value)
         else {
@@ -4956,7 +5078,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             return false;
         };
         matches!(
-            self.standalone_namespace_terminal_replay(namespace),
+            self.standalone_namespace_terminal(namespace),
             Some(super::namespace_values::StandaloneNamespaceTerminal::Ready {
                 storage,
                 ..
@@ -5069,6 +5191,7 @@ struct CandidateSelectionRequest<'signatures, 'type_arguments, 'args, 'ast> {
 
 struct SignatureCandidateRequest<'a, 'ast> {
     scope: ScopeId,
+    span: Span,
     signature_ty: TypeId,
     type_arguments: Option<&'a TSTypeParameterInstantiation<'ast>>,
     args: PreparedCallArgs<'a, 'ast>,

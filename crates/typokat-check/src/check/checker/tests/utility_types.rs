@@ -110,7 +110,6 @@ fn trusted_prelude_declaration_inventory_receipt_is_exact() {
             exact_join_attempts: 18,
             raw_probe_attempts: 0,
             fragment_checks: 18,
-            completeness_checks: 0,
             dense_slots: 21,
         }
     );
@@ -180,7 +179,6 @@ fn trusted_prelude_declaration_inventory_receipt_is_exact() {
         binder.prelude_module,
         prelude_source,
         manifest,
-        None,
     )
     .expect("trusted prelude inventory");
     assert_eq!(inventory.receipt().admitted, EXPECTED_GROUPS);
@@ -228,7 +226,6 @@ fn trusted_prelude_cleanliness_allowlist_is_exact() {
         binder.prelude_module,
         source,
         manifest,
-        None,
     )
     .expect("trusted prelude inventory");
     let expected = expected_trusted_prelude_incomplete(&inventory);

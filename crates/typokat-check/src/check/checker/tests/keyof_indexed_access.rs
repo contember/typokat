@@ -7,13 +7,7 @@ use crate::check::checker::expr::{
     combine_exact_symbol_member_lookups, exact_symbol_receiver_guard, object_element_access,
     ElementAccessLookup, ExactSymbolReceiverGuard,
 };
-use crate::check::checker::library_compiler::{
-    check_caller_certified_collision_free_source_with_owned_library,
-    compile_owned_injected_profile, InjectedLibrarySource,
-};
 use crate::check::test_support::check_source;
-use crate::diagnostics::DiagnosticCode;
-use crate::source::LibraryFileOrdinal;
 use crate::types::repr::{LiteralValue, ObjectType, PropertyType, WellKnownSymbol};
 use crate::types::Interner;
 
@@ -172,46 +166,6 @@ fn exact_symbol_receiver_guard_preserves_owner_specific_and_recovery_routes() {
         exact_symbol_receiver_guard(wk.string, &wk),
         ExactSymbolReceiverGuard::Continue
     );
-}
-
-#[test]
-fn certified_computed_and_wrapped_symbol_accesses_share_exact_authority() -> Result<(), String> {
-    let (_, state) = compile_owned_injected_profile(&[InjectedLibrarySource {
-        file_ordinal: LibraryFileOrdinal::new(0),
-        name: "computed-symbol-auth.d.ts",
-        source: "declare const Symbol: {};",
-    }])
-    .map_err(|error| format!("{error:?}"))?;
-    let run = check_caller_certified_collision_free_source_with_owned_library(
-        state,
-        r#"
-            interface ExactSymbols {
-                [Symbol.iterator](): number;
-                [Symbol.asyncIterator](): string;
-            }
-            declare const value: ExactSymbols;
-            const directWrong: string = value[Symbol.iterator]();
-            const computedWrong: string = value[Symbol["iterator"]]();
-            const keyWrappedWrong: string = value[Symbol[("iterator")]]();
-            const objectWrappedWrong: string = value[(Symbol)["iterator"]]();
-            const wholeWrappedWrong: string = value[(Symbol["iterator"])]();
-            const asyncWrong: number = value[Symbol["asyncIterator"]]();
-        "#,
-    )?;
-    assert!(
-        run.result.incomplete.is_empty(),
-        "{:?}",
-        run.result.incomplete
-    );
-    assert_eq!(
-        run.result
-            .diagnostics
-            .iter()
-            .map(|diagnostic| diagnostic.code)
-            .collect::<Vec<_>>(),
-        vec![DiagnosticCode::TK2322; 6]
-    );
-    Ok(())
 }
 
 #[test]

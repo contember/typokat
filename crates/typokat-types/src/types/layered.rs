@@ -278,8 +278,7 @@ impl BaseWriteAttemptScopeForTest {
 }
 
 pub struct LayeredIter<'a, T> {
-    base: std::iter::Enumerate<std::slice::Iter<'a, T>>,
-    overrides: &'a FxHashMap<usize, T>,
+    base: std::slice::Iter<'a, T>,
     local: std::slice::Iter<'a, T>,
 }
 
@@ -287,7 +286,6 @@ impl<T> Clone for LayeredIter<'_, T> {
     fn clone(&self) -> Self {
         Self {
             base: self.base.clone(),
-            overrides: self.overrides,
             local: self.local.clone(),
         }
     }
@@ -297,10 +295,7 @@ impl<'a, T> Iterator for LayeredIter<'a, T> {
     type Item = &'a T;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.base
-            .next()
-            .map(|(index, value)| self.overrides.get(&index).unwrap_or(value))
-            .or_else(|| self.local.next())
+        self.base.next().or_else(|| self.local.next())
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -311,11 +306,7 @@ impl<'a, T> Iterator for LayeredIter<'a, T> {
 
 impl<T> DoubleEndedIterator for LayeredIter<'_, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.local.next_back().or_else(|| {
-            self.base
-                .next_back()
-                .map(|(index, value)| self.overrides.get(&index).unwrap_or(value))
-        })
+        self.local.next_back().or_else(|| self.base.next_back())
     }
 }
 
@@ -323,20 +314,16 @@ impl<T> ExactSizeIterator for LayeredIter<'_, T> {}
 
 pub struct LayeredVec<T> {
     base: Arc<[T]>,
-    overrides: FxHashMap<usize, T>,
     local: Vec<T>,
     sealed: bool,
-    prefix_overrides_enabled: bool,
 }
 
 impl<T: Clone> Clone for LayeredVec<T> {
     fn clone(&self) -> Self {
         Self {
             base: Arc::clone(&self.base),
-            overrides: self.overrides.clone(),
             local: self.local.clone(),
             sealed: self.sealed,
-            prefix_overrides_enabled: self.prefix_overrides_enabled,
         }
     }
 }
@@ -345,10 +332,8 @@ impl<T> Default for LayeredVec<T> {
     fn default() -> Self {
         Self {
             base: Arc::from([]),
-            overrides: FxHashMap::default(),
             local: Vec::new(),
             sealed: false,
-            prefix_overrides_enabled: false,
         }
     }
 }
@@ -370,73 +355,38 @@ impl<T> LayeredVec<T> {
         self.local.len()
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
-    pub fn replacement_len(&self) -> usize {
-        self.overrides.len()
-    }
-
     pub fn is_sealed(&self) -> bool {
         self.sealed
     }
 
-    pub fn enable_prefix_overrides(&mut self) {
-        self.prefix_overrides_enabled = true;
-    }
-
-    pub fn prefix_overrides_enabled(&self) -> bool {
-        self.prefix_overrides_enabled
-    }
-
     pub fn changed_iter(&self) -> impl Iterator<Item = (usize, &T)> {
-        self.overrides
+        self.local
             .iter()
-            .map(|(index, value)| (*index, value))
-            .chain(
-                self.local
-                    .iter()
-                    .enumerate()
-                    .map(|(index, value)| (self.base.len() + index, value)),
-            )
-    }
-
-    /// Rows from the immutable prefix replaced by this sparse delta.
-    pub fn prefix_replacements(&self) -> impl Iterator<Item = (usize, &T)> {
-        self.overrides.iter().map(|(index, value)| (*index, value))
+            .enumerate()
+            .map(|(index, value)| (self.base.len() + index, value))
     }
 
     pub fn changed_iter_mut(&mut self) -> impl Iterator<Item = (usize, &mut T)> {
         let base_len = self.base.len();
-        self.overrides
+        self.local
             .iter_mut()
-            .map(|(index, value)| (*index, value))
-            .chain(
-                self.local
-                    .iter_mut()
-                    .enumerate()
-                    .map(move |(index, value)| (base_len + index, value)),
-            )
+            .enumerate()
+            .map(move |(index, value)| (base_len + index, value))
     }
 
     pub fn get(&self, index: usize) -> Option<&T> {
         if index < self.base.len() {
-            self.overrides.get(&index).or_else(|| self.base.get(index))
+            self.base.get(index)
         } else {
             self.local.get(index - self.base.len())
         }
     }
 
-    pub fn get_mut_local(&mut self, index: usize) -> Option<&mut T>
-    where
-        T: Clone,
-    {
+    pub fn get_mut_local(&mut self, index: usize) -> Option<&mut T> {
         if index < self.base.len() {
-            if !self.prefix_overrides_enabled {
-                #[cfg(any(test, feature = "test-utils"))]
-                record_base_write_attempt_for_test();
-                return None;
-            }
-            let value = self.base.get(index)?.clone();
-            return Some(self.overrides.entry(index).or_insert(value));
+            #[cfg(any(test, feature = "test-utils"))]
+            record_base_write_attempt_for_test();
+            return None;
         }
         self.local.get_mut(index.checked_sub(self.base.len())?)
     }
@@ -455,8 +405,7 @@ impl<T> LayeredVec<T> {
         #[cfg(any(test, feature = "test-utils"))]
         record_full_view_local_scan_for_test(self.local.len());
         LayeredIter {
-            base: self.base.iter().enumerate(),
-            overrides: &self.overrides,
+            base: self.base.iter(),
             local: self.local.iter(),
         }
     }
@@ -480,18 +429,15 @@ impl<T> LayeredVec<T> {
     }
 
     pub fn clear_local(&mut self) {
-        self.overrides.clear();
         self.local.clear();
     }
 
     pub fn freeze_as_base(&mut self) -> Result<(), &'static str> {
-        if self.sealed || !self.base.is_empty() || !self.overrides.is_empty() {
+        if self.sealed || !self.base.is_empty() {
             return Err("layered vector is already sealed");
         }
         self.base = Arc::from(std::mem::take(&mut self.local));
-        self.overrides.clear();
         self.sealed = true;
-        self.prefix_overrides_enabled = false;
         Ok(())
     }
 
@@ -499,23 +445,14 @@ impl<T> LayeredVec<T> {
         if !self.sealed {
             return Err("layered vector base is not sealed");
         }
-        if !self.local.is_empty() || !self.overrides.is_empty() {
+        if !self.local.is_empty() {
             return Err("layered vector has an unpublished suffix");
         }
         Ok(Self {
             base: Arc::clone(&self.base),
-            overrides: FxHashMap::default(),
             local: Vec::new(),
             sealed: true,
-            prefix_overrides_enabled: false,
         })
-    }
-
-    /// Fork a private sparse epoch whose prefix writes become isolated row overrides.
-    pub fn fork_sparse_delta(&self) -> Result<Self, &'static str> {
-        let mut delta = self.fork_delta()?;
-        delta.prefix_overrides_enabled = true;
-        Ok(delta)
     }
 
     #[cfg(any(test, feature = "test-utils"))]
@@ -533,10 +470,8 @@ impl<T> From<Vec<T>> for LayeredVec<T> {
     fn from(local: Vec<T>) -> Self {
         Self {
             base: Arc::from([]),
-            overrides: FxHashMap::default(),
             local,
             sealed: false,
-            prefix_overrides_enabled: false,
         }
     }
 }
@@ -559,8 +494,7 @@ impl<'a, T> IntoIterator for &'a LayeredVec<T> {
         #[cfg(any(test, feature = "test-utils"))]
         record_full_view_local_scan_for_test(self.local.len());
         LayeredIter {
-            base: self.base.iter().enumerate(),
-            overrides: &self.overrides,
+            base: self.base.iter(),
             local: self.local.iter(),
         }
     }
@@ -569,22 +503,16 @@ impl<'a, T> IntoIterator for &'a LayeredVec<T> {
 #[derive(Debug)]
 pub struct LayeredMap<K, V> {
     base: Arc<FxHashMap<K, V>>,
-    overrides: FxHashMap<K, V>,
-    removed: FxHashSet<K>,
     local: FxHashMap<K, V>,
     sealed: bool,
-    prefix_overrides_enabled: bool,
 }
 
 impl<K: Clone, V: Clone> Clone for LayeredMap<K, V> {
     fn clone(&self) -> Self {
         Self {
             base: Arc::clone(&self.base),
-            overrides: self.overrides.clone(),
-            removed: self.removed.clone(),
             local: self.local.clone(),
             sealed: self.sealed,
-            prefix_overrides_enabled: self.prefix_overrides_enabled,
         }
     }
 }
@@ -593,21 +521,15 @@ impl<K, V> Default for LayeredMap<K, V> {
     fn default() -> Self {
         Self {
             base: Arc::new(FxHashMap::default()),
-            overrides: FxHashMap::default(),
-            removed: FxHashSet::default(),
             local: FxHashMap::default(),
             sealed: false,
-            prefix_overrides_enabled: false,
         }
     }
 }
 
 impl<K: Eq + Hash, V> LayeredMap<K, V> {
     pub fn len(&self) -> usize {
-        self.base
-            .len()
-            .saturating_sub(self.removed.len())
-            .saturating_add(self.local.len())
+        self.base.len() + self.local.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -618,22 +540,9 @@ impl<K: Eq + Hash, V> LayeredMap<K, V> {
         self.sealed
     }
 
-    pub fn enable_prefix_overrides(&mut self) {
-        self.prefix_overrides_enabled = true;
-    }
-
-    pub fn prefix_overrides_enabled(&self) -> bool {
-        self.prefix_overrides_enabled
-    }
-
     #[cfg(any(test, feature = "test-utils"))]
     pub fn local_len(&self) -> usize {
         self.local.len()
-    }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    pub fn replacement_len(&self) -> usize {
-        self.overrides.len() + self.removed.len()
     }
 
     pub fn get<Q>(&self, key: &Q) -> Option<&V>
@@ -641,16 +550,7 @@ impl<K: Eq + Hash, V> LayeredMap<K, V> {
         K: Borrow<Q>,
         Q: Eq + Hash + ?Sized,
     {
-        self.overrides
-            .get(key)
-            .or_else(|| {
-                if self.removed.contains(key) {
-                    None
-                } else {
-                    self.base.get(key)
-                }
-            })
-            .or_else(|| self.local.get(key))
+        self.base.get(key).or_else(|| self.local.get(key))
     }
 
     pub fn contains_key<Q>(&self, key: &Q) -> bool
@@ -658,27 +558,11 @@ impl<K: Eq + Hash, V> LayeredMap<K, V> {
         K: Borrow<Q>,
         Q: Eq + Hash + ?Sized,
     {
-        (!self.removed.contains(key) && self.base.contains_key(key)) || self.local.contains_key(key)
+        self.base.contains_key(key) || self.local.contains_key(key)
     }
 
-    pub fn insert_local(&mut self, key: K, value: V) -> Result<Option<V>, &'static str>
-    where
-        V: Clone,
-    {
+    pub fn insert_local(&mut self, key: K, value: V) -> Result<Option<V>, &'static str> {
         if self.base.contains_key(&key) {
-            if self.prefix_overrides_enabled {
-                let previous = (!self.removed.contains(&key))
-                    .then(|| {
-                        self.overrides
-                            .get(&key)
-                            .or_else(|| self.base.get(&key))
-                            .cloned()
-                    })
-                    .flatten();
-                self.removed.remove(&key);
-                self.overrides.insert(key, value);
-                return Ok(previous);
-            }
             #[cfg(any(test, feature = "test-utils"))]
             record_base_write_attempt_for_test();
             return Err("layered map cannot replace a sealed entry");
@@ -719,39 +603,12 @@ impl<K: Eq + Hash, V> LayeredMap<K, V> {
         Ok(self.local.remove(key))
     }
 
-    pub fn remove_visible(&mut self, key: &K) -> Result<Option<V>, &'static str>
-    where
-        K: Clone,
-        V: Clone,
-    {
-        if self.prefix_overrides_enabled && self.base.contains_key(key) {
-            let previous = self.get(key).cloned();
-            self.overrides.remove(key);
-            self.removed.insert(key.clone());
-            return Ok(previous);
-        }
-        self.remove_local(key)
-    }
-
     pub fn get_or_insert_local_with(
         &mut self,
         key: K,
         default: impl FnOnce() -> V,
-    ) -> Result<&mut V, &'static str>
-    where
-        V: Clone,
-    {
+    ) -> Result<&mut V, &'static str> {
         if self.base.contains_key(&key) {
-            if self.prefix_overrides_enabled {
-                if self.removed.remove(&key) {
-                    return Ok(self.overrides.entry(key).or_insert_with(default));
-                }
-                let inherited = self.base.get(&key);
-                return Ok(self
-                    .overrides
-                    .entry(key)
-                    .or_insert_with(|| inherited.map_or_else(default, Clone::clone)));
-            }
             #[cfg(any(test, feature = "test-utils"))]
             record_base_write_attempt_for_test();
             return Err("layered map cannot replace a sealed entry");
@@ -772,11 +629,7 @@ impl<K: Eq + Hash, V> LayeredMap<K, V> {
         record_full_view_base_scan_for_test(self.base.len());
         #[cfg(any(test, feature = "test-utils"))]
         record_full_view_local_scan_for_test(self.local.len());
-        self.base
-            .iter()
-            .filter(|(key, _)| !self.overrides.contains_key(*key) && !self.removed.contains(*key))
-            .chain(self.overrides.iter())
-            .chain(self.local.iter())
+        self.base.iter().chain(self.local.iter())
     }
 
     pub fn keys(&self) -> impl Iterator<Item = &K> {
@@ -784,11 +637,7 @@ impl<K: Eq + Hash, V> LayeredMap<K, V> {
         record_full_view_base_scan_for_test(self.base.len());
         #[cfg(any(test, feature = "test-utils"))]
         record_full_view_local_scan_for_test(self.local.len());
-        self.base
-            .keys()
-            .filter(|key| !self.overrides.contains_key(*key) && !self.removed.contains(*key))
-            .chain(self.overrides.keys())
-            .chain(self.local.keys())
+        self.base.keys().chain(self.local.keys())
     }
 
     pub fn values(&self) -> impl Iterator<Item = &V> {
@@ -796,12 +645,7 @@ impl<K: Eq + Hash, V> LayeredMap<K, V> {
         record_full_view_base_scan_for_test(self.base.len());
         #[cfg(any(test, feature = "test-utils"))]
         record_full_view_local_scan_for_test(self.local.len());
-        self.base
-            .iter()
-            .filter(|(key, _)| !self.overrides.contains_key(*key) && !self.removed.contains(*key))
-            .map(|(_, value)| value)
-            .chain(self.overrides.values())
-            .chain(self.local.values())
+        self.base.values().chain(self.local.values())
     }
 
     pub fn local_iter(&self) -> impl Iterator<Item = (&K, &V)> {
@@ -811,15 +655,11 @@ impl<K: Eq + Hash, V> LayeredMap<K, V> {
     }
 
     pub fn changed_iter(&self) -> impl Iterator<Item = (&K, &V)> {
-        self.overrides.iter().chain(self.local.iter())
+        self.local.iter()
     }
 
     pub fn changed_values_mut(&mut self) -> impl Iterator<Item = &mut V> {
-        self.overrides.values_mut().chain(self.local.values_mut())
-    }
-
-    pub fn removed_iter(&self) -> impl Iterator<Item = &K> {
-        self.removed.iter()
+        self.local.values_mut()
     }
 
     pub fn local_values_mut(&mut self) -> impl Iterator<Item = &mut V> {
@@ -829,22 +669,15 @@ impl<K: Eq + Hash, V> LayeredMap<K, V> {
     }
 
     pub fn clear_local(&mut self) {
-        self.overrides.clear();
-        self.removed.clear();
         self.local.clear();
     }
 
     pub fn freeze_as_base(&mut self) -> Result<(), &'static str> {
-        if self.sealed
-            || !self.base.is_empty()
-            || !self.overrides.is_empty()
-            || !self.removed.is_empty()
-        {
+        if self.sealed || !self.base.is_empty() {
             return Err("layered map is already sealed");
         }
         self.base = Arc::new(std::mem::take(&mut self.local));
         self.sealed = true;
-        self.prefix_overrides_enabled = false;
         Ok(())
     }
 
@@ -852,23 +685,14 @@ impl<K: Eq + Hash, V> LayeredMap<K, V> {
         if !self.sealed {
             return Err("layered map base is not sealed");
         }
-        if !self.local.is_empty() || !self.overrides.is_empty() || !self.removed.is_empty() {
+        if !self.local.is_empty() {
             return Err("layered map has an unpublished suffix");
         }
         Ok(Self {
             base: Arc::clone(&self.base),
-            overrides: FxHashMap::default(),
-            removed: FxHashSet::default(),
             local: FxHashMap::default(),
             sealed: true,
-            prefix_overrides_enabled: false,
         })
-    }
-
-    pub fn fork_sparse_delta(&self) -> Result<Self, &'static str> {
-        let mut delta = self.fork_delta()?;
-        delta.prefix_overrides_enabled = true;
-        Ok(delta)
     }
 
     #[cfg(any(test, feature = "test-utils"))]
@@ -886,11 +710,8 @@ impl<K, V> From<FxHashMap<K, V>> for LayeredMap<K, V> {
     fn from(local: FxHashMap<K, V>) -> Self {
         Self {
             base: Arc::new(FxHashMap::default()),
-            overrides: FxHashMap::default(),
-            removed: FxHashSet::default(),
             local,
             sealed: false,
-            prefix_overrides_enabled: false,
         }
     }
 }
@@ -917,9 +738,6 @@ impl<K: Clone + Eq + Hash, V: Clone> IntoIterator for LayeredMap<K, V> {
 
 pub struct LayeredMapIter<'a, K, V> {
     base: std::collections::hash_map::Iter<'a, K, V>,
-    overrides: &'a FxHashMap<K, V>,
-    removed: &'a FxHashSet<K>,
-    override_rows: std::collections::hash_map::Iter<'a, K, V>,
     local: std::collections::hash_map::Iter<'a, K, V>,
 }
 
@@ -927,18 +745,7 @@ impl<'a, K: Eq + Hash, V> Iterator for LayeredMapIter<'a, K, V> {
     type Item = (&'a K, &'a V);
 
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            match self.base.next() {
-                Some((key, value))
-                    if !self.overrides.contains_key(key) && !self.removed.contains(key) =>
-                {
-                    return Some((key, value));
-                }
-                Some(_) => {}
-                None => break,
-            }
-        }
-        self.override_rows.next().or_else(|| self.local.next())
+        self.base.next().or_else(|| self.local.next())
     }
 }
 
@@ -953,9 +760,6 @@ impl<'a, K: Eq + Hash, V> IntoIterator for &'a LayeredMap<K, V> {
         record_full_view_local_scan_for_test(self.local.len());
         LayeredMapIter {
             base: self.base.iter(),
-            overrides: &self.overrides,
-            removed: &self.removed,
-            override_rows: self.overrides.iter(),
             local: self.local.iter(),
         }
     }
@@ -1282,132 +1086,5 @@ mod tests {
         assert_eq!(set.local_iter().count(), 1);
 
         assert_eq!(scope.finish(), 9);
-    }
-
-    #[test]
-    fn sparse_vector_overrides_are_visible_once_and_isolated_between_siblings() {
-        let mut base = LayeredVec::from(vec![String::from("zero"), String::from("one")]);
-        base.freeze_as_base().expect("vector base seals");
-        let mut first = base.fork_sparse_delta().expect("first sparse vector forks");
-        let sibling = base
-            .fork_sparse_delta()
-            .expect("sibling sparse vector forks");
-
-        *first.get_mut_local(0).expect("prefix row is replaceable") = String::from("changed");
-        first.push_local(String::from("suffix"));
-
-        assert_eq!(first[0], "changed");
-        assert_eq!(
-            first.iter().map(String::as_str).collect::<Vec<_>>(),
-            ["changed", "one", "suffix"]
-        );
-        assert_eq!(
-            first.iter().rev().map(String::as_str).collect::<Vec<_>>(),
-            ["suffix", "one", "changed"]
-        );
-        let mut changed = first
-            .changed_iter()
-            .map(|(index, value)| (index, value.as_str()))
-            .collect::<Vec<_>>();
-        changed.sort_by_key(|(index, _)| *index);
-        assert_eq!(changed, [(0, "changed"), (2, "suffix")]);
-        assert_eq!(
-            first.local_iter().map(String::as_str).collect::<Vec<_>>(),
-            ["suffix"]
-        );
-        assert_eq!(
-            sibling.iter().map(String::as_str).collect::<Vec<_>>(),
-            ["zero", "one"]
-        );
-
-        let mut cloned = first.clone();
-        *cloned
-            .get_mut_local(1)
-            .expect("second prefix row is replaceable") = String::from("clone-only");
-        cloned.clear_local();
-        assert_eq!(
-            cloned.iter().map(String::as_str).collect::<Vec<_>>(),
-            ["zero", "one"]
-        );
-        assert_eq!(
-            first.iter().map(String::as_str).collect::<Vec<_>>(),
-            ["changed", "one", "suffix"]
-        );
-    }
-
-    #[test]
-    fn sparse_map_tombstones_reinsertions_and_overrides_are_visible_once() {
-        let mut base = LayeredMap::default();
-        base.insert_local(String::from("a"), 1)
-            .expect("first base row inserts");
-        base.insert_local(String::from("b"), 2)
-            .expect("second base row inserts");
-        base.freeze_as_base().expect("map base seals");
-
-        let mut shared = base.fork_delta().expect("shared map forks");
-        assert!(shared.remove_visible(&String::from("a")).is_err());
-        assert_eq!(shared.get("a"), Some(&1));
-
-        let mut sparse = base.fork_sparse_delta().expect("sparse map forks");
-        let sibling = base.fork_sparse_delta().expect("sibling sparse map forks");
-        assert_eq!(
-            sparse
-                .remove_visible(&String::from("a"))
-                .expect("sparse prefix removal"),
-            Some(1)
-        );
-        assert!(!sparse.contains_key("a"));
-        assert_eq!(
-            sparse
-                .insert_local(String::from("a"), 3)
-                .expect("tombstoned key reinserts"),
-            None
-        );
-        assert_eq!(
-            sparse
-                .insert_local(String::from("b"), 4)
-                .expect("prefix key overrides"),
-            Some(2)
-        );
-        sparse
-            .insert_local(String::from("c"), 5)
-            .expect("suffix key inserts");
-
-        let mut visible = sparse
-            .iter()
-            .map(|(key, value)| (key.as_str(), *value))
-            .collect::<Vec<_>>();
-        visible.sort_unstable();
-        assert_eq!(visible, [("a", 3), ("b", 4), ("c", 5)]);
-        let mut changed = sparse
-            .changed_iter()
-            .map(|(key, value)| (key.as_str(), *value))
-            .collect::<Vec<_>>();
-        changed.sort_unstable();
-        assert_eq!(changed, [("a", 3), ("b", 4), ("c", 5)]);
-        assert_eq!(
-            sparse
-                .local_iter()
-                .map(|(key, value)| (key.as_str(), *value))
-                .collect::<Vec<_>>(),
-            [("c", 5)]
-        );
-        assert_eq!(sparse.removed_iter().count(), 0);
-        assert_eq!(sibling.get("a"), Some(&1));
-        assert_eq!(sibling.get("b"), Some(&2));
-
-        let mut cloned = sparse.clone();
-        assert_eq!(
-            cloned
-                .remove_visible(&String::from("b"))
-                .expect("clone tombstones its prefix"),
-            Some(4)
-        );
-        assert!(!cloned.contains_key("b"));
-        assert_eq!(sparse.get("b"), Some(&4));
-        cloned.clear_local();
-        assert_eq!(cloned.get("a"), Some(&1));
-        assert_eq!(cloned.get("b"), Some(&2));
-        assert!(!cloned.contains_key("c"));
     }
 }

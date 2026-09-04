@@ -236,7 +236,7 @@ fn merged_enum_auto_numbering_restarts_for_each_fragment() {
 }
 
 #[test]
-fn production_enum_publication_is_one_atomic_replay_component() {
+fn production_enum_publication_is_one_atomic_component() {
     let (out, trace) =
         check_source_with_enum_publication_trace("enum E { First = 1 } enum E { Second = 2 }");
     assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
@@ -246,25 +246,6 @@ fn production_enum_publication_is_one_atomic_replay_component() {
     assert_eq!(trace.ordered_member_names, ["First", "Second"]);
     assert!(trace.readonly_value_properties);
     assert!(!trace.terminal_visible_before_freeze);
-
-    let group = trace.enum_group.expect("type group owner");
-    let values = trace
-        .owners
-        .iter()
-        .copied()
-        .filter(|owner| {
-            matches!(
-                owner,
-                crate::check::checker::replay_index::ReplayOwner::Value(_)
-            ) && trace.edges.contains(&(*owner, group))
-                && trace.edges.contains(&(group, *owner))
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(values.len(), 2);
-    for value in values {
-        assert!(trace.edges.contains(&(value, group)));
-        assert!(trace.edges.contains(&(group, value)));
-    }
 }
 
 #[test]

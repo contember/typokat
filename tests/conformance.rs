@@ -579,7 +579,7 @@ const ENABLED_FIXTURES: &[(&str, &str)] = &[
     ),
 ];
 
-const FROZEN_INVENTORY_ORDER_FINGERPRINT: u64 = 0x6f99d922f78e8e9f;
+const FROZEN_INVENTORY_ORDER_FINGERPRINT: u64 = 0x0671da33f03f843d;
 
 /// An expectation parsed from a single inline marker.
 #[derive(Debug, Clone)]
@@ -600,9 +600,9 @@ struct ExpectedIncomplete {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum RouteMode {
-    SharedMarkers,
-    SharedColdParity,
+enum SessionMode {
+    RepeatedOnly,
+    RepeatedStandaloneParity,
 }
 
 struct FixtureProject {
@@ -726,18 +726,18 @@ fn focused_selection_error(result: Result<Inventory, String>, context: &str) -> 
 struct RunReceipt {
     fixture_projects: usize,
     source_files: usize,
-    shared_executions: usize,
-    cold_executions: usize,
+    repeated_executions: usize,
+    standalone_executions: usize,
 }
 
 #[cfg(test)]
 fn format_focused_run_receipt(receipt: &RunReceipt) -> String {
     format!(
-        "focused conformance receipt: closure=false fixture_projects={} source_files={} shared_executions={} cold_executions={}",
+        "focused conformance receipt: closure=false fixture_projects={} source_files={} repeated_executions={} standalone_executions={}",
         receipt.fixture_projects,
         receipt.source_files,
-        receipt.shared_executions,
-        receipt.cold_executions
+        receipt.repeated_executions,
+        receipt.standalone_executions
     )
 }
 
@@ -787,19 +787,19 @@ where
     std::panic::catch_unwind(f).map_err(|_| ())
 }
 
-/// The ordinary marker gate. Full shared/cold parity has its own ignored entry point.
+/// The ordinary marker gate. Full repeated/standalone parity has its own ignored entry point.
 #[test]
 fn conformance() -> Result<(), String> {
     on_raw_check_worker(|| {
         let inventory = discover_enabled_inventory();
-        let receipt = run_inventory(&inventory, RouteMode::SharedMarkers);
+        let receipt = run_inventory(&inventory, SessionMode::RepeatedOnly);
         assert_eq!(
             receipt,
             RunReceipt {
-                fixture_projects: 581,
-                source_files: 697,
-                shared_executions: 581,
-                cold_executions: 0,
+                fixture_projects: 583,
+                source_files: 699,
+                repeated_executions: 583,
+                standalone_executions: 0,
             }
         );
         print_run_receipt(&receipt);
@@ -807,14 +807,14 @@ fn conformance() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "explicit non-closure focused conformance route"]
+#[ignore = "explicit non-closure focused conformance session"]
 fn conformance_focused() -> Result<(), String> {
     let case = read_focused_selector("TYPOKAT_CONFORMANCE_CASE")?;
     let corpus = read_focused_selector("TYPOKAT_CONFORMANCE_CORPUS")?;
     let inventory = select_focused_inventory(case.as_deref(), corpus.as_deref())?;
 
     on_raw_check_worker(move || {
-        let receipt = run_inventory(&inventory, RouteMode::SharedMarkers);
+        let receipt = run_inventory(&inventory, SessionMode::RepeatedOnly);
         println!("{}", format_focused_run_receipt(&receipt));
     })
 }
@@ -831,18 +831,18 @@ fn read_focused_selector(name: &str) -> Result<Option<String>, String> {
 }
 
 #[test]
-#[ignore = "weekly and sprint-closure full shared/cold parity gate"]
-fn conformance_full_shared_cold_parity() -> Result<(), String> {
+#[ignore = "weekly and sprint-closure repeated/standalone parity gate"]
+fn conformance_full_repeated_standalone_parity() -> Result<(), String> {
     on_raw_check_worker(|| {
         let inventory = discover_enabled_inventory();
-        let receipt = run_inventory(&inventory, RouteMode::SharedColdParity);
+        let receipt = run_inventory(&inventory, SessionMode::RepeatedStandaloneParity);
         assert_eq!(
             receipt,
             RunReceipt {
-                fixture_projects: 581,
-                source_files: 697,
-                shared_executions: 581,
-                cold_executions: 581,
+                fixture_projects: 583,
+                source_files: 699,
+                repeated_executions: 583,
+                standalone_executions: 583,
             }
         );
         print_run_receipt(&receipt);
@@ -852,12 +852,12 @@ fn conformance_full_shared_cold_parity() -> Result<(), String> {
 #[test]
 fn conformance_inventory_matches_frozen_receipt() {
     let inventory = discover_enabled_inventory();
-    assert_eq!(inventory.projects.len(), 581);
-    assert_eq!(inventory.source_files, 697);
+    assert_eq!(inventory.projects.len(), 583);
+    assert_eq!(inventory.source_files, 699);
     assert_eq!(
         inventory.discovery,
         DiscoveryReceipt {
-            whole_flat: (434, 434),
+            whole_flat: (436, 436),
             whole_project: (74, 184),
             selected_flat: (67, 67),
             selected_project: (6, 12),
@@ -1030,13 +1030,13 @@ fn focused_receipt_is_explicitly_not_closure_evidence() {
     let receipt = RunReceipt {
         fixture_projects: 1,
         source_files: 2,
-        shared_executions: 1,
-        cold_executions: 0,
+        repeated_executions: 1,
+        standalone_executions: 0,
     };
 
     assert_eq!(
         format_focused_run_receipt(&receipt),
-        "focused conformance receipt: closure=false fixture_projects=1 source_files=2 shared_executions=1 cold_executions=0"
+        "focused conformance receipt: closure=false fixture_projects=1 source_files=2 repeated_executions=1 standalone_executions=0"
     );
 }
 
@@ -1248,30 +1248,36 @@ fn inventory_order_fingerprint(projects: &[FixtureProject]) -> u64 {
     fingerprint
 }
 
-fn run_inventory(inventory: &Inventory, mode: RouteMode) -> RunReceipt {
+fn run_inventory(inventory: &Inventory, mode: SessionMode) -> RunReceipt {
     let mut failures = Vec::new();
-    let mut shared_executions = 0usize;
-    let mut cold_executions = 0usize;
+    let mut repeated_executions = 0usize;
+    let mut standalone_executions = 0usize;
 
     for project in &inventory.projects {
         let inputs = fixture_inputs(&project.fixtures);
-        shared_executions += 1;
-        let shared = match check_project(clone_inputs(&inputs)) {
+        repeated_executions += 1;
+        let repeated = match check_project(clone_inputs(&inputs)) {
             Ok(reports) => reports,
             Err(error) => {
-                failures.push(library_base_failure(&project.logical_id, &error));
+                failures.push(checker_session_failure(&project.logical_id, &error));
                 continue;
             }
         };
-        failures.extend(compare_project_markers(project, &inputs, &shared));
+        failures.extend(compare_project_markers(project, &inputs, &repeated));
 
-        if mode == RouteMode::SharedColdParity {
-            cold_executions += 1;
+        if mode == SessionMode::RepeatedStandaloneParity {
+            standalone_executions += 1;
             match check_project_once(clone_inputs(&inputs)) {
-                Ok(cold) => {
-                    failures.extend(compare_route_reports(&project.logical_id, &shared, &cold));
+                Ok(standalone) => {
+                    failures.extend(compare_session_reports(
+                        &project.logical_id,
+                        &repeated,
+                        &standalone,
+                    ));
                 }
-                Err(error) => failures.push(complete_source_failure(&project.logical_id, &error)),
+                Err(error) => {
+                    failures.push(standalone_session_failure(&project.logical_id, &error))
+                }
             }
         }
     }
@@ -1288,8 +1294,8 @@ fn run_inventory(inventory: &Inventory, mode: RouteMode) -> RunReceipt {
     RunReceipt {
         fixture_projects: inventory.projects.len(),
         source_files: inventory.source_files,
-        shared_executions,
-        cold_executions,
+        repeated_executions,
+        standalone_executions,
     }
 }
 
@@ -1366,11 +1372,11 @@ fn compare_report_alignment(
 
 fn print_run_receipt(receipt: &RunReceipt) {
     println!(
-        "conformance receipt: fixture_projects={} source_files={} shared_executions={} cold_executions={}",
+        "conformance receipt: fixture_projects={} source_files={} repeated_executions={} standalone_executions={}",
         receipt.fixture_projects,
         receipt.source_files,
-        receipt.shared_executions,
-        receipt.cold_executions
+        receipt.repeated_executions,
+        receipt.standalone_executions
     );
 }
 
@@ -1381,40 +1387,40 @@ fn assert_fixture_directory_registered(dir: &str) {
     );
 }
 
-fn library_base_failure(logical_id: &str, error: &impl std::fmt::Display) -> String {
-    format!("{logical_id}: the default-library base is unavailable: {error}")
+fn checker_session_failure(logical_id: &str, error: &impl std::fmt::Display) -> String {
+    format!("{logical_id}: the declaration product is unavailable: {error}")
 }
 
-fn complete_source_failure(logical_id: &str, error: &impl std::fmt::Display) -> String {
-    format!("{logical_id}: the complete-source standalone route failed: {error}")
+fn standalone_session_failure(logical_id: &str, error: &impl std::fmt::Display) -> String {
+    format!("{logical_id}: the standalone CheckerSession failed: {error}")
 }
 
-fn compare_route_reports(
+fn compare_session_reports(
     logical_id: &str,
-    shared: &[FileReport],
-    cold: &[FileReport],
+    repeated: &[FileReport],
+    standalone: &[FileReport],
 ) -> Vec<String> {
-    if shared.len() != cold.len() {
+    if repeated.len() != standalone.len() {
         return vec![format!(
-            "{logical_id}: shared/cold report count differs: {} != {}",
-            shared.len(),
-            cold.len()
+            "{logical_id}: repeated/standalone report count differs: {} != {}",
+            repeated.len(),
+            standalone.len()
         )];
     }
-    shared
+    repeated
         .iter()
-        .zip(cold)
-        .filter_map(|(shared, cold)| {
-            let same = shared.name == cold.name
-                && shared.source == cold.source
-                && exact_output(&shared.output) == exact_output(&cold.output);
+        .zip(standalone)
+        .filter_map(|(repeated, standalone)| {
+            let same = repeated.name == standalone.name
+                && repeated.source == standalone.source
+                && exact_output(&repeated.output) == exact_output(&standalone.output);
             (!same).then(|| {
                 format!(
-                    "{}: shared/cold output differs for {}\n    shared: {:?}\n    cold:   {:?}",
+                    "{}: repeated/standalone output differs for {}\n    repeated:   {:?}\n    standalone: {:?}",
                     logical_id,
-                    cold.name,
-                    exact_output(&shared.output),
-                    exact_output(&cold.output)
+                    standalone.name,
+                    exact_output(&repeated.output),
+                    exact_output(&standalone.output)
                 )
             })
         })
@@ -1438,16 +1444,16 @@ fn exact_output(output: &CheckOutput) -> (Vec<String>, Vec<String>, Vec<String>)
 }
 
 #[test]
-fn exact_route_comparator_detects_public_report_changes() {
+fn exact_session_comparator_detects_public_report_changes() {
     let equal_left = vec![parity_control_report("a.ts", "const a = 1;", &[], &[])];
     let equal_right = vec![parity_control_report("a.ts", "const a = 1;", &[], &[])];
-    assert!(compare_route_reports("control", &equal_left, &equal_right).is_empty());
+    assert!(compare_session_reports("control", &equal_left, &equal_right).is_empty());
 
     let changed_name = vec![parity_control_report("b.ts", "const a = 1;", &[], &[])];
-    assert!(!compare_route_reports("control", &equal_left, &changed_name).is_empty());
+    assert!(!compare_session_reports("control", &equal_left, &changed_name).is_empty());
 
     let changed_source = vec![parity_control_report("a.ts", "const a = 2;", &[], &[])];
-    assert!(!compare_route_reports("control", &equal_left, &changed_source).is_empty());
+    assert!(!compare_session_reports("control", &equal_left, &changed_source).is_empty());
 
     let changed_parse = vec![parity_control_report(
         "a.ts",
@@ -1455,7 +1461,7 @@ fn exact_route_comparator_detects_public_report_changes() {
         &["parse changed"],
         &[],
     )];
-    assert!(!compare_route_reports("control", &equal_left, &changed_parse).is_empty());
+    assert!(!compare_session_reports("control", &equal_left, &changed_parse).is_empty());
 
     let mut changed_incomplete = parity_control_report("a.ts", "const a = 1;", &[], &[]);
     changed_incomplete
@@ -1466,7 +1472,7 @@ fn exact_route_comparator_detects_public_report_changes() {
             typokat::span::Span::new(0, 1),
             "incomplete changed",
         ));
-    assert!(!compare_route_reports("control", &equal_left, &[changed_incomplete]).is_empty());
+    assert!(!compare_session_reports("control", &equal_left, &[changed_incomplete]).is_empty());
 
     let changed_notice = vec![parity_control_report(
         "a.ts",
@@ -1475,8 +1481,8 @@ fn exact_route_comparator_detects_public_report_changes() {
         &["notice changed"],
     )];
     assert!(
-        compare_route_reports("control", &equal_left, &changed_notice).is_empty(),
-        "route-envelope notices are not part of semantic parity"
+        compare_session_reports("control", &equal_left, &changed_notice).is_empty(),
+        "project notices are not part of semantic parity"
     );
 
     let ordered = vec![
@@ -1487,7 +1493,7 @@ fn exact_route_comparator_detects_public_report_changes() {
         parity_control_report("b.ts", "const b = 1;", &[], &[]),
         parity_control_report("a.ts", "const a = 1;", &[], &[]),
     ];
-    assert!(!compare_route_reports("control", &ordered, &reordered).is_empty());
+    assert!(!compare_session_reports("control", &ordered, &reordered).is_empty());
 }
 
 #[test]

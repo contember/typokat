@@ -518,13 +518,12 @@ class ContractTests(unittest.TestCase):
 
     def test_wrong_provider_probe_is_rejected(self) -> None:
         observed = {
-            "schema": 2,
+            "schema": 3,
             "profile_sha256": self.contract["profile"]["length_framed_sha256"],
             "file_count": 82,
-            "check_route": self.contract["provider_probe"]["check_route"],
-            "provider_route": "test-only-provider",
+            "route": "test-only-provider",
         }
-        with self.assertRaisesRegex(bench.ContractError, "provider route differs"):
+        with self.assertRaisesRegex(bench.ContractError, "production route differs"):
             bench.validate_provider_observation(observed, self.contract)
 
     def test_boolean_provider_schema_is_rejected(self) -> None:
@@ -532,8 +531,7 @@ class ContractTests(unittest.TestCase):
             "schema": True,
             "profile_sha256": self.contract["profile"]["length_framed_sha256"],
             "file_count": 82,
-            "check_route": self.contract["provider_probe"]["check_route"],
-            "provider_route": self.contract["provider_probe"]["provider_route"],
+            "route": self.contract["provider_probe"]["route"],
         }
         with self.assertRaisesRegex(bench.ContractError, "not bool"):
             bench.validate_provider_observation(observed, self.contract)

@@ -1,4 +1,4 @@
-//! RED acceptance for ADR-0021's standalone complete-source CLI lifecycle.
+//! Cross-entry-point acceptance for the product-backed CheckerSession lifecycle.
 
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -6,18 +6,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use typokat::driver::{
-    check_project, check_project_once, production_cli_route, CheckOutput, DriverError, FileReport,
+    check_project, check_project_once, production_library_route, CheckOutput, DriverError,
+    FileReport,
 };
 use typokat::frontend::FileInput;
 
 const BIN: &str = env!("CARGO_BIN_EXE_typokat");
 const PROFILE_SHA256: &str = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
-const COLD_ROUTE: &str = "production-complete-source-once";
-const SHARED_ROUTE: &str = "production-default-library";
 
 type ProjectCheck = fn(Vec<FileInput>) -> Result<Vec<FileReport>, DriverError>;
 const _: ProjectCheck = check_project_once;
-const _: fn() -> &'static str = production_cli_route;
 
 #[derive(Debug, PartialEq, Eq)]
 struct OutputShape {
@@ -157,47 +155,47 @@ fn ts_files(root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(files)
 }
 
-fn compare_routes(inputs: Vec<FileInput>) -> Result<Vec<FileReport>, String> {
+fn compare_session_modes(inputs: Vec<FileInput>) -> Result<Vec<FileReport>, String> {
     let expected_names = inputs
         .iter()
         .map(|input| input.name.clone())
         .collect::<Vec<_>>();
-    let shared_inputs = inputs
+    let repeated_inputs = inputs
         .iter()
         .map(|input| FileInput {
             name: input.name.clone(),
             source: input.source.clone(),
         })
         .collect();
-    let shared = check_project(shared_inputs).map_err(|error| error.to_string())?;
-    let cold = check_project_once(inputs).map_err(|error| error.to_string())?;
-    let cold_names = cold
+    let repeated = check_project(repeated_inputs).map_err(|error| error.to_string())?;
+    let standalone = check_project_once(inputs).map_err(|error| error.to_string())?;
+    let standalone_names = standalone
         .iter()
         .map(|report| report.name.clone())
         .collect::<Vec<_>>();
-    if cold_names != expected_names {
+    if standalone_names != expected_names {
         return Err(format!(
-            "cold route changed original report order: expected={expected_names:?}, actual={cold_names:?}"
+            "standalone session changed original report order: expected={expected_names:?}, actual={standalone_names:?}"
         ));
     }
-    if by_name(&cold) != by_name(&shared) {
+    if by_name(&standalone) != by_name(&repeated) {
         return Err(format!(
-            "cold/shared semantic mismatch: cold={:?}, shared={:?}",
-            by_name(&cold),
-            by_name(&shared)
+            "repeated/standalone semantic mismatch: standalone={:?}, repeated={:?}",
+            by_name(&standalone),
+            by_name(&repeated)
         ));
     }
-    Ok(cold)
+    Ok(standalone)
 }
 
 #[test]
-fn cold_route_preserves_resolved_imports_and_original_order() -> Result<(), String> {
+fn standalone_session_preserves_resolved_imports_and_original_order() -> Result<(), String> {
     for reverse in [false, true] {
-        let reports = compare_routes(import_project(reverse))?;
+        let reports = compare_session_modes(import_project(reverse))?;
         let consumer = reports
             .iter()
             .find(|report| report.name == "/wu6/b.ts")
-            .ok_or_else(|| "cold import project omitted its consumer report".to_owned())?;
+            .ok_or_else(|| "standalone import project omitted its consumer report".to_owned())?;
         let codes = diagnostic_codes(&consumer.output);
         if codes != ["TK2322", "TK2345"] {
             return Err(format!(
@@ -209,9 +207,10 @@ fn cold_route_preserves_resolved_imports_and_original_order() -> Result<(), Stri
 }
 
 #[test]
-fn cold_route_preserves_missing_module_and_invalid_global_diagnostics() -> Result<(), String> {
+fn standalone_session_preserves_missing_module_and_invalid_global_diagnostics() -> Result<(), String>
+{
     let missing_path = PathBuf::from("tests/cases/m29_modules/missing_resolution/use.ts");
-    let missing = compare_routes(read_inputs(&[missing_path], false)?)?;
+    let missing = compare_session_modes(read_inputs(&[missing_path], false)?)?;
     let [missing] = missing.as_slice() else {
         return Err("missing-module project must return one report".to_owned());
     };
@@ -222,7 +221,7 @@ fn cold_route_preserves_missing_module_and_invalid_global_diagnostics() -> Resul
         ));
     }
 
-    let invalid = compare_routes(vec![FileInput {
+    let invalid = compare_session_modes(vec![FileInput {
         name: "/wu6/invalid-global.ts".to_owned(),
         source: concat!(
             "declare global {\n",
@@ -242,7 +241,7 @@ fn cold_route_preserves_missing_module_and_invalid_global_diagnostics() -> Resul
         ));
     }
 
-    let missing_export = compare_routes(vec![
+    let missing_export = compare_session_modes(vec![
         FileInput {
             name: "/wu6/exporter.ts".to_owned(),
             source: "export const present = 1;\n".to_owned(),
@@ -266,7 +265,8 @@ fn cold_route_preserves_missing_module_and_invalid_global_diagnostics() -> Resul
 }
 
 #[test]
-fn cold_route_preserves_dependency_cycles_and_mixed_result_channels() -> Result<(), String> {
+fn standalone_session_preserves_dependency_cycles_and_mixed_result_channels() -> Result<(), String>
+{
     for reverse in [false, true] {
         let mut cycle = vec![
             FileInput {
@@ -289,7 +289,7 @@ fn cold_route_preserves_dependency_cycles_and_mixed_result_channels() -> Result<
         if reverse {
             cycle.reverse();
         }
-        let reports = compare_routes(cycle)?;
+        let reports = compare_session_modes(cycle)?;
         if reports
             .iter()
             .flat_map(|report| diagnostic_codes(&report.output))
@@ -303,7 +303,7 @@ fn cold_route_preserves_dependency_cycles_and_mixed_result_channels() -> Result<
         }
     }
 
-    let reports = compare_routes(vec![
+    let reports = compare_session_modes(vec![
         FileInput {
             name: "/wu6/mixed.d.ts".to_owned(),
             source: concat!(
@@ -329,13 +329,13 @@ fn cold_route_preserves_dependency_cycles_and_mixed_result_channels() -> Result<
 }
 
 #[test]
-fn cold_route_matches_the_complete_b102_b103_matrix_in_both_orders() -> Result<(), String> {
+fn checker_session_modes_match_the_b102_b103_matrix_in_both_orders() -> Result<(), String> {
     for flat in [
         "tests/cases/b102_frozen_prefix_writes",
         "tests/cases/b103_library_merge_correctness",
     ] {
         for file in ts_files(Path::new(flat))? {
-            compare_routes(read_inputs(&[file], false)?)?;
+            compare_session_modes(read_inputs(&[file], false)?)?;
         }
     }
 
@@ -356,7 +356,7 @@ fn cold_route_matches_the_complete_b102_b103_matrix_in_both_orders() -> Result<(
         for directory in directories {
             let files = ts_files(&directory)?;
             for reverse in [false, true] {
-                compare_routes(read_inputs(&files, reverse)?)?;
+                compare_session_modes(read_inputs(&files, reverse)?)?;
             }
         }
     }
@@ -364,9 +364,9 @@ fn cold_route_matches_the_complete_b102_b103_matrix_in_both_orders() -> Result<(
 }
 
 #[test]
-fn cold_route_preserves_library_value_winners_on_identifiers_and_global_this() -> Result<(), String>
-{
-    let reports = compare_routes(vec![FileInput {
+fn standalone_session_preserves_library_value_winners_on_identifiers_and_global_this(
+) -> Result<(), String> {
+    let reports = compare_session_modes(vec![FileInput {
         name: "/wu6/value-winners.ts".to_owned(),
         source: concat!(
             "const JSON = 1;\n",
@@ -394,8 +394,8 @@ fn cold_route_preserves_library_value_winners_on_identifiers_and_global_this() -
 }
 
 #[test]
-fn cold_route_refreshes_inferred_global_this_contributors() -> Result<(), String> {
-    let inferred = compare_routes(vec![FileInput {
+fn standalone_session_refreshes_inferred_global_this_contributors() -> Result<(), String> {
+    let inferred = compare_session_modes(vec![FileInput {
         name: "/wu6/inferred-global-value.ts".to_owned(),
         source: concat!(
             "function inferredGlobalValue() { return 1; }\n",
@@ -416,8 +416,8 @@ fn cold_route_refreshes_inferred_global_this_contributors() -> Result<(), String
 }
 
 #[test]
-fn cold_route_preserves_direct_global_this_static_overlay() -> Result<(), String> {
-    let direct_global_this = compare_routes(vec![FileInput {
+fn standalone_session_preserves_direct_global_this_static_overlay() -> Result<(), String> {
+    let direct_global_this = compare_session_modes(vec![FileInput {
         name: "/wu6/direct-global-this.ts".to_owned(),
         source: concat!(
             "class globalThis { static invented: number; }\n",
@@ -438,8 +438,9 @@ fn cold_route_preserves_direct_global_this_static_overlay() -> Result<(), String
 }
 
 #[test]
-fn cold_route_uses_native_array_identity_inside_published_user_types() -> Result<(), String> {
-    let reports = compare_routes(vec![FileInput {
+fn standalone_session_uses_native_array_identity_inside_published_user_types() -> Result<(), String>
+{
+    let reports = compare_session_modes(vec![FileInput {
         name: "/wu6/native-array-published-types.ts".to_owned(),
         source: concat!(
             "export {};\n",
@@ -469,9 +470,9 @@ fn cold_route_uses_native_array_identity_inside_published_user_types() -> Result
 }
 
 #[test]
-fn cold_route_uses_native_array_identity_in_library_interface_augmentations() -> Result<(), String>
-{
-    let reports = compare_routes(vec![FileInput {
+fn standalone_session_uses_native_array_identity_in_library_interface_augmentations(
+) -> Result<(), String> {
+    let reports = compare_session_modes(vec![FileInput {
         name: "/wu6/native-array-library-augmentation.ts".to_owned(),
         source: concat!(
             "interface Window {\n",
@@ -499,8 +500,9 @@ fn cold_route_uses_native_array_identity_in_library_interface_augmentations() ->
 }
 
 #[test]
-fn cold_route_uses_native_array_identity_in_user_interface_defaults() -> Result<(), String> {
-    let reports = compare_routes(vec![FileInput {
+fn standalone_session_uses_native_array_identity_in_user_interface_defaults() -> Result<(), String>
+{
+    let reports = compare_session_modes(vec![FileInput {
         name: "/wu6/native-array-interface-default.ts".to_owned(),
         source: concat!(
             "interface WU6InterfaceDefault<T = Array<number>> { value: T; }\n",
@@ -523,8 +525,9 @@ fn cold_route_uses_native_array_identity_in_user_interface_defaults() -> Result<
 }
 
 #[test]
-fn cold_route_uses_native_array_identity_in_namespace_declaration_surfaces() -> Result<(), String> {
-    let reports = compare_routes(vec![FileInput {
+fn standalone_session_uses_native_array_identity_in_namespace_declaration_surfaces(
+) -> Result<(), String> {
+    let reports = compare_session_modes(vec![FileInput {
         name: "/wu6/native-array-namespace-surfaces.ts".to_owned(),
         source: concat!(
             "declare namespace WU6NamespaceSurfaces {\n",
@@ -551,8 +554,8 @@ fn cold_route_uses_native_array_identity_in_namespace_declaration_surfaces() -> 
 }
 
 #[test]
-fn cold_route_does_not_promote_module_local_array_interfaces() -> Result<(), String> {
-    let reports = compare_routes(vec![FileInput {
+fn standalone_session_does_not_promote_module_local_array_interfaces() -> Result<(), String> {
+    let reports = compare_session_modes(vec![FileInput {
         name: "/wu6/module-local-array.ts".to_owned(),
         source: concat!(
             "export {};\n",
@@ -575,13 +578,13 @@ fn cold_route_does_not_promote_module_local_array_interfaces() -> Result<(), Str
 }
 
 #[test]
-fn cold_route_matches_shared_collision_semantics_in_both_orders() -> Result<(), String> {
+fn checker_session_modes_match_collision_semantics_in_both_orders() -> Result<(), String> {
     for reverse in [false, true] {
-        let reports = compare_routes(collision_project(reverse))?;
+        let reports = compare_session_modes(collision_project(reverse))?;
         let consumer = reports
             .iter()
             .find(|report| report.name == "/wu6/use.ts")
-            .ok_or_else(|| "cold collision project omitted its consumer report".to_owned())?;
+            .ok_or_else(|| "standalone collision project omitted its consumer report".to_owned())?;
         let codes = diagnostic_codes(&consumer.output);
         if codes != ["TK2322"] {
             return Err(format!(
@@ -593,8 +596,8 @@ fn cold_route_matches_shared_collision_semantics_in_both_orders() -> Result<(), 
 }
 
 #[test]
-fn cold_route_preserves_parse_and_incomplete_channels() -> Result<(), String> {
-    let parse_reports = compare_routes(vec![FileInput {
+fn standalone_session_preserves_parse_and_incomplete_channels() -> Result<(), String> {
+    let parse_reports = compare_session_modes(vec![FileInput {
         name: "/wu6/recoverable.ts".to_owned(),
         source: concat!(
             "declare namespace Broken { export = Broken; }\n",
@@ -615,7 +618,7 @@ fn cold_route_preserves_parse_and_incomplete_channels() -> Result<(), String> {
         ));
     }
 
-    let incomplete_reports = compare_routes(vec![FileInput {
+    let incomplete_reports = compare_session_modes(vec![FileInput {
         name: "/wu6/valid.d.ts".to_owned(),
         source: concat!(
             "export as namespace Valid;\n",
@@ -636,7 +639,7 @@ fn cold_route_preserves_parse_and_incomplete_channels() -> Result<(), String> {
     let expected = BTreeSet::from(["decl/export-assignment/self", "decl/namespace-export/self"]);
     if ids != expected || !incomplete.output.diagnostics.is_empty() {
         return Err(format!(
-            "cold declaration route changed incomplete output: {:?}",
+            "standalone declaration session changed incomplete output: {:?}",
             shape(&incomplete.output)
         ));
     }
@@ -644,11 +647,11 @@ fn cold_route_preserves_parse_and_incomplete_channels() -> Result<(), String> {
 }
 
 #[test]
-fn cli_and_library_info_attest_distinct_lifecycle_routes() -> Result<(), String> {
-    if production_cli_route() != COLD_ROUTE {
+fn cli_and_library_info_attest_checker_session() -> Result<(), String> {
+    let route = production_library_route().map_err(|error| error.to_string())?;
+    if route != "production-checker-session" {
         return Err(format!(
-            "cold driver attestation differs: {}",
-            production_cli_route()
+            "production CheckerSession attestation differs: {route}"
         ));
     }
     let main = include_str!("../src/main.rs");
@@ -669,21 +672,16 @@ fn cli_and_library_info_attest_distinct_lifecycle_routes() -> Result<(), String>
         .as_object()
         .ok_or_else(|| "library-info must return an object".to_owned())?;
     let keys = object.keys().map(String::as_str).collect::<BTreeSet<_>>();
-    let expected_keys = BTreeSet::from([
-        "check_route",
-        "file_count",
-        "profile_sha256",
-        "provider_route",
-        "schema",
-    ]);
+    let expected_keys = BTreeSet::from(["file_count", "profile_sha256", "route", "schema"]);
     if keys != expected_keys
-        || value["schema"] != 2
+        || value["schema"] != 3
         || value["profile_sha256"] != PROFILE_SHA256
         || value["file_count"] != 82
-        || value["check_route"] != COLD_ROUTE
-        || value["provider_route"] != SHARED_ROUTE
+        || value["route"] != "production-checker-session"
     {
-        return Err(format!("library-info route receipt differs: {value}"));
+        return Err(format!(
+            "library-info CheckerSession receipt differs: {value}"
+        ));
     }
     Ok(())
 }

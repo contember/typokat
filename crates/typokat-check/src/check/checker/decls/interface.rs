@@ -18,7 +18,6 @@ struct InterfaceMethodOverloadAccumulator {
 pub(super) struct LoweredInterfaceMembers {
     pub(super) object: ObjectType,
     pub(super) method_keys: BTreeSet<PropertyKey>,
-    pub(super) unavailable: bool,
 }
 
 fn flatten_qualified_heritage_expression<'a>(
@@ -48,14 +47,14 @@ fn flatten_qualified_heritage_expression<'a>(
 }
 
 impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
-    pub(super) fn interface_heritage_root_replay<'name>(
+    pub(super) fn interface_heritage_root<'name>(
         &self,
         scope: ScopeId,
         heritage: &'name TSInterfaceHeritage<'_>,
     ) -> Option<(crate::binder::declaration::TypeGroupId, &'name str, Span)> {
         match &heritage.expression {
             Expression::Identifier(identifier) => Some((
-                self.type_decl_id_replay(scope, identifier.name.as_str())?,
+                self.type_decl_id(scope, identifier.name.as_str())?,
                 identifier.name.as_str(),
                 Span::from_oxc(identifier.span),
             )),
@@ -69,7 +68,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     .map(|segment| segment.name)
                     .collect::<Vec<_>>();
                 let crate::binder::namespace::QualifiedTypePathResolution::TypeGroup(group) =
-                    self.resolve_qualified_type_path_replay(scope, &names)
+                    self.resolve_qualified_type_path(scope, &names)
                 else {
                     return None;
                 };
@@ -84,7 +83,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         scope: ScopeId,
         heritage: &TSInterfaceHeritage<'_>,
     ) {
-        let Some((group, name, span)) = self.interface_heritage_root_replay(scope, heritage) else {
+        let Some((group, name, span)) = self.interface_heritage_root(scope, heritage) else {
             return;
         };
         self.validate_type_group_application_without_resolution(
@@ -120,7 +119,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     ) {
         match &heritage.expression {
             Expression::Identifier(identifier) => {
-                if let Some(group) = self.type_decl_id_replay(scope, identifier.name.as_str()) {
+                if let Some(group) = self.type_decl_id(scope, identifier.name.as_str()) {
                     let _ = self.resolve_type_group_reference(
                         scope,
                         group,
@@ -131,10 +130,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     return;
                 }
                 if self
-                    .resolve_type_replay(scope, identifier.name.as_str())
+                    .resolve_type_symbol(scope, identifier.name.as_str())
                     .is_none()
                     && self
-                        .resolve_value_replay(scope, identifier.name.as_str())
+                        .resolve_value_symbol(scope, identifier.name.as_str())
                         .is_none()
                 {
                     self.emit_diagnostic(crate::diagnostics::Diagnostic::cannot_find_name(
@@ -259,7 +258,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         };
         if self.interner.store().array_type(array_candidate).is_some() {
             return self
-                .project_library_heritage_surface(scope, base_ty)
+                .project_library_heritage_surface(base_ty)
                 .and_then(|projected| self.project_interface_heritage_type(projected))
                 .or_else(|| self.project_interface_heritage_type(base_ty));
         }
@@ -283,13 +282,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             return Some(merge_intersection_objects(self.interner, objects));
         }
         let application = self.interner.store().class_instance_type(ty).cloned()?;
-        if let Some(trace) = &self.replay_trace {
-            let _observation = trace.observe_typed_demand("interface-class-projection");
-            trace.demand_at(
-                super::super::replay_index::ReplayOwner::Class(application.class),
-                "interface-class-projection",
-            );
-        }
         let crate::class_semantics::DemandOutcome::Ready(surface) = self
             .staged_published_classes
             .as_ref()
@@ -320,7 +312,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     ) -> Option<TypeId> {
         let (decl_id, name, span) = match &heritage.expression {
             Expression::Identifier(ident) => (
-                self.type_decl_id_replay(scope, ident.name.as_str())?,
+                self.type_decl_id(scope, ident.name.as_str())?,
                 ident.name.as_str(),
                 Span::from_oxc(ident.span),
             ),
@@ -329,7 +321,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 if flatten_qualified_heritage_expression(&heritage.expression, &mut segments) {
                     let names: Vec<&str> = segments.iter().map(|segment| segment.name).collect();
                     if let crate::binder::namespace::QualifiedTypePathResolution::TypeGroup(group) =
-                        self.resolve_qualified_type_path_replay(scope, &names)
+                        self.resolve_qualified_type_path(scope, &names)
                     {
                         (group, segments.last()?.name, Span::from_oxc(member.span))
                     } else {
@@ -385,7 +377,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         declaration: Option<crate::binder::declaration::DeclId>,
     ) -> LoweredInterfaceMembers {
         let mut object = ObjectType::default();
-        let mut unavailable = false;
         let overloaded_method_keys = self.overloaded_method_keys(scope, members);
         let mut overloads: FxHashMap<PropertyKey, InterfaceMethodOverloadAccumulator> =
             FxHashMap::default();
@@ -397,7 +388,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 TSSignature::TSPropertySignature(sig) => {
                     let Some(key) = pass.signature_property_key(scope, &sig.key, sig.computed)
                     else {
-                        unavailable = true;
                         pass.record_property_signature_computed_key(&sig.key);
                         if let Some(annotation) = sig.type_annotation.as_ref() {
                             pass.lower_annotation(scope, &annotation.type_annotation);
@@ -412,13 +402,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         let overload = overloads.entry(key).or_default();
                         overload.unsupported = true;
                         let lowered = sig.type_annotation.as_ref().and_then(|annotation| {
-                            #[cfg(test)]
-                            super::super::declaration_surface_measure::record_eager_interface_property_root();
                             pass.lower_annotation(scope, &annotation.type_annotation)
                         });
                         if lowered.is_none() {
                             overload.unavailable = true;
-                            unavailable = true;
                         }
                         return;
                     }
@@ -428,16 +415,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                                 scope,
                                 &annotation.type_annotation,
                             ) {
-                                #[cfg(test)]
-                                super::super::declaration_surface_measure::record_planned_interface_property_root();
                                 ty
                             } else {
-                                #[cfg(test)]
-                                super::super::declaration_surface_measure::record_eager_interface_property_root();
                                 let Some(ty) =
                                     pass.lower_annotation(scope, &annotation.type_annotation)
                                 else {
-                                    unavailable = true;
                                     return;
                                 };
                                 ty
@@ -469,17 +451,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 // un-lowerable value) is **skipped** (lenient, like an out-of-subset
                 // property), so the interface keeps the members it can express.
                 TSSignature::TSIndexSignature(sig) => {
-                    if pass
-                        .lower_index_signature(scope, sig, &mut object)
-                        .is_none()
-                    {
-                        unavailable = true;
-                    }
+                    let _ = pass.lower_index_signature(scope, sig, &mut object);
                 }
                 TSSignature::TSMethodSignature(sig) => {
                     let Some(key) = pass.signature_property_key(scope, &sig.key, sig.computed)
                     else {
-                        unavailable = true;
                         pass.record_method_signature_computed_key(&sig.key);
                         pass.lower_generic_strict_signature_function_type(
                             scope,
@@ -518,29 +494,22 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                             Some(_) => {}
                             None => {
                                 overload.unavailable = true;
-                                unavailable = true;
                             }
                         }
                         return;
                     }
                     if let Some(prop) = pass.lower_method_signature_property(scope, sig) {
                         object.properties.push(prop);
-                    } else {
-                        unavailable = true;
                     }
                 }
                 TSSignature::TSCallSignatureDeclaration(sig) => {
                     if let Some(signature) = pass.lower_call_signature(scope, sig) {
                         object.call_signatures.push(signature);
-                    } else {
-                        unavailable = true;
                     }
                 }
                 TSSignature::TSConstructSignatureDeclaration(sig) => {
                     if let Some(signature) = pass.lower_construct_signature(scope, sig) {
                         object.construct_signatures.push(signature);
-                    } else {
-                        unavailable = true;
                     }
                 }
             };
@@ -580,7 +549,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         LoweredInterfaceMembers {
             object,
             method_keys,
-            unavailable,
         }
     }
 }
@@ -607,36 +575,6 @@ pub(super) fn merge_object_members_overlay(base: ObjectType, overlay: ObjectType
     }
 }
 
-#[cfg(test)]
-thread_local! {
-    static HERITAGE_BASE_NAME_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
-/// One probe per member name tested for membership in the composed base surface. Nothing in
-/// the output can see the difference between a scan and a lookup, so the probe count is the
-/// only witness that composing a heritage chain stays linear.
-#[cfg(test)]
-fn record_heritage_base_name_probes_for_test(probes: usize) {
-    let probes = u64::try_from(probes).unwrap_or(u64::MAX);
-    HERITAGE_BASE_NAME_PROBES.with(|counter| counter.set(counter.get().saturating_add(probes)));
-}
-
-#[cfg(test)]
-pub(in crate::check::checker) struct HeritageBaseNameProbeScopeForTest(u64);
-
-#[cfg(test)]
-impl HeritageBaseNameProbeScopeForTest {
-    pub(in crate::check::checker) fn start() -> Self {
-        Self(HERITAGE_BASE_NAME_PROBES.with(std::cell::Cell::get))
-    }
-
-    pub(in crate::check::checker) fn finish(self) -> u64 {
-        HERITAGE_BASE_NAME_PROBES
-            .with(std::cell::Cell::get)
-            .saturating_sub(self.0)
-    }
-}
-
 /// Compose base surfaces in source order without letting later conflicts replace the first.
 ///
 /// One key set spans the whole chain. Folding the bases pairwise instead re-tests every
@@ -652,8 +590,6 @@ pub(super) fn compose_base_members_first(bases: &[&ObjectType]) -> ObjectType {
     let mut construct_signatures = Vec::new();
     for base in bases {
         for property in &base.properties {
-            #[cfg(test)]
-            record_heritage_base_name_probes_for_test(1);
             if keys.insert(&property.key) {
                 properties.push(property.clone());
             }

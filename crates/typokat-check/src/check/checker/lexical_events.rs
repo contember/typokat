@@ -1,9 +1,6 @@
 //! Lexical event reservations retained across class/SCC/body phases.
 
 use super::events::UserRecordTicket;
-use super::replay_index::{
-    CollisionReplayEventPhase, CollisionReplayOwnerSite, CollisionReplaySiteProvenance, ReplayOwner,
-};
 use crate::binder::declaration::{
     DeclId, DeclarationKind, SourceDeclarationManifest, SourceInterfaceOccurrenceKind,
     SourceTypeFragmentPayload, TypeGroupId, ValueStorageId,
@@ -292,13 +289,6 @@ pub trait LexicalReservationAllocator {
     fn source_unit(&self) -> SourceUnit;
     fn reserve_event(&mut self, source_start: u32) -> (Self::Event, Self::Ticket);
     fn reserve_record(&mut self, event: Self::Event) -> Result<Self::Ticket, Self::Error>;
-    fn record_owner_site(
-        &mut self,
-        _ticket: Self::Ticket,
-        _span: Span,
-        _phase: CollisionReplayEventPhase,
-    ) {
-    }
 }
 
 /// Persistent source-site table built before class construction, SCCs, and bodies.
@@ -332,7 +322,6 @@ pub struct LexicalReservations<Ticket: Copy = UserRecordTicket> {
     callables_by_source: BTreeMap<(SourceOrdinal, u32), Vec<CallableSiteId>>,
     initializers_by_source: FxHashMap<(SourceUnit, u32), usize>,
     declaration_reservations_by_decl: FxHashMap<DeclId, usize>,
-    collision_owner_sites: Vec<CollisionReplayOwnerSite>,
 }
 
 impl<Ticket: Copy> Default for LexicalReservations<Ticket> {
@@ -364,7 +353,6 @@ impl<Ticket: Copy> Default for LexicalReservations<Ticket> {
             callables_by_source: BTreeMap::new(),
             initializers_by_source: FxHashMap::default(),
             declaration_reservations_by_decl: FxHashMap::default(),
-            collision_owner_sites: Vec::new(),
         }
     }
 }
@@ -441,11 +429,6 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         let ordinal = source_ordinal(unit);
         for occurrence in manifest.declarations() {
             let (_, owner) = allocator.reserve_event(occurrence.binding_span.start);
-            allocator.record_owner_site(
-                owner,
-                occurrence.binding_span,
-                CollisionReplayEventPhase::Immediate,
-            );
             let index = self.declarations.len();
             self.declarations.push(DeclarationReservation {
                 source: SourceSite {
@@ -550,7 +533,6 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
     {
         let source_start = span.start;
         let (_, owner) = allocator.reserve_event(source_start);
-        allocator.record_owner_site(owner, span, CollisionReplayEventPhase::Immediate);
         let index = self.interface_occurrences.len();
         self.interface_occurrences
             .push(InterfaceOccurrenceReservation {
@@ -584,11 +566,6 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
                     for specifier in &export.specifiers {
                         let local_span = Span::from_oxc(specifier.local.span());
                         let (_, owner) = allocator.reserve_event(local_span.start);
-                        allocator.record_owner_site(
-                            owner,
-                            local_span,
-                            CollisionReplayEventPhase::Immediate,
-                        );
                         let index = self.export_aliases.len();
                         self.export_aliases.push(ExportAliasReservation {
                             source: SourceSite {
@@ -672,7 +649,6 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         };
         let (event, primary) = allocator.reserve_event(source.source_start);
         let tickets = reserve_site_tickets(event, primary, allocator)?;
-        record_site_ticket_sites(allocator, tickets, Span::from_oxc(statement.span()));
         let mut class_site = None;
         let mut callable = None;
         if let Some(class) = statement_class(statement) {
@@ -833,7 +809,6 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
             };
             let (event, primary) = allocator.reserve_event(source.source_start);
             let tickets = reserve_site_tickets(event, primary, allocator)?;
-            record_site_ticket_sites(allocator, tickets, Span::from_oxc(declarator.span));
             let index = self.declarators.len();
             self.declarators
                 .push(DeclaratorReservation { source, tickets });
@@ -1202,11 +1177,6 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
             source_start: initializer.span().start,
         };
         let (_, owner) = allocator.reserve_event(source.source_start);
-        allocator.record_owner_site(
-            owner,
-            Span::from_oxc(initializer.span()),
-            CollisionReplayEventPhase::Immediate,
-        );
         let index = self.initializers.len();
         self.initializers
             .push(InitializerReservation { source, owner });
@@ -1231,7 +1201,6 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         };
         let (event, primary) = allocator.reserve_event(source.source_start);
         let tickets = reserve_site_tickets(event, primary, allocator)?;
-        record_site_ticket_sites(allocator, tickets, Span::from_oxc(function.span));
         self.expression_site_tickets.push(tickets);
         #[cfg(any(test, feature = "test-utils"))]
         self.expression_sources.push(source);
@@ -1258,7 +1227,6 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         };
         let (event, primary) = allocator.reserve_event(source.source_start);
         let tickets = reserve_site_tickets(event, primary, allocator)?;
-        record_site_ticket_sites(allocator, tickets, Span::from_oxc(arrow.span));
         self.expression_site_tickets.push(tickets);
         #[cfg(any(test, feature = "test-utils"))]
         self.expression_sources.push(source);
@@ -1287,7 +1255,6 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         };
         let (event, primary) = allocator.reserve_event(source.source_start);
         let tickets = reserve_site_tickets(event, primary, allocator)?;
-        record_site_ticket_sites(allocator, tickets, Span::from_oxc(class.span));
         self.expression_site_tickets.push(tickets);
         #[cfg(any(test, feature = "test-utils"))]
         self.expression_sources.push(source);
@@ -1408,33 +1375,6 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         self.reused_declaration_tickets.insert(index);
         self.declarations_by_binding.insert(key, index);
         Ok(())
-    }
-
-    pub(in crate::check::checker) fn attach_collision_declaration_site(
-        &mut self,
-        owner: ReplayOwner,
-        file_ordinal: crate::source::LibraryFileOrdinal,
-        declaration: &crate::binder::declaration::LexicalDeclaration,
-        binder_owner: crate::binder::namespace::DeclarationOwner,
-        containing_namespace: Option<crate::binder::namespace::NamespaceId>,
-    ) {
-        self.collision_owner_sites.push(CollisionReplayOwnerSite {
-            owner,
-            file_ordinal,
-            span: declaration.site.declaration_span,
-            provenance: CollisionReplaySiteProvenance::Declaration {
-                declaration: declaration.id,
-                kind: declaration.kind,
-                binder_owner,
-                containing_namespace,
-            },
-        });
-    }
-
-    pub(in crate::check::checker) fn take_collision_owner_sites(
-        &mut self,
-    ) -> Vec<CollisionReplayOwnerSite> {
-        std::mem::take(&mut self.collision_owner_sites)
     }
 
     pub fn export_alias_owner(
@@ -1805,11 +1745,6 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
                     source_start: constraint.span().start,
                 };
                 let (_, owner) = allocator.reserve_event(source.source_start);
-                allocator.record_owner_site(
-                    owner,
-                    Span::from_oxc(constraint.span()),
-                    CollisionReplayEventPhase::Deferred,
-                );
                 constraints.push(ClassConstraintReservation {
                     parameter_index,
                     source,
@@ -1822,11 +1757,6 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
                     source_start: default.span().start,
                 };
                 let (_, owner) = allocator.reserve_event(source.source_start);
-                allocator.record_owner_site(
-                    owner,
-                    Span::from_oxc(default.span()),
-                    CollisionReplayEventPhase::Deferred,
-                );
                 defaults.push(ClassDefaultReservation {
                     parameter_index,
                     source,
@@ -1860,7 +1790,6 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
             let (member_event, member_primary) =
                 allocator.reserve_event(element_source.source_start);
             let member_tickets = reserve_site_tickets(member_event, member_primary, allocator)?;
-            record_site_ticket_sites(allocator, member_tickets, Span::from_oxc(element.span()));
             let member_id = MemberSiteId(self.members.len());
             let mut member = MemberReservation {
                 id: member_id,
@@ -1939,11 +1868,6 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
     {
         let id = CallableSiteId(self.callables.len());
         let body = allocator.reserve_record(event)?;
-        allocator.record_owner_site(
-            body,
-            Span::from_oxc(function.span),
-            CollisionReplayEventPhase::Body,
-        );
         self.callables.push(CallableReservation {
             id,
             owner_member,
@@ -1980,11 +1904,6 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
     {
         let id = CallableSiteId(self.callables.len());
         let body = allocator.reserve_record(event)?;
-        allocator.record_owner_site(
-            body,
-            Span::from_oxc(arrow.span),
-            CollisionReplayEventPhase::Body,
-        );
         self.callables.push(CallableReservation {
             id,
             owner_member: None,
@@ -2022,22 +1941,6 @@ where
         deferred: allocator.reserve_record(event)?,
         incomplete: allocator.reserve_record(event)?,
     })
-}
-
-fn record_site_ticket_sites<Allocator>(
-    allocator: &mut Allocator,
-    tickets: SiteTickets<Allocator::Ticket>,
-    span: Span,
-) where
-    Allocator: LexicalReservationAllocator,
-{
-    for (ticket, phase) in [
-        (tickets.immediate, CollisionReplayEventPhase::Immediate),
-        (tickets.deferred, CollisionReplayEventPhase::Deferred),
-        (tickets.incomplete, CollisionReplayEventPhase::Incomplete),
-    ] {
-        allocator.record_owner_site(ticket, span, phase);
-    }
 }
 
 fn site_tickets<Ticket: Copy>(tickets: SiteTickets<Ticket>) -> [Ticket; 3] {
@@ -2097,17 +2000,8 @@ mod owner_lookup_spec;
 
 #[cfg(test)]
 mod tests {
-    use super::super::context::CheckerEffects;
     use super::super::events::{EventStore, EventStoreError};
-    use super::super::events_library::{
-        LibraryEventKey, LibraryEventLedger, LibraryEventLedgerError, LibraryRecordTicket,
-        LibrarySemanticReportingAdapter,
-    };
-    use super::super::lexical_events_user::ReservationError as UserReservationError;
-    use super::super::reporting_record::CheckerRecord;
     use super::*;
-    use crate::diagnostics::IncompleteSurface;
-    use crate::source::LibraryFileOrdinal;
     use oxc_allocator::Allocator;
     use oxc_parser::Parser;
     use oxc_span::SourceType;
@@ -2119,476 +2013,6 @@ mod tests {
             u32::try_from(start).expect("source offset fits u32"),
             u32::try_from(start + needle.len()).expect("source offset fits u32"),
         )
-    }
-
-    fn test_record(index: usize) -> CheckerRecord {
-        let start = u32::try_from(index).expect("test record index fits u32");
-        CheckerRecord::Incomplete(IncompleteSurface::new(
-            format!("lexical-reservation-test-{index}"),
-            Span::new(start, start.saturating_add(1)),
-            "lexical reservation adapter witness",
-        ))
-    }
-
-    fn reservation_sources<Ticket: Copy + PartialEq>(
-        reservations: &LexicalReservations<Ticket>,
-    ) -> Vec<SourceSite> {
-        reservations.structural_source_sites()
-    }
-
-    fn finish_user_reservations(
-        mut store: EventStore,
-        tickets: &[UserRecordTicket],
-    ) -> Vec<(u32, usize, usize, String, Span)> {
-        for (index, ticket) in tickets.iter().enumerate() {
-            store
-                .complete(*ticket, vec![test_record(index)])
-                .expect("each user lexical ticket completes once");
-        }
-        store
-            .finish()
-            .expect("complete user lexical inventory finishes")
-            .into_iter()
-            .map(|(key, record)| {
-                let CheckerRecord::Incomplete(record) = record else {
-                    panic!("lexical parity emits only incompletes");
-                };
-                (
-                    key.source_start,
-                    key.event_ordinal,
-                    key.record_ordinal,
-                    record.id,
-                    record.span,
-                )
-            })
-            .collect()
-    }
-
-    fn finish_library_reservations(
-        mut ledger: LibraryEventLedger,
-        tickets: &[LibraryRecordTicket],
-        anchors: &[LibraryRecordTicket],
-    ) -> Vec<(u32, usize, usize, String, Span)> {
-        let anchor_batches = anchors
-            .iter()
-            .map(|anchor| CheckerEffects::new(*anchor).records)
-            .collect();
-        LibrarySemanticReportingAdapter::new(&mut ledger)
-            .complete_semantic_batches(anchor_batches)
-            .expect("each library source anchor completes once");
-        for (index, ticket) in tickets.iter().enumerate().rev() {
-            ledger
-                .complete(*ticket, vec![test_record(index)])
-                .expect("each library lexical ticket completes once");
-        }
-        ledger
-            .finish()
-            .expect("complete library lexical inventory finishes")
-            .into_iter()
-            .map(|(key, record)| {
-                let CheckerRecord::Incomplete(record) = record else {
-                    panic!("lexical parity emits only incompletes");
-                };
-                (
-                    key.source_start,
-                    key.event_ordinal,
-                    key.record_ordinal,
-                    record.id,
-                    record.span,
-                )
-            })
-            .collect()
-    }
-
-    #[test]
-    fn user_and_library_wrappers_expose_concrete_authority_errors() {
-        let allocator = Allocator::default();
-        let parsed = Parser::new(&allocator, "const value = 1;", SourceType::ts()).parse();
-        assert!(parsed.diagnostics.is_empty());
-
-        let mut user = LexicalReservations::<UserRecordTicket>::default();
-        let mut store = EventStore::default();
-        let user_result: Result<(), UserReservationError> = user.reserve_program(
-            ModuleOrdinal::new(3),
-            UnitSlot::new(2),
-            &parsed.program,
-            &mut store,
-        );
-        user_result.expect("user wrapper reserves through EventStore");
-
-        let mut library = LexicalReservations::<LibraryRecordTicket>::default();
-        let mut ledger = LibraryEventLedger::default();
-        let library_result: Result<(), LibraryEventLedgerError> = library.reserve_library_program(
-            LibraryFileOrdinal::new(5),
-            &parsed.program,
-            &mut ledger,
-        );
-        library_result.expect("library wrapper reserves through LibraryEventLedger");
-    }
-
-    #[test]
-    fn rich_ast_has_identical_user_and_library_reservation_streams() {
-        let source = r#"
-interface Shape<T> extends Base {
-  value: T;
-  call(input: number): string;
-  new (input: string): Shape<T>;
-  [key: string]: unknown;
-}
-declare namespace Outer {
-  export { Missing as Alias };
-  export interface Nested { nested: boolean; }
-}
-class Box<T extends object = {}> extends Base {
-  static { const staticArrow = (value = 1) => value; }
-  [computed()] = function (value = 1) { return value; };
-  method<U>(value = () => 1) { return value(); }
-}
-function outer<T>(value = () => 1) {
-  if (value) { const nested = class { field = () => 1; }; }
-  return function inner(input = 1) { return input; };
-}
-const arrow = (input = 1) => class Inner { method() { return input; } };
-"#;
-        let allocator = Allocator::default();
-        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
-        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
-
-        let user_unit = SourceUnit::User {
-            module_ordinal: ModuleOrdinal::new(11),
-            unit_slot: UnitSlot::new(4),
-        };
-        let library_unit = SourceUnit::Library {
-            file_ordinal: LibraryFileOrdinal::new(11),
-        };
-        let mut user = LexicalReservations::<UserRecordTicket>::default();
-        let mut user_store = EventStore::default();
-        user.reserve_program(
-            ModuleOrdinal::new(11),
-            UnitSlot::new(4),
-            &parsed.program,
-            &mut user_store,
-        )
-        .unwrap();
-        let mut library = LexicalReservations::<LibraryRecordTicket>::default();
-        let mut library_ledger = LibraryEventLedger::default();
-        library
-            .reserve_library_program(
-                LibraryFileOrdinal::new(11),
-                &parsed.program,
-                &mut library_ledger,
-            )
-            .unwrap();
-
-        let user_sources = reservation_sources(&user);
-        let library_sources = reservation_sources(&library);
-        let retained_row_count = user.declarations.len()
-            + user.export_aliases.len()
-            + user.interface_occurrences.len()
-            + user.top_level.len()
-            + user.nested_statements.len()
-            + user.declarators.len()
-            + user.initializers.len()
-            + user.classes.len()
-            + user
-                .classes
-                .iter()
-                .map(|class| class.constraints.len() + class.defaults.len())
-                .sum::<usize>()
-            + user.members.len()
-            + user.callables.len()
-            + user.expression_sources.len();
-        assert!(!user_sources.is_empty());
-        assert!(!user.expression_sources.is_empty());
-        assert_eq!(user_sources.len(), retained_row_count);
-        assert!(user_sources.iter().all(|site| site.unit == user_unit));
-        assert!(library_sources.iter().all(|site| site.unit == library_unit));
-        assert_eq!(
-            user_sources
-                .iter()
-                .map(|site| site.source_start)
-                .collect::<Vec<_>>(),
-            library_sources
-                .iter()
-                .map(|site| site.source_start)
-                .collect::<Vec<_>>()
-        );
-
-        let user_tickets = user.tickets();
-        let library_tickets = library.tickets();
-        let library_anchors = library.source_anchor_tickets();
-        assert_eq!(library_anchors.len(), 1);
-        assert_eq!(user_tickets.len(), library_tickets.len());
-        assert_eq!(
-            user_tickets.iter().copied().collect::<BTreeSet<_>>().len(),
-            user_tickets.len()
-        );
-        assert_eq!(
-            library_tickets
-                .iter()
-                .copied()
-                .collect::<BTreeSet<_>>()
-                .len(),
-            library_tickets.len()
-        );
-        assert_eq!(
-            finish_user_reservations(user_store, &user_tickets),
-            finish_library_reservations(library_ledger, &library_tickets, &library_anchors)
-        );
-    }
-
-    #[test]
-    fn root_initializers_have_exact_user_and_library_owners_with_parity() {
-        let source = r#"
-const variable: number = "variable";
-function functionDefault(parameter: number = "parameter") {}
-class Container {
-  property: number = "property";
-  accessor accessorProperty: number = "accessor";
-}
-"#;
-        let allocator = Allocator::default();
-        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
-        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
-
-        let module = ModuleOrdinal::new(4);
-        let slot = UnitSlot::new(2);
-        let file = LibraryFileOrdinal::new(4);
-        let user_unit = SourceUnit::User {
-            module_ordinal: module,
-            unit_slot: slot,
-        };
-        let library_unit = SourceUnit::Library { file_ordinal: file };
-        let mut user = LexicalReservations::<UserRecordTicket>::default();
-        let mut user_store = EventStore::default();
-        user.reserve_program(module, slot, &parsed.program, &mut user_store)
-            .unwrap();
-        let mut library = LexicalReservations::<LibraryRecordTicket>::default();
-        let mut library_ledger = LibraryEventLedger::default();
-        library
-            .reserve_library_program(file, &parsed.program, &mut library_ledger)
-            .unwrap();
-
-        let starts = [
-            "\"variable\"",
-            "\"parameter\"",
-            "\"property\"",
-            "\"accessor\"",
-        ]
-        .map(|needle| source_span(source, needle).start);
-        assert_eq!(user.initializers.len(), starts.len());
-        assert_eq!(library.initializers.len(), starts.len());
-        let user_owners = starts.map(|start| {
-            user.initializer_owner_at(user_unit, start)
-                .expect("user initializer owns its exact root expression")
-        });
-        let library_owners = starts.map(|start| {
-            library
-                .initializer_owner_at(library_unit, start)
-                .expect("library initializer owns its exact root expression")
-        });
-        assert_eq!(
-            user_owners.into_iter().collect::<BTreeSet<_>>().len(),
-            starts.len()
-        );
-        assert_eq!(
-            library_owners.into_iter().collect::<BTreeSet<_>>().len(),
-            starts.len()
-        );
-
-        let user_tickets = user.tickets();
-        let library_tickets = library.tickets();
-        assert_eq!(user_tickets.len(), library_tickets.len());
-        assert_eq!(
-            finish_user_reservations(user_store, &user_tickets),
-            finish_library_reservations(
-                library_ledger,
-                &library_tickets,
-                &library.source_anchor_tickets(),
-            )
-        );
-    }
-
-    #[test]
-    fn identical_spans_in_two_library_files_keep_exact_sources_and_keys() {
-        let source = "class Shared { method(value = 1) { return () => value; } }";
-        let allocator = Allocator::default();
-        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
-        assert!(parsed.diagnostics.is_empty());
-        let first = LibraryFileOrdinal::new(2);
-        let second = LibraryFileOrdinal::new(7);
-        let mut reservations = LexicalReservations::<LibraryRecordTicket>::default();
-        let mut ledger = LibraryEventLedger::default();
-        reservations
-            .reserve_library_program(first, &parsed.program, &mut ledger)
-            .unwrap();
-        reservations
-            .reserve_library_program(second, &parsed.program, &mut ledger)
-            .unwrap();
-
-        let sources = reservation_sources(&reservations);
-        let first_unit = SourceUnit::Library {
-            file_ordinal: first,
-        };
-        let second_unit = SourceUnit::Library {
-            file_ordinal: second,
-        };
-        let first_sources = sources
-            .iter()
-            .filter(|site| site.unit == first_unit)
-            .map(|site| site.source_start)
-            .collect::<Vec<_>>();
-        let second_sources = sources
-            .iter()
-            .filter(|site| site.unit == second_unit)
-            .map(|site| site.source_start)
-            .collect::<Vec<_>>();
-        assert!(!first_sources.is_empty());
-        assert_eq!(first_sources, second_sources);
-        assert_eq!(first_sources.len() + second_sources.len(), sources.len());
-
-        let class_start = reservations
-            .classes
-            .iter()
-            .find(|class| class.source.unit == first_unit)
-            .map(|class| class.source.source_start)
-            .expect("first library class source");
-        let first_class = reservations
-            .class_at(SourceOrdinal::Library(first), class_start)
-            .expect("first library class site");
-        let second_class = reservations
-            .class_at(SourceOrdinal::Library(second), class_start)
-            .expect("second library class site");
-        assert_ne!(first_class, second_class);
-        let callable_start = reservations
-            .callables_by_source
-            .keys()
-            .find(|(source, _)| *source == SourceOrdinal::Library(first))
-            .map(|(_, source_start)| *source_start)
-            .expect("first library callable source");
-        let first_callable = reservations
-            .callable_at(SourceOrdinal::Library(first), callable_start)
-            .expect("first library callable site");
-        let second_callable = reservations
-            .callable_at(SourceOrdinal::Library(second), callable_start)
-            .expect("second library callable site");
-        assert_ne!(first_callable, second_callable);
-
-        let anchor_batches = reservations
-            .source_anchor_tickets()
-            .into_iter()
-            .map(|anchor| CheckerEffects::new(anchor).records)
-            .collect();
-        LibrarySemanticReportingAdapter::new(&mut ledger)
-            .complete_semantic_batches(anchor_batches)
-            .unwrap();
-        let tickets = reservations.tickets();
-        for (index, ticket) in tickets.iter().enumerate() {
-            ledger.complete(*ticket, vec![test_record(index)]).unwrap();
-        }
-        let keys = ledger
-            .finish()
-            .expect("both library files have complete inventories")
-            .into_iter()
-            .map(|(key, _)| key)
-            .collect::<Vec<_>>();
-        let first_keys = keys
-            .iter()
-            .filter(|key| key.file_ordinal == first)
-            .map(|key| (key.source_start, key.event_ordinal, key.record_ordinal))
-            .collect::<Vec<_>>();
-        let second_keys = keys
-            .iter()
-            .filter(|key| key.file_ordinal == second)
-            .map(|key| (key.source_start, key.event_ordinal, key.record_ordinal))
-            .collect::<Vec<_>>();
-        assert!(!first_keys.is_empty());
-        assert_eq!(first_keys, second_keys);
-        assert_eq!(
-            keys.iter().copied().collect::<BTreeSet<_>>().len(),
-            keys.len()
-        );
-    }
-
-    #[test]
-    fn library_inventory_is_unique_complete_once_and_reports_exact_failures() {
-        let source = "const value = () => class { method() { return 1; } };";
-        let allocator = Allocator::default();
-        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
-        assert!(parsed.diagnostics.is_empty());
-        let file = LibraryFileOrdinal::new(13);
-        let mut reservations = LexicalReservations::<LibraryRecordTicket>::default();
-        let mut ledger = LibraryEventLedger::default();
-        reservations
-            .reserve_library_program(file, &parsed.program, &mut ledger)
-            .unwrap();
-        let tickets = reservations.tickets();
-        let anchors = reservations.source_anchor_tickets();
-        let inventory = anchors.iter().chain(&tickets).copied().collect::<Vec<_>>();
-        assert!(!tickets.is_empty());
-        assert_eq!(
-            inventory.iter().copied().collect::<BTreeSet<_>>().len(),
-            inventory.len()
-        );
-        let duplicate = tickets[0];
-        ledger.complete(duplicate, Vec::new()).unwrap();
-        assert_eq!(
-            ledger.complete(duplicate, Vec::new()),
-            Err(LibraryEventLedgerError::DuplicateCompletion(duplicate))
-        );
-        for ticket in tickets
-            .iter()
-            .copied()
-            .filter(|ticket| *ticket != duplicate)
-        {
-            ledger.complete(ticket, Vec::new()).unwrap();
-        }
-        let anchor_batches = anchors
-            .into_iter()
-            .map(|anchor| CheckerEffects::new(anchor).records)
-            .collect();
-        LibrarySemanticReportingAdapter::new(&mut ledger)
-            .complete_semantic_batches(anchor_batches)
-            .unwrap();
-        assert!(ledger.finish().unwrap().is_empty());
-
-        let short_source = "const x = 1;";
-        let short_allocator = Allocator::default();
-        let short = Parser::new(&short_allocator, short_source, SourceType::ts()).parse();
-        assert!(short.diagnostics.is_empty());
-        let unfinished_file = LibraryFileOrdinal::new(21);
-        let mut unfinished_reservations = LexicalReservations::<LibraryRecordTicket>::default();
-        let mut unfinished_ledger = LibraryEventLedger::default();
-        unfinished_reservations
-            .reserve_library_program(unfinished_file, &short.program, &mut unfinished_ledger)
-            .unwrap();
-        let unfinished_tickets = unfinished_reservations.tickets();
-        let anchor_batches = unfinished_reservations
-            .source_anchor_tickets()
-            .into_iter()
-            .map(|anchor| CheckerEffects::new(anchor).records)
-            .collect();
-        LibrarySemanticReportingAdapter::new(&mut unfinished_ledger)
-            .complete_semantic_batches(anchor_batches)
-            .unwrap();
-        let missing = unfinished_tickets[0];
-        for ticket in unfinished_tickets
-            .iter()
-            .copied()
-            .filter(|ticket| *ticket != missing)
-        {
-            unfinished_ledger.complete(ticket, Vec::new()).unwrap();
-        }
-        let expected_unfinished = vec![LibraryEventKey {
-            file_ordinal: unfinished_file,
-            source_start: u32::try_from(short_source.find('x').unwrap()).unwrap(),
-            event_ordinal: 0,
-            record_ordinal: 0,
-        }];
-        assert!(matches!(
-            unfinished_ledger.finish(),
-            Err(LibraryEventLedgerError::Unfinished(keys)) if keys == expected_unfinished
-        ));
     }
 
     #[test]
@@ -2910,42 +2334,6 @@ class Container {
                 Some(ticket)
             );
         }
-    }
-
-    #[test]
-    fn library_source_units_are_nominal_without_user_event_storage() {
-        use super::super::events_library::{LibraryEventLedger, LibraryRecordTicket};
-        use crate::source::LibraryFileOrdinal;
-
-        let file_ordinal = LibraryFileOrdinal::new(12);
-        let site = SourceSite {
-            unit: SourceUnit::Library { file_ordinal },
-            source_start: 38,
-        };
-        let _: LexicalReservations<LibraryRecordTicket> = LexicalReservations::default();
-        let mut ledger = LibraryEventLedger::default();
-        let event = ledger.reserve_event(file_ordinal, site.source_start);
-        let tickets = SiteTickets {
-            immediate: event.primary,
-            deferred: ledger.reserve_record(event.id).unwrap(),
-            incomplete: ledger.reserve_record(event.id).unwrap(),
-        };
-        let reservation = TopLevelReservation::<LibraryRecordTicket> {
-            source: site,
-            tickets,
-            class: None,
-            callable: None,
-        };
-
-        assert_eq!(site.ordinal(), SourceOrdinal::Library(file_ordinal));
-        assert_ne!(
-            SourceOrdinal::User(ModuleOrdinal::new(12)),
-            SourceOrdinal::Library(file_ordinal)
-        );
-        assert_eq!(reservation.source, site);
-        assert_eq!(reservation.tickets.immediate, event.primary);
-        assert_eq!(reservation.tickets.deferred.record_ordinal, 1);
-        assert_eq!(reservation.tickets.incomplete.record_ordinal, 2);
     }
 
     #[test]

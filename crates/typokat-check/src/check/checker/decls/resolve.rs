@@ -118,7 +118,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let PublishedTypeGroupSurface::Enum(whole) = published.surface else {
             return None;
         };
-        self.record_replay_demand(super::super::replay_index::ReplayOwner::TypeGroup(group));
         Some((group, whole))
     }
 
@@ -271,7 +270,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let Expression::Identifier(identifier) = object else {
             return None;
         };
-        let symbol = self.resolve_value_replay(scope, identifier.name.as_str())?;
+        let symbol = self.resolve_value_symbol(scope, identifier.name.as_str())?;
         self.enum_member_endpoint(symbol, name)
     }
 
@@ -299,7 +298,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 self.direct_enum_value_expression(scope, &parenthesized.expression)
             }
             Expression::Identifier(identifier) => self
-                .resolve_value_replay(scope, identifier.name.as_str())
+                .resolve_value_symbol(scope, identifier.name.as_str())
                 .and_then(|symbol| self.enum_value_group(symbol))
                 .is_some(),
             _ => matches!(
@@ -588,7 +587,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             return Some(self.interner.well_known().error);
         }
 
-        let resolved_type_symbol = self.resolve_type_replay(scope, name);
+        let resolved_type_symbol = self.resolve_type_symbol(scope, name);
         let decl_id = match resolved_type_symbol
             .and_then(|symbol| self.binder.symbols.get(symbol))
             .and_then(|symbol| symbol.ty)
@@ -608,7 +607,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 // applied type parameters, and qualified names are found/deferred cases,
                 // not "cannot find name".
                 let found_in_some_space = resolved_type_symbol.is_some()
-                    || self.resolve_value_replay(scope, name).is_some()
+                    || self.resolve_value_symbol(scope, name).is_some()
                     || self.lookup_type_param(name).is_some();
                 if !found_in_some_space {
                     let span = Span::from_oxc(ident.span);
@@ -743,29 +742,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .iter()
             .map(|segment| segment.span)
             .collect::<Vec<_>>();
-        let trace = self.replay_trace.clone();
-        let _observation = trace
-            .as_ref()
-            .map(|trace| trace.observe_typed_demand("qualified-type-binding"));
-        let mut resolution = self.binder.resolve_qualified_type_path_traced(
-            scope,
-            &names,
-            || {
-                if let Some(trace) = &trace {
-                    trace.demand_root_slot(
-                        names[0],
-                        super::super::replay_index::RootSlotKind::Namespace,
-                    );
-                }
-            },
-            |namespace| {
-                if let Some(trace) = &trace {
-                    trace.demand(super::super::replay_index::ReplayOwner::Namespace(
-                        namespace,
-                    ));
-                }
-            },
-        );
+        let mut resolution = self.binder.resolve_qualified_type_path(scope, &names);
         if matches!(resolution, QualifiedTypePathResolution::MissingRoot { .. })
             && self.checker_local_qualified_root(names[0])
         {
@@ -794,7 +771,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
         ) && segments.len() == 2
         {
-            if let Some(symbol) = self.resolve_type_replay(scope, segments[0].name) {
+            if let Some(symbol) = self.resolve_type_symbol(scope, segments[0].name) {
                 let rejected_enum_group = self
                     .binder
                     .symbols
@@ -872,7 +849,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
             return None;
         }
-        self.record_replay_demand(super::super::replay_index::ReplayOwner::TypeGroup(group));
         let rejected_enum_group = self.binder.enum_group(group).is_some_and(|view| {
             view.buildability != crate::binder::namespace::EnumGroupBuildability::Buildable
         });
@@ -884,19 +860,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
             self.emit_diagnostic(Diagnostic::cannot_use_namespace_as_type(span, name));
             return Some(self.interner.well_known().error);
-        }
-        if (matches!(self.current_source, crate::source::SourceUnit::User { .. })
-            || self.combined_user_source)
-            && self
-                .private_collision_unavailable_type_groups
-                .contains(&group)
-        {
-            if let Some(arguments) = arguments {
-                for argument in &arguments.params {
-                    let _ = self.lower_annotation(scope, argument);
-                }
-            }
-            return None;
         }
         assert!(
             !self.type_environment.is_published()
@@ -1401,11 +1364,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 environment.classes()
             }
         };
-        let class_lookup =
-            super::super::replay_index::ReplayClassLookup::new(classes, self.replay_trace.clone());
         let outcome = build_class_application(
             &mut SurfaceTypeFactory::new(self.interner),
-            &class_lookup,
+            classes,
             ClassApplicationRequest {
                 class: class_id,
                 parameters: &parameters,

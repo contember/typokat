@@ -7,9 +7,9 @@
 //! change that adds or removes one of those outcomes shows up as a named `(code, site)`
 //! difference against the committed pin instead of as a moved count.
 
-use super::compiler::LibraryCompilerError;
 use super::profile::ExactLibraryProfile;
-use crate::check::checker::library_compiler::NormalizedCheckerRecordForTest;
+use super::provider::{LibraryBaseProvider, LibraryInitCause, LibraryInitError, LibraryInitStage};
+use crate::check::checker::project_local::project_local_pass_port::NormalizedCheckerRecordForTest;
 use crate::check::checker::project_local::{
     project_local_semantic_candidate_for_test, ProjectLocalOrderForTest,
     ProjectLocalSemanticRequestForTest, ProjectSourceReexportPolicy,
@@ -119,24 +119,28 @@ impl LibraryRecordCensus {
     ///
     /// The deliberate inspection entry point uses one project-local force-all session. Nothing
     /// calls it on an ordinary checking path, and the semantic product is dropped as this returns.
-    pub fn compile_packaged_profile() -> Result<Self, LibraryCompilerError> {
-        let profile = ExactLibraryProfile::load_packaged().map_err(|error| {
-            LibraryCompilerError::Compilation {
-                message: error.to_string(),
-            }
-        })?;
-        Self::compile(&profile)
+    pub fn compile_packaged_profile() -> Result<Self, LibraryInitError> {
+        let profile = ExactLibraryProfile::load_packaged()
+            .map_err(|error| profile_failed(error.to_string()))?;
+        let product = LibraryBaseProvider::new()
+            .get()
+            .map_err(|error| error.as_ref().clone())?;
+        Self::compile_product(&profile, product)
     }
 
     /// [`compile_packaged_profile`](Self::compile_packaged_profile) for an already-loaded profile.
-    pub fn compile(profile: &ExactLibraryProfile) -> Result<Self, LibraryCompilerError> {
+    pub fn compile(profile: &ExactLibraryProfile) -> Result<Self, LibraryInitError> {
         let product = Arc::new(
-            super::declaration_product::build_declaration_product(profile).map_err(|error| {
-                LibraryCompilerError::Compilation {
-                    message: error.to_string(),
-                }
-            })?,
+            super::declaration_product::build_declaration_product(profile)
+                .map_err(super::provider::declaration_product_failed)?,
         );
+        Self::compile_product(profile, product)
+    }
+
+    fn compile_product(
+        profile: &ExactLibraryProfile,
+        product: Arc<typokat_library_product::LibraryDeclarationProduct>,
+    ) -> Result<Self, LibraryInitError> {
         let product_for_run = Arc::clone(&product);
         let run = crate::frontend::run_prepared_project_frontend(
             vec![crate::frontend::FileInput {
@@ -171,32 +175,31 @@ impl LibraryRecordCensus {
         );
         let trace = run
             .product
-            .ok_or_else(|| LibraryCompilerError::Compilation {
-                message: run.preparation_error.map_or_else(
+            .ok_or_else(|| {
+                compilation_failed(run.preparation_error.map_or_else(
                     || format!("benign census project parse failed: {:?}", run.parse_errors),
                     |error| error.to_string(),
-                ),
+                ))
             })?
-            .map_err(|error| LibraryCompilerError::Compilation {
-                message: error.to_string(),
-            })?
-            .map_err(|error| LibraryCompilerError::Compilation {
-                message: error.to_string(),
-            })?;
+            .map_err(|error| compilation_failed(error.to_string()))?
+            .map_err(|error| compilation_failed(error.to_string()))?;
         let records = trace
             .force_all
-            .ok_or_else(|| LibraryCompilerError::Compilation {
-                message: "project-local census did not return force-all output".to_owned(),
+            .ok_or_else(|| {
+                compilation_failed(
+                    "project-local census did not return force-all output".to_owned(),
+                )
             })?
             .library_records;
 
         let mut sites = BTreeMap::new();
         for source in profile.sources() {
             let text = std::str::from_utf8(source.bytes()).map_err(|_| {
-                LibraryCompilerError::SourceNotUtf8 {
-                    file_ordinal: source.ordinal().index(),
-                    name: source.name().to_owned(),
-                }
+                profile_failed(format!(
+                    "library source ordinal {} ({:?}) is not UTF-8",
+                    source.ordinal().index(),
+                    source.name()
+                ))
             })?;
             sites.insert(source.name(), LineIndex::new(text));
         }
@@ -204,12 +207,10 @@ impl LibraryRecordCensus {
         let mut entries = Vec::with_capacity(records.len());
         for record in records {
             let lines = sites.get(record.source_path.as_str()).ok_or_else(|| {
-                LibraryCompilerError::Compilation {
-                    message: format!(
-                        "project-local record names source {:?} outside the profile",
-                        record.source_path
-                    ),
-                }
+                compilation_failed(format!(
+                    "project-local record names source {:?} outside the profile",
+                    record.source_path
+                ))
             })?;
             let (kind, span_start, name, detail) = match record.record {
                 NormalizedCheckerRecordForTest::Diagnostic(diagnostic) => (
@@ -359,21 +360,32 @@ fn census_lines(pinned: &str) -> impl Iterator<Item = &str> {
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
 }
 
+fn profile_failed(message: String) -> LibraryInitError {
+    LibraryInitError::new(
+        LibraryInitStage::ProfileLoad,
+        LibraryInitCause::ProfileRejected { message },
+    )
+}
+
+fn compilation_failed(message: String) -> LibraryInitError {
+    LibraryInitError::new(
+        LibraryInitStage::Compile,
+        LibraryInitCause::CompilationFailed { message },
+    )
+}
+
 #[cfg(test)]
 fn entry(
     sites: &BTreeMap<LibraryFileOrdinal, (&str, LineIndex)>,
     file_ordinal: LibraryFileOrdinal,
     record: &CheckerRecord,
-) -> Result<LibraryRecordEntry, LibraryCompilerError> {
-    let (file, lines) =
-        sites
-            .get(&file_ordinal)
-            .ok_or_else(|| LibraryCompilerError::Compilation {
-                message: format!(
-                    "library record names file ordinal {} outside the profile",
-                    file_ordinal.index()
-                ),
-            })?;
+) -> Result<LibraryRecordEntry, LibraryInitError> {
+    let (file, lines) = sites.get(&file_ordinal).ok_or_else(|| {
+        compilation_failed(format!(
+            "library record names file ordinal {} outside the profile",
+            file_ordinal.index()
+        ))
+    })?;
     let (kind, span_start, name, detail) = match record {
         CheckerRecord::Diagnostic(diagnostic) => (
             LibraryRecordKind::Diagnostic,
@@ -417,10 +429,6 @@ fn escape(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::check::checker::library_compiler::{
-        CompleteSourceRouteWorkForTest, CompleteSourceRouteWorkScopeForTest,
-    };
-    use crate::compiler::LibraryCompilerWorkScopeForTest;
     use crate::diagnostics::{Diagnostic, IncompleteSurface};
     use crate::span::Span;
 
@@ -490,11 +498,10 @@ mod tests {
             LibraryFileOrdinal::new(7),
             &CheckerRecord::Diagnostic(Diagnostic::cannot_find_name(Span::new(17, 18), "A")),
         );
-        assert!(matches!(
-            outside,
-            Err(LibraryCompilerError::Compilation { message })
-                if message.contains("file ordinal 7")
-        ));
+        assert!(outside
+            .expect_err("record outside profile")
+            .to_string()
+            .contains("file ordinal 7"));
     }
 
     #[test]
@@ -556,29 +563,11 @@ mod tests {
     }
 
     #[test]
-    fn packaged_census_uses_the_production_publisher_without_legacy_work() {
-        let complete_source_scope = CompleteSourceRouteWorkScopeForTest::start();
-        let legacy_compiler_scope = LibraryCompilerWorkScopeForTest::start();
+    fn packaged_census_uses_the_cached_declaration_product() {
         let census = LibraryRecordCensus::compile_packaged_profile().expect("packaged census");
-        let legacy_compiler_work = legacy_compiler_scope.finish();
-        let complete_source_work = complete_source_scope.finish();
 
-        assert_eq!(
-            (
-                census.entries().len(),
-                census.diagnostics(),
-                census.incompletes(),
-                complete_source_work,
-                legacy_compiler_work,
-            ),
-            (
-                709,
-                322,
-                387,
-                CompleteSourceRouteWorkForTest::default(),
-                Default::default(),
-            ),
-            "the census must come from the production publisher without legacy work",
-        );
+        assert_eq!(census.entries().len(), 709);
+        assert_eq!(census.diagnostics(), 322);
+        assert_eq!(census.incompletes(), 387);
     }
 }

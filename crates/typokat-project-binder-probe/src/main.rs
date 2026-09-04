@@ -13,8 +13,8 @@ use serde_json::{json, Value};
 #[cfg(feature = "jemalloc-wall")]
 use std::time::Instant;
 use typokat_library::project_binder_probe::{
-    with_project_binder_probe, ProbeSetupControl, ProjectBinderPhaseCountersV1,
-    ProjectBinderProbeResult, ProjectBinderProbeSetupCountersV1,
+    with_project_binder_probe, ProjectBinderPhaseCountersV1, ProjectBinderProbeResult,
+    ProjectBinderProbeSetupCountersV1,
 };
 
 const USER_SOURCE_PATH: &str = "/candidate/reflect_packaged.ts";
@@ -36,11 +36,7 @@ impl Drop for DhatArtifactGuard {
 fn setup_json(counters: ProjectBinderProbeSetupCountersV1) -> Value {
     json!({
         "declaration_product_initializations": counters.declaration_product_initializations,
-        "semantic_base_initializations": counters.semantic_base_initializations,
-        "retained_setup_control_bytes": counters.retained_setup_control_bytes,
         "user_parses": counters.user_parses,
-        "user_binds": counters.user_binds,
-        "user_checks": counters.user_checks,
     })
 }
 
@@ -48,28 +44,13 @@ fn phase_json(counters: ProjectBinderPhaseCountersV1) -> Value {
     json!({
         "constructions": counters.constructions,
         "declaration_product_initializations": counters.declaration_product_initializations,
-        "semantic_base_initializations": counters.semantic_base_initializations,
         "product_consumptions": counters.product_consumptions,
         "fresh_binder_entries": counters.fresh_binder_entries,
         "bound_library_units": counters.bound_library_units,
         "bound_user_units": counters.bound_user_units,
         "typed_binding_products": counters.typed_binding_products,
         "heavy_binding_projections": counters.heavy_binding_projections,
-        "user_parses": counters.user_parses,
-        "user_binds": counters.user_binds,
-        "user_checks": counters.user_checks,
         "source_manifest_builds": counters.source_manifest_builds,
-        "library_frontend_entries": counters.library_frontend_entries,
-        "library_parse_units": counters.library_parse_units,
-        "library_bind_batches": counters.library_bind_batches,
-        "library_ast_bind_units": counters.library_ast_bind_units,
-        "library_full_source_products_consumed": counters.library_full_source_products_consumed,
-        "library_checkpoint_products_consumed": counters.library_checkpoint_products_consumed,
-        "compiler_compiles": counters.compiler_compiles,
-        "compiler_parses": counters.compiler_parses,
-        "compiler_binds": counters.compiler_binds,
-        "compiler_checks": counters.compiler_checks,
-        "user_delta_forks": counters.user_delta_forks,
         "event_reservations": counters.event_reservations,
         "query_cache_writes": {
             "projection": counters.query_cache_writes.projection,
@@ -107,7 +88,7 @@ fn common_receipt(inputs: ReceiptInputs<'_>) -> Value {
         binder_digests,
     } = inputs;
     json!({
-        "schema": 2,
+        "schema": 3,
         "route": "immutable-library-product-to-fresh-project-binder",
         "mode": mode,
         "allocator": allocator,
@@ -179,7 +160,7 @@ fn parse_wall_arguments(arguments: &[String]) -> Result<(usize, usize), String> 
 #[cfg(feature = "jemalloc-wall")]
 fn run_wall(arguments: &[String]) -> Result<String, String> {
     let (warmups, samples) = parse_wall_arguments(arguments)?;
-    with_project_binder_probe(ProbeSetupControl::None, |probe| {
+    with_project_binder_probe(|probe| {
         let setup = probe.setup_receipt().counters();
         let product_digest = probe.product_digest().to_owned();
         let mut warmup_work = ProjectBinderPhaseCountersV1::default();
@@ -240,12 +221,10 @@ fn run_heap(arguments: &[String]) -> Result<String, String> {
         }
         [argument, ..] => return Err(format!("unknown heap argument {argument:?}")),
     };
-    let setup_control = match control {
-        "none" | "phase-retained-1m" => ProbeSetupControl::None,
-        "setup-retained-1m" => ProbeSetupControl::RetainedOneMiB,
-        _ => return Err(format!("unknown heap control {control:?}")),
-    };
-    with_project_binder_probe(setup_control, |probe| {
+    if !matches!(control, "none" | "phase-retained-1m") {
+        return Err(format!("unknown heap control {control:?}"));
+    }
+    with_project_binder_probe(|probe| {
         let setup = probe.setup_receipt().counters();
         let product_digest = probe.product_digest().to_owned();
         let _artifact = DhatArtifactGuard("dhat-heap.json");

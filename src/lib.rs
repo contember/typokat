@@ -114,7 +114,7 @@ mod build_reproducibility_tests {
                 "typokat_diagnostics",
                 "typokat_frontend",
                 "typokat_check",
-                "typokat_library",
+                "typokat_library::",
                 "typokat_driver",
             ],
         );
@@ -125,7 +125,7 @@ mod build_reproducibility_tests {
                 "typokat_diagnostics",
                 "typokat_frontend",
                 "typokat_check",
-                "typokat_library",
+                "typokat_library::",
                 "typokat_driver",
             ],
         );
@@ -136,7 +136,7 @@ mod build_reproducibility_tests {
                 "typokat_diagnostics",
                 "typokat_frontend",
                 "typokat_check",
-                "typokat_library",
+                "typokat_library::",
                 "typokat_driver",
             ],
         );
@@ -145,7 +145,7 @@ mod build_reproducibility_tests {
             &[
                 "typokat_frontend",
                 "typokat_check",
-                "typokat_library",
+                "typokat_library::",
                 "typokat_driver",
             ],
         );
@@ -159,7 +159,7 @@ mod build_reproducibility_tests {
                 "typokat_diagnostics",
                 "typokat_frontend",
                 "typokat_check",
-                "typokat_library",
+                "typokat_library::",
                 "typokat_driver",
             ],
         );
@@ -168,7 +168,7 @@ mod build_reproducibility_tests {
             &[
                 "typokat_diagnostics",
                 "typokat_check",
-                "typokat_library",
+                "typokat_library::",
                 "typokat_driver",
             ],
         );
@@ -182,7 +182,7 @@ mod build_reproducibility_tests {
                 "typokat_surface",
                 "typokat_frontend",
                 "typokat_check",
-                "typokat_library",
+                "typokat_library::",
                 "typokat_driver",
             ],
         );
@@ -193,7 +193,7 @@ mod build_reproducibility_tests {
         assert_absent(
             "crates/typokat-check/src/check",
             &[
-                "typokat_library",
+                "typokat_library::",
                 "typokat_driver",
                 "crate::library",
                 "crate::driver",

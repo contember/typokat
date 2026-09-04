@@ -175,9 +175,9 @@ impl<'query> InferenceContext<'query> {
         let target = self.unwrap_transparent_declared_recipe(interner, target);
         let raw_source = source.ty;
         let raw_target = target.ty;
-        // Declared applications retain their generic recipe only on the raw nodes.
-        // Guard this match before normalization can replace either node with its
-        // structural materialization; mapper recursion still normalizes its children.
+        // Declared and lazy instantiation applications retain their generic arguments
+        // only on the raw nodes. Guard these matches before normalization can replace
+        // either node with its structural materialization; child recursion still normalizes.
         if !self.visited.insert((source.ty, target.ty)) {
             return;
         }
@@ -185,11 +185,11 @@ impl<'query> InferenceContext<'query> {
             self.infer_same_declared_recipe(interner, source, target, candidates);
         let same_declared_application_head = !same_declared_recipe
             && self.infer_same_declared_application_head(interner, source, target, candidates);
+        let same_instantiation_head = !same_declared_recipe
+            && !same_declared_application_head
+            && self.infer_same_instantiation_head(interner, source, target, candidates);
         self.visited.remove(&(source.ty, target.ty));
-        if same_declared_recipe {
-            return;
-        }
-        if same_declared_application_head {
+        if same_declared_recipe || same_declared_application_head || same_instantiation_head {
             return;
         }
         let (source, target) = if let Some(normalization) = self.normalization {
@@ -601,6 +601,55 @@ impl<'query> InferenceContext<'query> {
                 target,
                 DerivationEdge::DeclaredArgument(index),
                 target_child_ty,
+            );
+            self.infer_derived(interner, source_child, target_child, candidates);
+        }
+        true
+    }
+
+    fn infer_same_instantiation_head(
+        &mut self,
+        interner: &mut Interner,
+        source: DerivedType,
+        target: DerivedType,
+        candidates: &mut Candidates,
+    ) -> bool {
+        let Some(source_instantiation) = interner.store().instantiation_type(source.ty).cloned()
+        else {
+            return false;
+        };
+        let Some(target_instantiation) = interner.store().instantiation_type(target.ty).cloned()
+        else {
+            return false;
+        };
+        if source_instantiation.base != target_instantiation.base
+            || source_instantiation.args.len() != target_instantiation.args.len()
+            || source_instantiation
+                .args
+                .iter()
+                .map(|(parameter, _)| *parameter)
+                .ne(target_instantiation
+                    .args
+                    .iter()
+                    .map(|(parameter, _)| *parameter))
+        {
+            return false;
+        }
+        for (index, ((_, source_argument), (_, target_argument))) in source_instantiation
+            .args
+            .into_iter()
+            .zip(target_instantiation.args)
+            .enumerate()
+        {
+            let source_child = interner.derivation_child(
+                source,
+                DerivationEdge::InstantiationArgument(index),
+                source_argument,
+            );
+            let target_child = interner.derivation_child(
+                target,
+                DerivationEdge::InstantiationArgument(index),
+                target_argument,
             );
             self.infer_derived(interner, source_child, target_child, candidates);
         }

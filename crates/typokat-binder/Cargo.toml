@@ -5,7 +5,7 @@ edition.workspace = true
 
 [features]
 measurement-counters = ["typokat-types/measurement-counters"]
-test-utils = []
+test-utils = ["typokat-types/test-utils"]
 session-bench = []
 
 [dependencies]

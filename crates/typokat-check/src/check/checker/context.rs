@@ -10,7 +10,7 @@ use crate::binder::Binder;
 use crate::check::flow::{FlowNode, FlowNodeId};
 use crate::check::query::SemanticQueryState;
 use crate::diagnostics::Diagnostic;
-use crate::source::{LibraryFileOrdinal, SourceUnit};
+use crate::source::SourceUnit;
 use crate::span::Span;
 use crate::types::layered::{LayeredMap, LayeredSet, LayeredVec};
 use crate::types::repr::{ClassId, EnumId, ObjectType, PropertyType, TypeParamId, Visibility};
@@ -20,8 +20,8 @@ use oxc_ast::ast::{
     Class, TSEnumDeclaration, TSInterfaceHeritage, TSType, TSTypeParameterDeclaration,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, BTreeSet};
+use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::ops::{Deref, DerefMut, Index, IndexMut};
 use std::sync::Arc;
 
@@ -32,13 +32,13 @@ use super::classes::body::{BodyClassView, BodyMemberEnvironment};
 use super::classes::construction::DraftClassTypeParameter;
 use super::classes::publication::StagedClassValidation;
 use super::classes::retained::RetainedClassCallable;
-use super::events::{CandidateEffects, UserRecordTicket};
+#[cfg(any(test, feature = "test-utils"))]
+use super::events::CandidateEffects;
+use super::events::UserRecordTicket;
 use super::function_groups::FunctionGroupRegistry;
 use super::lexical_events::{CallableTickets, LexicalReservations};
 use super::library_identities::{LibrarySemanticIdentities, NativeArrayGroups};
 use super::namespace_values::NamespaceValueRegistry;
-use super::replay_index::ReplayDependencyTrace;
-use super::replay_index::ReplayOwner;
 use super::reporting_record::CheckerRecord;
 use super::type_groups::{
     InterfaceTypedAlternative, PublishedTypeParameterDefault, TypeEnvironmentState,
@@ -206,6 +206,7 @@ impl<Ticket: Copy> CheckerRecordBatch<Ticket> {
         }
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     fn from_parts(owner: Ticket, records: Vec<CheckerRecord>) -> Self {
         Self { owner, records }
     }
@@ -240,11 +241,6 @@ impl<Ticket: Copy> CheckerRecordBatch<Ticket> {
 
     pub(in crate::check::checker) fn len(&self) -> usize {
         self.records.len()
-    }
-
-    #[cfg(test)]
-    fn records(&self) -> &[CheckerRecord] {
-        &self.records
     }
 }
 
@@ -287,55 +283,7 @@ pub(in crate::check::checker) struct CheckerEffects<Ticket: Copy = UserRecordTic
     pub(in crate::check::checker) constraint_checks: Vec<ConstraintCheckObligation>,
     pub(in crate::check::checker) interface_relations: Vec<InterfaceRelationObligation>,
     pub(in crate::check::checker) override_checks: Vec<OverrideCheck>,
-    replay_owners: Option<Box<DeferredReplayOwners>>,
     pub(in crate::check::checker) nested: Vec<CheckerEffects<Ticket>>,
-}
-
-#[derive(Default)]
-struct DeferredReplayOwners {
-    obligations: Vec<Option<ReplayOwner>>,
-    constraint_checks: Vec<Option<ReplayOwner>>,
-    interface_relations: Vec<Option<ReplayOwner>>,
-    override_checks: Vec<Option<ReplayOwner>>,
-}
-
-fn push_replay_owner(
-    sidecar: &mut Option<Box<DeferredReplayOwners>>,
-    select: impl Fn(&mut DeferredReplayOwners) -> &mut Vec<Option<ReplayOwner>>,
-    prior_len: usize,
-    owner: Option<ReplayOwner>,
-) {
-    if sidecar.is_none() && owner.is_none() {
-        return;
-    }
-    let owners = select(sidecar.get_or_insert_with(|| Box::new(DeferredReplayOwners::default())));
-    if owners.len() < prior_len {
-        owners.resize(prior_len, None);
-    }
-    owners.push(owner);
-}
-
-fn merge_replay_owner_column(
-    target: &mut Option<Box<DeferredReplayOwners>>,
-    source: &mut Option<Box<DeferredReplayOwners>>,
-    select: impl Fn(&mut DeferredReplayOwners) -> &mut Vec<Option<ReplayOwner>>,
-    target_len: usize,
-    source_len: usize,
-) {
-    if target.is_none() && source.is_none() {
-        return;
-    }
-    let target_column =
-        select(target.get_or_insert_with(|| Box::new(DeferredReplayOwners::default())));
-    target_column.resize(target_len, None);
-    match source.as_mut() {
-        Some(source) => {
-            let source_column = select(source);
-            source_column.resize(source_len, None);
-            target_column.append(source_column);
-        }
-        None => target_column.resize(target_len + source_len, None),
-    }
 }
 
 impl<Ticket: Copy> CheckerEffects<Ticket> {
@@ -347,7 +295,6 @@ impl<Ticket: Copy> CheckerEffects<Ticket> {
             constraint_checks: Vec::new(),
             interface_relations: Vec::new(),
             override_checks: Vec::new(),
-            replay_owners: None,
             nested: Vec::new(),
         }
     }
@@ -368,6 +315,7 @@ impl<Ticket: Copy> CheckerEffects<Ticket> {
     pub(in crate::check::checker) fn discard(self) {}
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 impl CheckerEffects<UserRecordTicket> {
     pub(in crate::check::checker) fn from_records(records: CandidateEffects) -> Self {
         let (owner, records) = records.into_parts();
@@ -378,7 +326,6 @@ impl CheckerEffects<UserRecordTicket> {
             constraint_checks: Vec::new(),
             interface_relations: Vec::new(),
             override_checks: Vec::new(),
-            replay_owners: None,
             nested: Vec::new(),
         }
     }
@@ -389,40 +336,8 @@ impl<Ticket: Copy + PartialEq> CheckerEffects<Ticket> {
         self.activated = true;
     }
 
-    pub(in crate::check::checker) const fn is_activated(&self) -> bool {
-        self.activated
-    }
-
-    pub(in crate::check::checker) fn merge(&mut self, mut child: CheckerEffects<Ticket>) {
+    pub(in crate::check::checker) fn merge(&mut self, child: CheckerEffects<Ticket>) {
         self.activated |= child.activated;
-        merge_replay_owner_column(
-            &mut self.replay_owners,
-            &mut child.replay_owners,
-            |owners| &mut owners.obligations,
-            self.obligations.len(),
-            child.obligations.len(),
-        );
-        merge_replay_owner_column(
-            &mut self.replay_owners,
-            &mut child.replay_owners,
-            |owners| &mut owners.constraint_checks,
-            self.constraint_checks.len(),
-            child.constraint_checks.len(),
-        );
-        merge_replay_owner_column(
-            &mut self.replay_owners,
-            &mut child.replay_owners,
-            |owners| &mut owners.interface_relations,
-            self.interface_relations.len(),
-            child.interface_relations.len(),
-        );
-        merge_replay_owner_column(
-            &mut self.replay_owners,
-            &mut child.replay_owners,
-            |owners| &mut owners.override_checks,
-            self.override_checks.len(),
-            child.override_checks.len(),
-        );
         self.records.merge(child.records);
         self.obligations.extend(child.obligations);
         self.constraint_checks.extend(child.constraint_checks);
@@ -434,110 +349,26 @@ impl<Ticket: Copy + PartialEq> CheckerEffects<Ticket> {
     pub(in crate::check::checker) fn push_obligation(
         &mut self,
         obligation: DeferredRelationObligation,
-        owner: Option<ReplayOwner>,
     ) {
-        push_replay_owner(
-            &mut self.replay_owners,
-            |owners| &mut owners.obligations,
-            self.obligations.len(),
-            owner,
-        );
         self.obligations.push(obligation);
     }
 
     pub(in crate::check::checker) fn push_constraint_check(
         &mut self,
         check: ConstraintCheckObligation,
-        owner: Option<ReplayOwner>,
     ) {
-        push_replay_owner(
-            &mut self.replay_owners,
-            |owners| &mut owners.constraint_checks,
-            self.constraint_checks.len(),
-            owner,
-        );
         self.constraint_checks.push(check);
     }
 
     pub(in crate::check::checker) fn push_interface_relation(
         &mut self,
         relation: InterfaceRelationObligation,
-        owner: Option<ReplayOwner>,
     ) {
-        push_replay_owner(
-            &mut self.replay_owners,
-            |owners| &mut owners.interface_relations,
-            self.interface_relations.len(),
-            owner,
-        );
         self.interface_relations.push(relation);
     }
 
-    pub(in crate::check::checker) fn push_override(
-        &mut self,
-        check: OverrideCheck,
-        owner: Option<ReplayOwner>,
-    ) {
-        push_replay_owner(
-            &mut self.replay_owners,
-            |owners| &mut owners.override_checks,
-            self.override_checks.len(),
-            owner,
-        );
+    pub(in crate::check::checker) fn push_override(&mut self, check: OverrideCheck) {
         self.override_checks.push(check);
-    }
-
-    pub(in crate::check::checker) fn take_constraint_checks(
-        &mut self,
-    ) -> (
-        Vec<ConstraintCheckObligation>,
-        Option<Vec<Option<ReplayOwner>>>,
-    ) {
-        let values = std::mem::take(&mut self.constraint_checks);
-        let owners = self
-            .replay_owners
-            .as_mut()
-            .map(|owners| std::mem::take(&mut owners.constraint_checks));
-        (values, owners)
-    }
-
-    pub(in crate::check::checker) fn take_interface_relations(
-        &mut self,
-    ) -> (
-        Vec<InterfaceRelationObligation>,
-        Option<Vec<Option<ReplayOwner>>>,
-    ) {
-        let values = std::mem::take(&mut self.interface_relations);
-        let owners = self
-            .replay_owners
-            .as_mut()
-            .map(|owners| std::mem::take(&mut owners.interface_relations));
-        (values, owners)
-    }
-
-    pub(in crate::check::checker) fn take_obligations(
-        &mut self,
-    ) -> (
-        Vec<DeferredRelationObligation>,
-        Option<Vec<Option<ReplayOwner>>>,
-    ) {
-        let values = std::mem::take(&mut self.obligations);
-        let owners = self
-            .replay_owners
-            .as_mut()
-            .map(|owners| std::mem::take(&mut owners.obligations));
-        (values, owners)
-    }
-
-    pub(in crate::check::checker) fn take_override_checks(
-        &mut self,
-    ) -> (Vec<OverrideCheck>, Option<Vec<Option<ReplayOwner>>>) {
-        let values = std::mem::take(&mut self.override_checks);
-        let owners = self
-            .replay_owners
-            .as_mut()
-            .map(|owners| std::mem::take(&mut owners.override_checks));
-        (values, owners)
     }
 }
 
@@ -602,13 +433,12 @@ pub(in crate::check::checker) struct NetDeclWrite {
 
 thread_local! {
     /// The live declaration observation log, `None` when closed. It is thread-local
-    /// rather than a field because [`DeclTypes`] is also the process-wide frozen
-    /// library base and must stay `Sync`; exactly one table is live per checking
-    /// thread, and the log is open only for the outermost in-flight call/`new`
-    /// argument frame.
+    /// rather than a field because exactly one table is live per checking thread, and
+    /// the log is open only for the outermost in-flight call/`new` argument frame.
     static DECL_OBSERVATIONS: RefCell<Option<Vec<DeclEvent>>> = const { RefCell::new(None) };
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 fn observing_declarations() -> bool {
     DECL_OBSERVATIONS.with(|log| log.borrow().is_some())
 }
@@ -637,18 +467,14 @@ fn observe_declaration(
 #[derive(Clone)]
 pub(in crate::check::checker) struct DeclTypes {
     base: Arc<[Option<TypeId>]>,
-    overrides: Option<FxHashMap<ValueStorageId, Option<TypeId>>>,
     local: Vec<Option<TypeId>>,
-    sealed: bool,
 }
 
 impl DeclTypes {
     pub(in crate::check::checker) fn new(count: u32) -> Self {
         DeclTypes {
             base: Arc::from([]),
-            overrides: None,
             local: vec![None; count as usize],
-            sealed: false,
         }
     }
 
@@ -656,16 +482,8 @@ impl DeclTypes {
     /// table through here, so the observation log cannot fall behind.
     fn put(&mut self, id: ValueStorageId, value: Option<TypeId>) {
         if id.index() < self.base.len() {
-            let previous = self.untracked_get(id);
-            let Some(overrides) = self.overrides.as_mut() else {
-                return;
-            };
-            if previous != value {
-                overrides.insert(id, value);
-                observe_declaration(id, previous, value, true);
-            }
             return;
-        };
+        }
         let Some(slot) = id
             .index()
             .checked_sub(self.base.len())
@@ -690,24 +508,9 @@ impl DeclTypes {
     fn untracked_get(&self, id: ValueStorageId) -> Option<TypeId> {
         let index = id.index();
         if index < self.base.len() {
-            return self
-                .overrides
-                .as_ref()
-                .and_then(|overrides| overrides.get(&id).copied())
-                .unwrap_or_else(|| self.base.get(index).copied().flatten());
+            return self.base.get(index).copied().flatten();
         }
         self.local.get(index - self.base.len()).copied().flatten()
-    }
-
-    pub(in crate::check::checker) fn is_unoverridden_frozen_slot(
-        &self,
-        id: ValueStorageId,
-    ) -> bool {
-        id.index() < self.base.len()
-            && self
-                .overrides
-                .as_ref()
-                .is_some_and(|overrides| !overrides.contains_key(&id))
     }
 
     /// Open/close the observation log. The checker keeps it open for exactly the
@@ -835,14 +638,13 @@ impl DeclTypes {
 
     pub(in crate::check::checker) fn get(&self, id: ValueStorageId) -> Option<TypeId> {
         let value = self.untracked_get(id);
-        // Shared-prefix slots are immutable, but a sparse collision epoch can replace
-        // one after a memoized walk reads it.
-        if id.index() >= self.base.len() || self.overrides.is_some() {
+        if id.index() >= self.base.len() {
             observe_declaration(id, value, value, false);
         }
         value
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     pub(in crate::check::checker) fn resize(&mut self, count: u32) {
         debug_assert!(
             !observing_declarations(),
@@ -857,119 +659,9 @@ impl DeclTypes {
         }
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     pub(in crate::check::checker) fn len(&self) -> usize {
         self.base.len() + self.local.len()
-    }
-
-    pub(in crate::check::checker) fn snapshot_slots(&self) -> Vec<Option<TypeId>> {
-        let mut slots = self
-            .base
-            .iter()
-            .chain(&self.local)
-            .copied()
-            .collect::<Vec<_>>();
-        if let Some(overrides) = &self.overrides {
-            for (id, value) in overrides {
-                if let Some(slot) = slots.get_mut(id.index()) {
-                    *slot = *value;
-                }
-            }
-        }
-        slots
-    }
-
-    #[cfg(test)]
-    pub(in crate::check::checker) fn from_snapshot_slots(
-        slots: Vec<Option<TypeId>>,
-        expected_len: u32,
-    ) -> Result<Self, &'static str> {
-        if slots.len()
-            != usize::try_from(expected_len)
-                .map_err(|_| "snapshot declaration count does not fit usize")?
-        {
-            return Err("snapshot declaration type slots do not match binder storage count");
-        }
-        Ok(Self {
-            base: Arc::from([]),
-            overrides: None,
-            local: slots,
-            sealed: false,
-        })
-    }
-
-    pub(in crate::check::checker) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
-        debug_assert!(
-            !observing_declarations(),
-            "declaration storage never seals inside an argument frame"
-        );
-        if self.sealed || !self.base.is_empty() {
-            return Err("declaration types are already sealed");
-        }
-        self.base = Arc::from(std::mem::take(&mut self.local));
-        self.sealed = true;
-        Ok(())
-    }
-
-    pub(in crate::check::checker) fn fork_delta(&self) -> Result<Self, &'static str> {
-        debug_assert!(
-            !observing_declarations(),
-            "declaration storage never forks inside an argument frame"
-        );
-        if !self.sealed || !self.local.is_empty() {
-            return Err("declaration type base is not sealed");
-        }
-        Ok(Self {
-            base: Arc::clone(&self.base),
-            overrides: None,
-            local: Vec::new(),
-            sealed: true,
-        })
-    }
-
-    pub(in crate::check::checker) fn fork_sparse_delta(&self) -> Result<Self, &'static str> {
-        let mut delta = self.fork_delta()?;
-        delta.overrides = Some(FxHashMap::default());
-        Ok(delta)
-    }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(in crate::check::checker) fn shares_base_with(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.base, &other.base)
-    }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(in crate::check::checker) fn local_len(&self) -> usize {
-        self.local.len()
-    }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(in crate::check::checker) fn local_slots(
-        &self,
-    ) -> impl Iterator<Item = (ValueStorageId, Option<TypeId>)> + '_ {
-        let base_len = self.base.len();
-        self.local
-            .iter()
-            .copied()
-            .enumerate()
-            .map(move |(index, ty)| {
-                let id = u32::try_from(base_len + index).expect("value storage id fits u32");
-                (ValueStorageId(id), ty)
-            })
-    }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(in crate::check::checker) fn changed_slots(
-        &self,
-    ) -> impl Iterator<Item = (ValueStorageId, Option<TypeId>)> + '_ {
-        self.overrides
-            .iter()
-            .flat_map(|overrides| overrides.iter().map(|(&id, &ty)| (id, ty)))
-            .chain(self.local_slots())
-    }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(in crate::check::checker) fn replacement_len(&self) -> usize {
-        self.overrides.as_ref().map_or(0, FxHashMap::len)
     }
 }
 
@@ -1204,52 +896,11 @@ pub(in crate::check::checker) enum TypeDeclView<'table, 'ast> {
     Local(&'table TypeDecl<'ast>),
 }
 
+#[derive(Clone)]
 pub(in crate::check::checker) struct TypeDeclTable<'ast> {
     published: LayeredVec<PublishedTypeDecl>,
     replacements: FxHashMap<usize, TypeDecl<'ast>>,
     local: Vec<TypeDecl<'ast>>,
-}
-
-/// Copying the declaration table is per-row deep work, so surface lowering must borrow it
-/// rather than clone it — `surface_lowering_copy_spec` pins that to zero copied rows.
-impl<'ast> Clone for TypeDeclTable<'ast> {
-    fn clone(&self) -> Self {
-        #[cfg(test)]
-        record_copied_decl_rows_for_test(self.published.local_len() + self.local.len());
-        Self {
-            published: self.published.clone(),
-            replacements: self.replacements.clone(),
-            local: self.local.clone(),
-        }
-    }
-}
-
-#[cfg(test)]
-thread_local! {
-    static COPIED_DECL_ROWS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
-/// The base layer is shared by `Arc`, so only the local rows are actually deep-copied.
-#[cfg(test)]
-fn record_copied_decl_rows_for_test(rows: usize) {
-    if rows > 0 {
-        let rows = u64::try_from(rows).unwrap_or(u64::MAX);
-        COPIED_DECL_ROWS.set(COPIED_DECL_ROWS.get().saturating_add(rows));
-    }
-}
-
-#[cfg(test)]
-pub(in crate::check::checker) struct CopiedDeclRowScopeForTest(u64);
-
-#[cfg(test)]
-impl CopiedDeclRowScopeForTest {
-    pub(in crate::check::checker) fn start() -> Self {
-        Self(COPIED_DECL_ROWS.get())
-    }
-
-    pub(in crate::check::checker) fn finish(self) -> u64 {
-        COPIED_DECL_ROWS.get().saturating_sub(self.0)
-    }
 }
 
 impl<'ast> TypeDeclTable<'ast> {
@@ -1289,9 +940,6 @@ impl<'ast> TypeDeclTable<'ast> {
         index: usize,
     ) -> Option<&mut TypeDecl<'ast>> {
         if index < self.published.len() {
-            if !self.published.prefix_overrides_enabled() {
-                return None;
-            }
             let published = self.published.get(index)?;
             return Some(
                 self.replacements
@@ -1357,7 +1005,7 @@ impl<'ast> TypeDeclTable<'ast> {
         &self,
         index: usize,
     ) -> bool {
-        index < self.published.len() && self.published.prefix_overrides_enabled()
+        index >= self.published.base_len() && index < self.published.len()
     }
 
     pub(in crate::check::checker) fn install_project_local_published(
@@ -1365,11 +1013,10 @@ impl<'ast> TypeDeclTable<'ast> {
         index: usize,
         declaration: PublishedTypeDecl,
     ) -> Result<(), &'static str> {
-        let slot = self
+        *self
             .published
             .get_mut_local(index)
-            .ok_or("project-local type declaration is outside the published prefix")?;
-        *slot = declaration;
+            .ok_or("project-local type declaration is outside the published prefix")? = declaration;
         Ok(())
     }
 }
@@ -1402,6 +1049,7 @@ impl<'ast> IndexMut<usize> for TypeDeclTable<'ast> {
 #[derive(Clone)]
 pub(in crate::check::checker) struct TypeResolvedTable {
     published: LayeredVec<Option<TypeId>>,
+    replacements: FxHashMap<usize, Option<TypeId>>,
     local: Vec<Option<TypeId>>,
 }
 
@@ -1409,6 +1057,7 @@ impl TypeResolvedTable {
     pub(in crate::check::checker) fn with_published(published: LayeredVec<Option<TypeId>>) -> Self {
         Self {
             published,
+            replacements: FxHashMap::default(),
             local: Vec::new(),
         }
     }
@@ -1419,8 +1068,9 @@ impl TypeResolvedTable {
     }
 
     pub(in crate::check::checker) fn get(&self, index: usize) -> Option<&Option<TypeId>> {
-        self.published
-            .get(index)
+        self.replacements
+            .get(&index)
+            .or_else(|| self.published.get(index))
             .or_else(|| self.local.get(index.checked_sub(self.published.len())?))
     }
 
@@ -1429,7 +1079,8 @@ impl TypeResolvedTable {
         index: usize,
     ) -> Option<&mut Option<TypeId>> {
         if index < self.published.len() {
-            return self.published.get_mut_local(index);
+            let resolution = self.published.get(index).copied()?;
+            return Some(self.replacements.entry(index).or_insert(resolution));
         }
         self.local.get_mut(index.checked_sub(self.published.len())?)
     }
@@ -1438,7 +1089,7 @@ impl TypeResolvedTable {
         &self,
         index: usize,
     ) -> bool {
-        index < self.published.len() && self.published.prefix_overrides_enabled()
+        index >= self.published.base_len() && index < self.published.len()
     }
 
     pub(in crate::check::checker) fn install_project_local_published(
@@ -1446,11 +1097,10 @@ impl TypeResolvedTable {
         index: usize,
         resolution: Option<TypeId>,
     ) -> Result<(), &'static str> {
-        let slot = self
+        *self
             .published
             .get_mut_local(index)
-            .ok_or("project-local type resolution is outside the published prefix")?;
-        *slot = resolution;
+            .ok_or("project-local type resolution is outside the published prefix")? = resolution;
         Ok(())
     }
 }
@@ -1459,6 +1109,7 @@ impl From<Vec<Option<TypeId>>> for TypeResolvedTable {
     fn from(local: Vec<Option<TypeId>>) -> Self {
         Self {
             published: LayeredVec::default(),
+            replacements: FxHashMap::default(),
             local,
         }
     }
@@ -1940,38 +1591,7 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     pub(in crate::check::checker) current_module: ScopeId,
     /// Exact source identity, independent of reporting authority.
     pub(in crate::check::checker) current_source: SourceUnit,
-    /// Present only while the source-backed library compiler generates replay evidence.
-    pub(in crate::check::checker) replay_trace: Option<ReplayDependencyTrace>,
-    /// Extra dependency reads consumed only by the compact private-replay plan.
-    pub(in crate::check::checker) capture_compact_replay_dependencies: bool,
-    pub(in crate::check::checker) compact_only_replay_edges:
-        RefCell<BTreeSet<super::replay_index::ReplayReverseEdge>>,
-    pub(in crate::check::checker) compact_demand_capture: Cell<bool>,
-    pub(in crate::check::checker) compact_demand_added: Cell<bool>,
-    /// Exact affected prefix closure admitted for this private collision epoch.
-    pub(in crate::check::checker) private_collision_affected: BTreeSet<ReplayOwner>,
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(in crate::check::checker) private_collision_state_drop_witness:
-        Option<super::library_compiler::PrivateCollisionStateDropWitnessForTest>,
-    /// Exact frozen value owner at each retained library binding site.
-    pub(in crate::check::checker) private_library_value_owner_by_site:
-        BTreeMap<(LibraryFileOrdinal, u32), Option<ValueStorageId>>,
-    /// Affected type groups whose user augmentation could not be represented.
-    pub(in crate::check::checker) private_collision_unavailable_type_groups: BTreeSet<TypeGroupId>,
-    /// Library groups with user fragments in a fresh combined-source construction.
-    pub(in crate::check::checker) combined_user_library_type_groups: BTreeSet<TypeGroupId>,
-    /// The fresh combined-source pass is currently checking its user suffix.
-    pub(in crate::check::checker) combined_user_source: bool,
-    /// Library-owned value selected by each affected sealed root slot.
-    pub(in crate::check::checker) private_collision_value_winners:
-        FxHashMap<SymbolId, ValueStorageId>,
-    /// Exact continued declarations certified to publish through an affected winner.
-    pub(in crate::check::checker) private_collision_value_occurrence_winners:
-        FxHashMap<DeclId, Option<ValueStorageId>>,
-    pub(in crate::check::checker) private_collision_value_winners_by_name:
-        FxHashMap<String, ValueStorageId>,
-    pub(in crate::check::checker) combined_source_library_value_precedence: bool,
-    /// Published `globalThis` object, augmented only inside a private collision epoch.
+    /// Published `globalThis` object for the current session.
     pub(in crate::check::checker) global_object_type: Option<TypeId>,
     /// Hierarchical lexical/speculative output owners; only the outer owner commits.
     pub(in crate::check::checker) effect_stack: Vec<CheckerEffects<Ticket>>,
@@ -2012,6 +1632,8 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     pub(in crate::check::checker) semantic_queries: SemanticQueryState,
     /// Source-provider-selected full-library roots for native-syntax member surfaces.
     pub(in crate::check::checker) library_semantic_identities: Option<LibrarySemanticIdentities>,
+    /// Immutable-product globals whose value winner must not be replaced by user refreshes.
+    pub(in crate::check::checker) project_local_library_global_names: FxHashSet<String>,
     /// Exact library-root array roles available before type-group publication.
     pub(in crate::check::checker) early_native_array_groups: Option<NativeArrayGroups>,
     /// Outermost type-declaration source that authorizes construction-only array roles.
@@ -2265,18 +1887,15 @@ mod tests {
     use super::DeclTypes;
     use crate::binder::declaration::ValueStorageId;
     use crate::check::checker::events::{user_record_ticket_key, EventStore, UserRecordTicket};
-    use crate::check::checker::events_library::{LibraryEventLedger, LibraryRecordTicket};
     use crate::check::checker::lexical_events::LexicalReservations;
-    use crate::check::checker::reporting_record::CheckerRecord;
-    use crate::diagnostics::{Diagnostic, DiagnosticCode, IncompleteSurface};
-    use crate::source::{LibraryFileOrdinal, ModuleOrdinal, SourceUnit};
+    use crate::diagnostics::Diagnostic;
+    use crate::source::{ModuleOrdinal, SourceUnit};
     use crate::span::Span;
     use crate::types::store::TypeId;
     use crate::types::Interner;
     use oxc_allocator::Allocator;
     use oxc_parser::Parser;
     use oxc_span::SourceType;
-    use rustc_hash::FxHashMap;
 
     /// The two rules the argument-walk memo's soundness rests on (backlog `95`).
     #[test]
@@ -2324,201 +1943,6 @@ mod tests {
         assert_eq!(DeclTypes::log_mark(), 0);
         assert_eq!(types.get(ValueStorageId(0)), Some(TypeId(10)));
         assert!(DeclTypes::dependencies_since(0).is_empty());
-    }
-
-    #[test]
-    fn declaration_types_share_a_frozen_prefix_and_isolate_dense_suffixes() {
-        let mut base = DeclTypes::new(3);
-        base.set(ValueStorageId(0), TypeId(10));
-        base.set(ValueStorageId(2), TypeId(12));
-        base.freeze_as_base().expect("declaration prefix seals");
-
-        let mut first = base.fork_delta().expect("first declaration suffix");
-        let second = base.fork_delta().expect("second declaration suffix");
-        assert!(first.shares_base_with(&second));
-        first.resize(5);
-        first.set(ValueStorageId(3), TypeId(13));
-        first.set(ValueStorageId(4), TypeId(14));
-
-        assert_eq!(first.local_len(), 2);
-        assert_eq!(first.get(ValueStorageId(0)), Some(TypeId(10)));
-        assert_eq!(first.get(ValueStorageId(3)), Some(TypeId(13)));
-        assert_eq!(first.get(ValueStorageId(4)), Some(TypeId(14)));
-        assert_eq!(second.len(), 3);
-        assert_eq!(second.get(ValueStorageId(3)), None);
-        assert_eq!(base.len(), 3);
-    }
-
-    #[test]
-    fn sparse_prefix_reads_invalidate_memos_after_an_override() {
-        let mut base = DeclTypes::new(1);
-        base.set(ValueStorageId(0), TypeId(10));
-        base.freeze_as_base().expect("declaration prefix seals");
-        let mut sparse = base
-            .fork_sparse_delta()
-            .expect("sparse declaration epoch forks");
-
-        DeclTypes::open_log();
-        let mark = DeclTypes::log_mark();
-        assert_eq!(sparse.get(ValueStorageId(0)), Some(TypeId(10)));
-        let dependencies = DeclTypes::dependencies_since(mark);
-        assert_eq!(dependencies, [(ValueStorageId(0), Some(TypeId(10)))]);
-        assert!(sparse.dependencies_hold(&dependencies));
-
-        sparse.set(ValueStorageId(0), TypeId(20));
-        assert!(!sparse.dependencies_hold(&dependencies));
-        assert_eq!(sparse.get(ValueStorageId(0)), Some(TypeId(20)));
-        let writes = DeclTypes::net_writes_since(mark);
-        assert_eq!(writes.len(), 1);
-        assert_eq!(writes[0].id, ValueStorageId(0));
-        assert_eq!(writes[0].previous, Some(TypeId(10)));
-        assert_eq!(writes[0].value, Some(TypeId(20)));
-
-        sparse.set(ValueStorageId(0), TypeId(10));
-        assert!(DeclTypes::net_writes_since(mark).is_empty());
-        DeclTypes::close_log();
-
-        let sibling = base
-            .fork_sparse_delta()
-            .expect("sibling declaration epoch forks");
-        assert_eq!(sibling.get(ValueStorageId(0)), Some(TypeId(10)));
-    }
-
-    #[test]
-    fn library_pass_finishes_ordered_record_batches_without_reporting_authority() {
-        let mut ledger = LibraryEventLedger::default();
-        let first = ledger.reserve_event(LibraryFileOrdinal::new(7), 11);
-        let first_owner: LibraryRecordTicket = first.primary;
-        let nested_owner = ledger
-            .reserve_record(first.id)
-            .expect("nested record reservation");
-        let second_owner: LibraryRecordTicket =
-            ledger.reserve_event(LibraryFileOrdinal::new(7), 13).primary;
-
-        let prelude_allocator = Allocator::default();
-        let user_allocator = Allocator::default();
-        let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
-        let user = Parser::new(&user_allocator, "", SourceType::ts()).parse();
-        let binder = crate::binder::bind_module_with_prelude(&prelude.program, &user.program);
-        let mut interner = Interner::with_intrinsics();
-        let string = interner.well_known().string;
-        let number = interner.well_known().number;
-        let mut pass = super::super::build_pass_with_tickets(
-            &mut interner,
-            &binder,
-            Vec::new().into(),
-            vec![None; binder.type_groups.len()].into(),
-            super::DeclTypes::new(binder.decl_count),
-            0,
-            super::super::PassReportingPlan {
-                reporting: super::super::PassReporting {
-                    source: SourceUnit::Library {
-                        file_ordinal: LibraryFileOrdinal::new(7),
-                    },
-                    lexical_events: LexicalReservations::default(),
-                    suppress_effects: false,
-                },
-                pending_tickets: vec![first_owner, second_owner],
-                ticket_key: crate::check::checker::events_library::library_record_ticket_key,
-            },
-        );
-        pass.type_environment = super::super::type_groups::TypeEnvironmentState::Published(
-            super::super::type_groups::PublishedTypeEnvironment::empty(),
-        );
-        assert_eq!(
-            pass.current_source,
-            SourceUnit::Library {
-                file_ordinal: LibraryFileOrdinal::new(7),
-            }
-        );
-        pass.pending_effects[0]
-            .records
-            .diagnostic(Diagnostic::cannot_find_name(Span::new(11, 12), "first"));
-        pass.pending_effects[0]
-            .records
-            .incomplete(IncompleteSurface::new(
-                "library/effects",
-                Span::new(12, 13),
-                "second",
-            ));
-        pass.pending_effects[0].push_constraint_check(
-            super::ConstraintCheckObligation {
-                checks: vec![(Some(string), number, Span::new(14, 15))],
-                substitutions: FxHashMap::default(),
-            },
-            None,
-        );
-        pass.pending_effects[1]
-            .records
-            .record(CheckerRecord::Diagnostic(Diagnostic::cannot_find_name(
-                Span::new(13, 14),
-                "third",
-            )));
-        pass.with_ticket_effects(second_owner, |pass| {
-            pass.emit_diagnostic(Diagnostic::cannot_find_name(Span::new(15, 16), "fourth"));
-        });
-        pass.with_ticket_effects(first_owner, |pass| {
-            pass.emit_diagnostic(Diagnostic::cannot_find_name(Span::new(16, 17), "fifth"));
-            pass.with_ticket_effects(nested_owner, |pass| {
-                pass.emit_diagnostic(Diagnostic::cannot_find_name(Span::new(17, 18), "nested"));
-            });
-        });
-        pass.with_ticket_effects(second_owner, |pass| {
-            pass.emit_diagnostic(Diagnostic::cannot_find_name(Span::new(18, 19), "sixth"));
-        });
-        let batches = super::super::finish_semantic_effects(&mut pass);
-
-        assert_eq!(batches.len(), 3);
-        assert_eq!(batches[0].owner(), first_owner);
-        assert_eq!(batches[1].owner(), second_owner);
-        assert_eq!(batches[2].owner(), nested_owner);
-        assert!(matches!(
-            batches[0].records(),
-            [
-                CheckerRecord::Diagnostic(first),
-                CheckerRecord::Incomplete(second),
-                CheckerRecord::Diagnostic(fifth),
-                CheckerRecord::Diagnostic(constraint),
-            ] if first.span.start == 11
-                && second.span.start == 12
-                && fifth.span.start == 16
-                && constraint.code == DiagnosticCode::TK2344
-                && constraint.span == Span::new(14, 15)
-        ));
-        assert!(matches!(
-            batches[1].records(),
-            [
-                CheckerRecord::Diagnostic(third),
-                CheckerRecord::Diagnostic(fourth),
-                CheckerRecord::Diagnostic(sixth),
-            ] if third.span.start == 13 && fourth.span.start == 15 && sixth.span.start == 18
-        ));
-        assert!(matches!(
-            batches[2].records(),
-            [CheckerRecord::Diagnostic(nested)] if nested.span.start == 17
-        ));
-
-        for batch in batches {
-            let (owner, records) = batch.into_parts();
-            ledger.complete(owner, records).expect("complete batch");
-        }
-        let replay = ledger.finish().expect("complete library replay");
-        assert_eq!(
-            replay
-                .iter()
-                .map(|(key, _)| (key.event_ordinal, key.record_ordinal))
-                .collect::<Vec<_>>(),
-            vec![
-                (0, 0),
-                (0, 0),
-                (0, 0),
-                (0, 0),
-                (0, 1),
-                (1, 0),
-                (1, 0),
-                (1, 0)
-            ]
-        );
     }
 
     #[test]

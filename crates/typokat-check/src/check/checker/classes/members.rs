@@ -42,21 +42,15 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .and_then(|site| self.lexical_events.class(site))
             .and_then(|reservation| reservation.binding.as_ref())
             .cloned();
-        let _replay_owner_scope = binding.as_ref().and_then(|binding| {
-            self.replay_trace.as_ref().map(|trace| {
-                trace.scope(super::super::replay_index::ReplayOwner::Class(
-                    binding.class_id,
-                ))
-            })
-        });
-        let published_templates = binding.as_ref().and_then(|binding| {
-            match self.published_class_replay(binding.class_id) {
-                DemandOutcome::Ready(surface) => {
-                    Some((surface.instance_template(), surface.static_template()))
-                }
-                DemandOutcome::Exhausted(_) => None,
-            }
-        });
+        let published_templates =
+            binding
+                .as_ref()
+                .and_then(|binding| match self.published_class(binding.class_id) {
+                    DemandOutcome::Ready(surface) => {
+                        Some((surface.instance_template(), surface.static_template()))
+                    }
+                    DemandOutcome::Exhausted(_) => None,
+                });
         let body_view = binding
             .as_ref()
             .and_then(|binding| self.class_body_views.get(&binding.class_id).cloned());

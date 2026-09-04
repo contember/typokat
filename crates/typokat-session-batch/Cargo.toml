@@ -14,7 +14,7 @@ sha2.workspace = true
 typokat-check = { workspace = true, features = ["session-bench"] }
 typokat-core.workspace = true
 typokat-frontend.workspace = true
-typokat-library = { workspace = true, features = ["session-bench"] }
+typokat-library.workspace = true
 typokat-library-product.workspace = true
 
 [dev-dependencies]

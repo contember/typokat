@@ -3817,9 +3817,16 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
         #[cfg(any(test, feature = "test-utils"))]
         measure_query_demand(|measure| measure.evaluation_expansions += 1);
 
+        let predicate_only = policy == SemanticVisitPolicy::RelationRootOuterOnly
+            && self.interner.store().tag(ty) == TypeTag::Conditional;
+        let prerequisite_policy = if predicate_only {
+            SemanticVisitPolicy::Recursive
+        } else {
+            policy.operand_policy()
+        };
         let children = self.evaluation_prerequisites(ty, policy);
         for child in children {
-            self.visit_with_policy(child, policy.operand_policy());
+            self.visit_with_policy(child, prerequisite_policy);
         }
 
         let (outcome, exhausted, cycle_detected) = {
@@ -3890,15 +3897,6 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             .get(&ty)
             .or_else(|| self.durable_evaluation_memo.get(&ty))
             .copied();
-        if memoized.is_some() {
-            #[cfg(test)]
-            crate::check::checker::declaration_surface_measure::record_materialization_memo_hit();
-        }
-        #[cfg(test)]
-        if memoized.is_none() {
-            crate::check::checker::declaration_surface_measure::record_demand_materialization_root(
-            );
-        }
         let outcome = match self.interner.materialize_declared_derived(ty) {
             Ok(outcome) => outcome,
             Err(_) => {
@@ -3914,11 +3912,6 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             }
         };
         debug_assert!(memoized.is_none_or(|memoized| memoized == derived.ty));
-        #[cfg(test)]
-        if memoized.is_none() {
-            crate::check::checker::declaration_surface_measure::record_materialization_memo_insert(
-            );
-        }
         self.record_derived_evaluation(source, derived);
         self.visit_demand_result(derived.ty, policy);
         derived

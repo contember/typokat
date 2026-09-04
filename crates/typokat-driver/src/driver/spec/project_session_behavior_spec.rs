@@ -251,7 +251,7 @@ fn explicit_project_modes_preserve_import_diagnostics() {
                 ),
                 input(
                     "/session/import-errors/missing-export.ts",
-                    "import { missing } from './source.js';\nmissing;\n",
+                    "import { missing } from './source';\nmissing;\n",
                 ),
             ],
             vec!["TK2305"],

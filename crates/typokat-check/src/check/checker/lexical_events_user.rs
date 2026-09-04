@@ -2,7 +2,6 @@
 
 use super::events::{EventStore, EventStoreError, ReservedEvent, UserRecordTicket};
 use super::lexical_events::{LexicalReservationAllocator, LexicalReservations};
-use super::PrivateCombinedRecordTicket;
 use crate::binder::declaration::SourceDeclarationManifest;
 use crate::source::{ModuleOrdinal, SourceUnit, UnitSlot};
 use oxc_ast::ast::Program;
@@ -45,10 +44,15 @@ impl LexicalReservationAllocator for UserReservationAllocator<'_> {
         self.store.reserve_record(event.id)
     }
 }
+struct ProjectLocalUserReservationAllocator<'store> {
+    module_ordinal: ModuleOrdinal,
+    unit_slot: UnitSlot,
+    store: &'store mut EventStore,
+}
 
-impl LexicalReservationAllocator for PrivateCombinedUserReservationAllocator<'_> {
+impl LexicalReservationAllocator for ProjectLocalUserReservationAllocator<'_> {
     type Event = ReservedEvent;
-    type Ticket = PrivateCombinedRecordTicket;
+    type Ticket = super::ProjectLocalEffectTicket;
     type Error = EventStoreError;
 
     fn source_unit(&self) -> SourceUnit {
@@ -60,20 +64,14 @@ impl LexicalReservationAllocator for PrivateCombinedUserReservationAllocator<'_>
 
     fn reserve_event(&mut self, source_start: u32) -> (Self::Event, Self::Ticket) {
         let event = self.store.reserve_event(self.module_ordinal, source_start);
-        (event, PrivateCombinedRecordTicket::User(event.primary))
+        (event, super::ProjectLocalEffectTicket::User(event.primary))
     }
 
     fn reserve_record(&mut self, event: Self::Event) -> Result<Self::Ticket, Self::Error> {
         self.store
             .reserve_record(event.id)
-            .map(PrivateCombinedRecordTicket::User)
+            .map(super::ProjectLocalEffectTicket::User)
     }
-}
-
-struct PrivateCombinedUserReservationAllocator<'store> {
-    module_ordinal: ModuleOrdinal,
-    unit_slot: UnitSlot,
-    store: &'store mut EventStore,
 }
 
 impl LexicalReservations<UserRecordTicket> {
@@ -162,29 +160,8 @@ impl LexicalReservations<UserRecordTicket> {
         .map_err(ReservationError::from)
     }
 }
-
-impl LexicalReservations<PrivateCombinedRecordTicket> {
-    #[allow(dead_code)] // Compatibility tests may build a transient manifest.
-    pub(crate) fn reserve_private_continuation_program<'ast>(
-        &mut self,
-        module_ordinal: ModuleOrdinal,
-        unit_slot: UnitSlot,
-        program: &'ast Program<'ast>,
-        context: crate::binder::namespace::ModuleBindingContext,
-        store: &mut EventStore,
-    ) -> Result<(), ReservationError> {
-        let manifest = SourceDeclarationManifest::build(program);
-        self.reserve_private_continuation_program_with_declaration_manifest(
-            module_ordinal,
-            unit_slot,
-            program,
-            &manifest,
-            context,
-            store,
-        )
-    }
-
-    pub(crate) fn reserve_private_continuation_program_with_declaration_manifest(
+impl LexicalReservations<super::ProjectLocalEffectTicket> {
+    pub(crate) fn reserve_project_local_continuation_program_with_declaration_manifest(
         &mut self,
         module_ordinal: ModuleOrdinal,
         unit_slot: UnitSlot,
@@ -193,7 +170,7 @@ impl LexicalReservations<PrivateCombinedRecordTicket> {
         context: crate::binder::namespace::ModuleBindingContext,
         store: &mut EventStore,
     ) -> Result<(), ReservationError> {
-        let mut allocator = PrivateCombinedUserReservationAllocator {
+        let mut allocator = ProjectLocalUserReservationAllocator {
             module_ordinal,
             unit_slot,
             store,

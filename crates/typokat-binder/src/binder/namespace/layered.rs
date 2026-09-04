@@ -231,12 +231,6 @@ impl NamespaceTable {
             .filter_map(|id| self.namespaces.get(id.index()))
     }
 
-    pub fn prefix_namespace_replacements(&self) -> impl Iterator<Item = NamespaceId> + '_ {
-        self.namespaces
-            .prefix_replacements()
-            .filter_map(|(index, _)| u32::try_from(index).ok().map(NamespaceId))
-    }
-
     /// Whole-group instantiation after joining every reopening.
     pub fn aggregate_instance_state(&self, id: NamespaceId) -> Option<NamespaceInstanceState> {
         self.aggregate_instance_states.get(id.index()).copied()
@@ -484,14 +478,8 @@ impl NamespaceTable {
                 unsafe_names.insert(record.name.to_string());
             }
         };
-        if self.merges.prefix_overrides_enabled() {
-            for (_, record) in self.merges.changed_iter() {
-                classify_record(record);
-            }
-        } else {
-            for record in self.merges.iter() {
-                classify_record(record);
-            }
+        for record in self.merges.iter() {
+            classify_record(record);
         }
         if let Some(projection) = root_projection.as_deref_mut() {
             projection.finish_namespace_normalization(&namespace_contributors);
@@ -516,20 +504,11 @@ impl NamespaceTable {
                 });
                 return Vec::new();
             };
-            let safe_symbols: Vec<(String, SymbolId)> = if global.symbols.prefix_overrides_enabled()
-            {
-                global
-                    .symbols
-                    .changed_iter()
-                    .map(|(name, symbol)| (name.clone(), *symbol))
-                    .collect()
-            } else {
-                global
-                    .symbols
-                    .iter()
-                    .map(|(name, symbol)| (name.clone(), *symbol))
-                    .collect()
-            };
+            let safe_symbols = global
+                .symbols
+                .iter()
+                .map(|(name, symbol)| (name.clone(), *symbol))
+                .collect::<Vec<_>>();
             (safe_symbols, blocked_names)
         };
 
@@ -786,54 +765,6 @@ impl NamespaceTable {
         })
     }
 
-    pub(crate) fn fork_sparse_delta(&self) -> Result<Self, &'static str> {
-        Ok(Self {
-            namespaces: self.namespaces.fork_sparse_delta()?,
-            aggregate_instance_states: self.aggregate_instance_states.fork_sparse_delta()?,
-            standalone_value_storages: self.standalone_value_storages.fork_sparse_delta()?,
-            fragments: self.fragments.fork_sparse_delta()?,
-            members: self.members.fork_sparse_delta()?,
-            namespace_keys: self.namespace_keys.fork_delta()?,
-            canonical_namespaces: self.canonical_namespaces.fork_sparse_delta()?,
-            names: self.names.fork_sparse_delta()?,
-            name_ids: self.name_ids.fork_delta()?,
-            placements: self.placements.fork_sparse_delta()?,
-            placement_rows: FxHashMap::default(),
-            placement_rows_indexed: FxHashMap::default(),
-            merges: self.merges.fork_sparse_delta()?,
-            merge_indices: self.merge_indices.fork_sparse_delta()?,
-            merge_keys_by_declaration: self.merge_keys_by_declaration.fork_sparse_delta()?,
-            standalone_storage_namespaces: self.standalone_storage_namespaces.fork_delta()?,
-            declaration_owners_by_scope: self.declaration_owners_by_scope.fork_delta()?,
-            fragments_by_declaration: self.fragments_by_declaration.fork_delta()?,
-            fragment_private_scopes_by_site: self.fragment_private_scopes_by_site.fork_delta()?,
-            global_augmentations_by_site: self.global_augmentations_by_site.fork_delta()?,
-            umd_exports_by_site: self.umd_exports_by_site.fork_delta()?,
-            source_unit_indices_by_module: self.source_unit_indices_by_module.fork_delta()?,
-            library_export_default_sites: self.library_export_default_sites.fork_delta()?,
-            library_module_reporting_sites: self.library_module_reporting_sites.fork_delta()?,
-            globals: self.globals.fork_sparse_delta()?,
-            deferred_modules: self.deferred_modules.fork_sparse_delta()?,
-            deferred_children: self.deferred_children.fork_sparse_delta()?,
-            umd_exports: self.umd_exports.fork_sparse_delta()?,
-            export_contexts: self.export_contexts.fork_sparse_delta()?,
-            source_units: self.source_units.fork_sparse_delta()?,
-            compilation_origins_by_source: self
-                .compilation_origins_by_source
-                .fork_sparse_delta()?,
-            compilation_origin_conflicts: Vec::new(),
-            canonical_source_units: self.canonical_source_units.fork_sparse_delta()?,
-            canonical_globals: self.canonical_globals.fork_sparse_delta()?,
-            canonical_deferred_modules: self.canonical_deferred_modules.fork_sparse_delta()?,
-            canonical_deferred_children: self.canonical_deferred_children.fork_sparse_delta()?,
-            canonical_umd_exports: self.canonical_umd_exports.fork_sparse_delta()?,
-            canonical_export_contexts: self.canonical_export_contexts.fork_sparse_delta()?,
-            compilation_global: self.compilation_global,
-            script_namespace_root: self.script_namespace_root,
-            library_shared_globals: self.library_shared_globals,
-        })
-    }
-
     #[cfg(any(test, feature = "test-utils"))]
     pub fn shares_base_storage_with(&self, other: &Self) -> bool {
         self.namespaces.shares_base_with(&other.namespaces)
@@ -1006,74 +937,39 @@ impl NamespaceTable {
     #[cfg(any(test, feature = "test-utils"))]
     pub fn local_family_row_counts_for_test(&self) -> [usize; 2] {
         let indexes = self.aggregate_instance_states.local_len()
-            + self.aggregate_instance_states.replacement_len()
             + self.standalone_value_storages.local_len()
-            + self.standalone_value_storages.replacement_len()
             + self.fragments.local_len()
-            + self.fragments.replacement_len()
             + self.members.local_len()
-            + self.members.replacement_len()
             + self.namespace_keys.local_len()
-            + self.namespace_keys.replacement_len()
             + self.canonical_namespaces.local_len()
-            + self.canonical_namespaces.replacement_len()
             + self.name_ids.local_len()
-            + self.name_ids.replacement_len()
             + self.placements.local_len()
-            + self.placements.replacement_len()
             + self.merges.local_len()
-            + self.merges.replacement_len()
             + self.merge_indices.local_len()
-            + self.merge_indices.replacement_len()
             + self.merge_keys_by_declaration.local_len()
-            + self.merge_keys_by_declaration.replacement_len()
             + self.standalone_storage_namespaces.local_len()
-            + self.standalone_storage_namespaces.replacement_len()
             + self.declaration_owners_by_scope.local_len()
-            + self.declaration_owners_by_scope.replacement_len()
             + self.fragments_by_declaration.local_len()
-            + self.fragments_by_declaration.replacement_len()
             + self.fragment_private_scopes_by_site.local_len()
-            + self.fragment_private_scopes_by_site.replacement_len()
             + self.globals.local_len()
-            + self.globals.replacement_len()
             + self.deferred_modules.local_len()
-            + self.deferred_modules.replacement_len()
             + self.deferred_children.local_len()
-            + self.deferred_children.replacement_len()
             + self.umd_exports.local_len()
-            + self.umd_exports.replacement_len()
             + self.export_contexts.local_len()
-            + self.export_contexts.replacement_len()
             + self.source_units.local_len()
-            + self.source_units.replacement_len()
             + self.compilation_origins_by_source.local_len()
-            + self.compilation_origins_by_source.replacement_len()
             + self.canonical_source_units.local_len()
-            + self.canonical_source_units.replacement_len()
             + self.canonical_globals.local_len()
-            + self.canonical_globals.replacement_len()
             + self.canonical_deferred_modules.local_len()
-            + self.canonical_deferred_modules.replacement_len()
             + self.canonical_deferred_children.local_len()
-            + self.canonical_deferred_children.replacement_len()
             + self.canonical_umd_exports.local_len()
-            + self.canonical_umd_exports.replacement_len()
             + self.canonical_export_contexts.local_len()
-            + self.canonical_export_contexts.replacement_len()
             + self.global_augmentations_by_site.local_len()
-            + self.global_augmentations_by_site.replacement_len()
             + self.umd_exports_by_site.local_len()
-            + self.umd_exports_by_site.replacement_len()
             + self.source_unit_indices_by_module.local_len()
-            + self.source_unit_indices_by_module.replacement_len()
             + self.library_export_default_sites.local_len()
-            + self.library_export_default_sites.replacement_len()
             + self.library_module_reporting_sites.local_len();
-        [
-            self.namespaces.local_len() + self.namespaces.replacement_len(),
-            indexes + self.library_module_reporting_sites.replacement_len(),
-        ]
+        [self.namespaces.local_len(), indexes]
     }
 
     #[cfg(any(test, feature = "test-utils"))]

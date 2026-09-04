@@ -204,41 +204,6 @@ impl PublishedClasses {
         })
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
-    pub fn changed_owned_terminals(&self) -> Vec<(ClassId, OwnedPublishedClassTerminal)> {
-        self.states
-            .changed_iter()
-            .filter_map(|(&class, state)| match state {
-                ClassConstructionState::Published => self
-                    .surfaces
-                    .get(&class)
-                    .cloned()
-                    .map(|surface| (class, OwnedPublishedClassTerminal::Ready(surface))),
-                ClassConstructionState::Poisoned => self
-                    .poison
-                    .get(&class)
-                    .cloned()
-                    .map(|cause| (class, OwnedPublishedClassTerminal::Poisoned(cause))),
-                ClassConstructionState::Pending
-                | ClassConstructionState::Building
-                | ClassConstructionState::Built => None,
-            })
-            .collect()
-    }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    pub fn local_row_count_for_test(&self) -> usize {
-        self.states.local_len() + self.surfaces.local_len() + self.poison.local_len()
-    }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    pub fn replacement_row_count_for_test(&self) -> usize {
-        self.states.replacement_len()
-            + self.surfaces.replacement_len()
-            + self.poison.replacement_len()
-    }
-
-    #[cfg(any(test, feature = "test-utils"))]
     pub fn from_owned_terminals(
         terminals: Vec<(ClassId, OwnedPublishedClassTerminal)>,
     ) -> Result<Self, &'static str> {
@@ -388,55 +353,6 @@ impl PublishedClasses {
         &self.identity
     }
 
-    pub fn freeze_as_base(&mut self) -> Result<(), &'static str> {
-        self.states.freeze_as_base()?;
-        self.surfaces.freeze_as_base()?;
-        self.poison.freeze_as_base()
-    }
-
-    pub fn fork_delta(&self) -> Result<Self, &'static str> {
-        Ok(Self {
-            states: self.states.fork_delta()?,
-            surfaces: self.surfaces.fork_delta()?,
-            poison: self.poison.fork_delta()?,
-            identity: Arc::clone(&self.identity),
-        })
-    }
-
-    pub fn fork_sparse_delta(&self) -> Result<Self, &'static str> {
-        Ok(Self {
-            states: self.states.fork_sparse_delta()?,
-            surfaces: self.surfaces.fork_sparse_delta()?,
-            poison: self.poison.fork_sparse_delta()?,
-            identity: Arc::new(()),
-        })
-    }
-
-    pub fn replace_published_surface(
-        &mut self,
-        surface: PublishedClassSurface,
-    ) -> Result<(), &'static str> {
-        let class = surface.class();
-        if !self.states.prefix_overrides_enabled()
-            || !self.surfaces.prefix_overrides_enabled()
-            || !matches!(self.published_class(class), DemandOutcome::Ready(_))
-        {
-            return Err("class surface replacement requires a published sparse prefix");
-        }
-        self.states
-            .insert_local(class, ClassConstructionState::Published)?;
-        self.surfaces.insert_local(class, surface)?;
-        self.identity = Arc::new(());
-        Ok(())
-    }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    pub fn shares_base_with(&self, other: &Self) -> bool {
-        self.states.shares_base_with(&other.states)
-            && self.surfaces.shares_base_with(&other.surfaces)
-            && self.poison.shares_base_with(&other.poison)
-    }
-
     pub fn require(&self, class: ClassId) -> DemandOutcome<()> {
         match self.states.get(&class).copied() {
             Some(ClassConstructionState::Published) => DemandOutcome::Ready(()),
@@ -535,45 +451,6 @@ mod tests {
             OwnedPublishedClassTerminal::Ready(surface),
         )])
         .is_err());
-    }
-
-    #[test]
-    fn published_classes_share_frozen_rows_and_isolate_extensions() {
-        let base_class = ClassId(2);
-        let local_class = ClassId(3);
-        let mut base = PublishedClasses::from_publication(
-            FxHashMap::from_iter([(base_class, ClassConstructionState::Published)]),
-            FxHashMap::from_iter([(
-                base_class,
-                PublishedClassSurface::new(base_class, Vec::new(), TypeId(10), TypeId(11), None),
-            )]),
-            FxHashMap::default(),
-        )
-        .expect("base publication");
-        base.freeze_as_base().expect("class base seals");
-        let first = base.fork_delta().expect("first class suffix");
-        let second = base.fork_delta().expect("second class suffix");
-        assert!(first.shares_base_with(&second));
-
-        let extension = PublishedClasses::from_publication(
-            FxHashMap::from_iter([(local_class, ClassConstructionState::Published)]),
-            FxHashMap::from_iter([(
-                local_class,
-                PublishedClassSurface::new(local_class, Vec::new(), TypeId(12), TypeId(13), None),
-            )]),
-            FxHashMap::default(),
-        )
-        .expect("local publication");
-        let extended = first.extend(extension).expect("disjoint class suffix");
-        assert!(matches!(
-            extended.require(local_class),
-            DemandOutcome::Ready(())
-        ));
-        assert!(matches!(
-            second.require(local_class),
-            DemandOutcome::Exhausted(Exhaustion::ClassNotPublished { .. })
-        ));
-        assert!(base.shares_base_with(&extended));
     }
 
     #[test]

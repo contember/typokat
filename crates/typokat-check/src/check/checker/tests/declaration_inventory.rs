@@ -165,7 +165,6 @@ fn multi_user_project_inventory_is_module_exact_and_ordered() {
             exact_join_attempts: 20,
             raw_probe_attempts: 0,
             fragment_checks: 20,
-            completeness_checks: 0,
             dense_slots: 23,
         }
     );
@@ -417,13 +416,11 @@ fn trusted_prelude_inventory_and_terminal_oracle_is_exact_in_source_order() {
         binder.prelude_module,
         source,
         manifest.clone(),
-        None,
     )
     .expect("trusted prelude inventory joins exactly");
     let receipt = inventory.receipt();
     assert_eq!(receipt.admitted, 18);
     assert_eq!(receipt.rejected, 0);
-    assert_eq!(receipt.selected, 18);
     for fragment in manifest.type_fragments() {
         let exact = binder
             .exact_declaration_at(

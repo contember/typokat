@@ -156,7 +156,7 @@ def load_contract(path: Path = CONTRACT_PATH) -> dict[str, Any]:
         "length_framed_sha256", "manifest_sha256",
     }, "contract.profile")
     exact_keys(
-        data["provider_probe"], {"args", "schema", "check_route", "provider_route"},
+        data["provider_probe"], {"args", "schema", "route"},
         "contract.provider_probe",
     )
     require_int(
@@ -164,9 +164,8 @@ def load_contract(path: Path = CONTRACT_PATH) -> dict[str, Any]:
     )
     if data["provider_probe"] != {
         "args": ["library-info", "--format", "json"],
-        "schema": 2,
-        "check_route": "production-complete-source-once",
-        "provider_route": "production-default-library",
+        "schema": 3,
+        "route": "production-checker-session",
     }:
         raise ContractError("canonical provider probe contract differs")
     exact_keys(data["comparator"], {
@@ -1755,7 +1754,7 @@ def validate_provider_observation(observed: Any, contract: dict[str, Any]) -> No
     if not isinstance(observed, dict):
         raise ContractError("provider probe output must be an object")
     exact_keys(observed, {
-        "schema", "profile_sha256", "file_count", "check_route", "provider_route",
+        "schema", "profile_sha256", "file_count", "route",
     }, "provider probe output")
     if (
         require_int(observed["schema"], "provider schema", minimum=1)
@@ -1769,10 +1768,8 @@ def validate_provider_observation(observed: Any, contract: dict[str, Any]) -> No
         != contract["profile"]["file_count"]
     ):
         raise ContractError("provider file count differs")
-    if observed["provider_route"] != contract["provider_probe"]["provider_route"]:
-        raise ContractError("provider route differs")
-    if observed["check_route"] != contract["provider_probe"]["check_route"]:
-        raise ContractError("check route differs")
+    if observed["route"] != contract["provider_probe"]["route"]:
+        raise ContractError("production route differs")
 
 
 def collect_evidence(

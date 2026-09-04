@@ -90,6 +90,18 @@ fn production_sources_use_only_checker_session_lifecycle() {
         !root.join("crates/typokat-check/src/prelude.ts").exists(),
         "the minimal prelude asset must be deleted only with the atomic cutover"
     );
+    for retired in [
+        "tests/wu6_complete_source_cli.rs",
+        "tests/library_checkpoint_release_compile.rs",
+        "tests/project_local_library_candidate.rs",
+        "tests/wu4_force_all_audit_boundary.rs",
+        "examples/one_pass_probe.rs",
+    ] {
+        assert!(
+            !root.join(retired).exists(),
+            "retired lifecycle-only surface still exists: {retired}"
+        );
+    }
 
     let checker = fs::read_to_string(root.join("crates/typokat-check/src/check/checker/mod.rs"))
         .expect("read checker source");
@@ -102,29 +114,71 @@ fn production_sources_use_only_checker_session_lifecycle() {
     let conformance =
         fs::read_to_string(root.join("tests/conformance.rs")).expect("read conformance source");
 
-    let production_sources = production_rust_sources(&root);
+    let lifecycle_sources = lifecycle_surface_sources(&root);
     for forbidden in [
         "PRELUDE_SOURCE",
         "bootstrap_trusted_prelude",
         "include_str!(\"../../prelude.ts\")",
-        "FrozenLibraryBase",
+        "FrozenLibrary",
         "LibraryBinderCheckpoint",
-        "CollisionReplayPlan",
+        "CollisionReplay",
         "PrivateCollisionEpoch",
-        "CompleteSourceFallbackRuntime",
+        "CompleteSource",
+        "complete_source",
         "ReplayDependencyTrace",
+        "ReplayOwner",
+        "OwnedLibraryRuntimeState",
+        "PrivateCombinedRecordTicket",
         "LibraryCompiler",
-        "fork_sparse_delta",
-        "fork_sparse_collision_delta",
+        "library_compiler",
+        "fork_sparse",
         "check_project_programs_with_library",
         "check_private_project_programs_with_library",
-        "check_complete_source_project_programs_with_library",
+        "check_project_programs_with_owned_library",
         "check_program_with_owned_library",
+        "check_complete_source",
         "production_cli_route",
         "production-complete-source-once",
         "production-default-library",
+        "project-local-driver-shadow",
+        "SharedColdParity",
+        "shared_executions",
+        "cold_executions",
+        "conformance_full_shared_cold_parity",
+        "ProbeSetupControl",
+        "retained_setup_control_bytes",
+        "semantic_base_initializations",
+        "library_full_source_products_consumed",
+        "library_checkpoint_products_consumed",
+        "compiler_compiles",
+        "compiler_parses",
+        "compiler_binds",
+        "compiler_checks",
+        "user_binds",
+        "user_checks",
+        "user_delta_forks",
+        "library_frontend_entries",
+        "library_parse_units",
+        "library_bind_batches",
+        "library_ast_bind_units",
+        "LibraryProjectBinderContinuation",
+        "packaged_library_source_inputs",
+        "declaration_product_for_shadow",
+        "declaration_product_for_session_bench",
+        "continue_library_project_binder",
+        "CompleteSourceDeclarationOracleForTest",
+        "CompleteSourceBlackBoxOracleForTest",
+        "PreparedProjectDeclarationUniverseForTest",
+        "ProjectDeclarationUniverseMetricsForTest",
+        "replay_index",
+        "private_collision_",
+        "combined_user_source",
+        "capture_compact_replay_dependencies",
+        "events_library",
+        "lexical_events_library",
+        "collision_preflight",
     ] {
-        let offenders = production_sources
+        let offenders = lifecycle_sources
             .iter()
             .filter(|(_, source)| source.contains(forbidden))
             .map(|(path, _)| path.as_str())
@@ -135,7 +189,7 @@ fn production_sources_use_only_checker_session_lifecycle() {
         );
     }
     for forbidden in ["check_source_with_library", "check_project_with_library"] {
-        let offenders = production_sources
+        let offenders = lifecycle_sources
             .iter()
             .filter(|(_, source)| source.contains(forbidden))
             .map(|(path, _)| path.as_str())
@@ -188,9 +242,7 @@ fn production_sources_use_only_checker_session_lifecycle() {
     assert!(
         main.contains("production_library_route")
             && main.contains("check_project_once")
-            && !main.contains("production_cli_route")
-            && !main.contains("\"production-complete-source-once\"")
-            && !main.contains("\"production-default-library\""),
+            && main.contains("\"provider_route\": route"),
         "CLI checks and library-info must attest one production CheckerSession lifecycle"
     );
 }
@@ -261,17 +313,32 @@ fn unique_temp_path(tag: &str, extension: &str) -> PathBuf {
     ))
 }
 
-fn production_rust_sources(root: &std::path::Path) -> Vec<(String, String)> {
-    text_files_under(root, &[root.join("src"), root.join("crates")])
-        .into_iter()
-        .filter(|(path, _)| {
-            path.ends_with(".rs")
-                && !path.contains("/tests/")
-                && !path.ends_with("_spec.rs")
-                && !path.ends_with("/tests.rs")
-                && !path.ends_with("/test_support.rs")
-        })
-        .collect()
+fn lifecycle_surface_sources(root: &std::path::Path) -> Vec<(String, String)> {
+    let mut sources = text_files_under(
+        root,
+        &[
+            root.join("src"),
+            root.join("crates"),
+            root.join("tests"),
+            root.join("tooling"),
+            root.join("examples"),
+            root.join(".github"),
+        ],
+    );
+    sources.push((
+        "Cargo.toml".to_owned(),
+        fs::read_to_string(root.join("Cargo.toml")).expect("read root manifest"),
+    ));
+    sources.retain(|(path, _)| {
+        (path.ends_with(".rs")
+            || path.ends_with(".py")
+            || path.ends_with(".toml")
+            || path.ends_with(".yml")
+            || path.ends_with(".yaml"))
+            && path != "tests/wu7_production_cutover.rs"
+    });
+    sources.sort_by(|left, right| left.0.cmp(&right.0));
+    sources
 }
 
 fn package_text_files(root: &std::path::Path) -> Vec<(String, String)> {

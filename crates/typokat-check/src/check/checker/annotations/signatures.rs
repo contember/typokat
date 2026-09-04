@@ -60,7 +60,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let certified = self.certified_library_values.symbol?;
         let crate::binder::bind::ValueResolution::Resolved {
             symbol: binding, ..
-        } = self.resolve_value_binding_replay(scope, "Symbol")
+        } = self.resolve_value_binding(scope, "Symbol")
         else {
             return None;
         };

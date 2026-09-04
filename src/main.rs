@@ -367,14 +367,14 @@ fn run_official_batch_case(request: OfficialBatchRequest) -> Result<Vec<u8>, Str
     .map_err(format_driver_error)?;
     let (status, stderr) = render_official_batch_reports(&reports)?;
     let metadata = typokat::library::embedded_library_profile_metadata();
-    let provider_route = production_library_route().map_err(|error| {
+    let route = production_library_route().map_err(|error| {
         format!("failed to initialize embedded TypeScript 6.0.3 library: {error}")
     })?;
     let response = serde_json::json!({
         "schema": OFFICIAL_BATCH_SCHEMA,
         "case_id": request.case_id,
         "worker_pid": std::process::id(),
-        "provider_route": provider_route,
+        "provider_route": route,
         "profile_sha256": metadata.profile_identity(),
         "exit_code": official_batch_exit_code(status),
         "stdout": "",

@@ -12,9 +12,6 @@ use crate::binder::product::{
     normalize_qualified_value_path_resolution_for_test, QualifiedPathRawOracleRowForTest,
     QualifiedPathRawResolutionForTest,
 };
-use crate::check::checker::library_compiler::{
-    compile_library_binder_checkpoint, InjectedLibrarySource,
-};
 use oxc_allocator::Allocator;
 use oxc_ast::AstKind;
 use oxc_ast_visit::Visit;
@@ -84,14 +81,6 @@ impl<'ast> Visit<'ast> for IndependentDependencyVisitor {
             _ => {}
         }
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct StableAttachmentRow {
-    source_ordinal: usize,
-    declaration_start: u32,
-    binding_start: u32,
-    slot: &'static str,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -651,18 +640,6 @@ fn validate_one_qualified_path(
         }
     }
     Ok(())
-}
-
-fn packaged_sources(profile: &ExactLibraryProfile) -> Vec<InjectedLibrarySource<'_>> {
-    profile
-        .sources()
-        .iter()
-        .map(|source| InjectedLibrarySource {
-            file_ordinal: source.ordinal(),
-            name: source.name(),
-            source: std::str::from_utf8(source.bytes()).expect("packaged source is UTF-8"),
-        })
-        .collect()
 }
 
 fn rows_digest<T: std::fmt::Debug>(rows: &[T]) -> String {
@@ -1692,7 +1669,7 @@ fn expected_trusted_intrinsic_markers(
 }
 
 #[test]
-fn product_rows_match_independent_ast_and_complete_source_oracles() {
+fn product_dependency_rows_match_the_independent_ast_oracle() {
     let profile = ExactLibraryProfile::load_packaged().expect("packaged profile");
     let product = build_packaged_declaration_product().expect("packaged declaration product");
 
@@ -1754,70 +1731,6 @@ fn product_rows_match_independent_ast_and_complete_source_oracles() {
         rows_digest(&product_dependency_rows),
         rows_digest(&syntax_rows)
     );
-
-    let injected = packaged_sources(&profile);
-    let checkpoint =
-        compile_library_binder_checkpoint(&injected).expect("complete-source checkpoint");
-    let mut binder_attachments = checkpoint
-        .declaration_attachment_rows_for_test()
-        .into_iter()
-        .flat_map(|row| {
-            let value = row.has_value_storage.then_some(StableAttachmentRow {
-                source_ordinal: row.library_ordinal.index(),
-                declaration_start: row.declaration_start,
-                binding_start: row.binding_start,
-                slot: "value",
-            });
-            let namespace = row.has_namespace.then_some(StableAttachmentRow {
-                source_ordinal: row.library_ordinal.index(),
-                declaration_start: row.declaration_start,
-                binding_start: row.binding_start,
-                slot: "namespace",
-            });
-            value.into_iter().chain(namespace)
-        })
-        .collect::<Vec<_>>();
-    binder_attachments.sort();
-
-    let mut product_attachments = product
-        .value_attachment_rows()
-        .iter()
-        .map(|attachment| {
-            let declaration = &product.declarations()[attachment.declaration.index()];
-            StableAttachmentRow {
-                source_ordinal: usize::try_from(
-                    product.sources()[declaration.site.source.index()].ordinal,
-                )
-                .expect("source ordinal fits usize"),
-                declaration_start: declaration.site.start,
-                binding_start: declaration.binding_site.start,
-                slot: "value",
-            }
-        })
-        .chain(
-            product
-                .namespace_attachment_rows()
-                .iter()
-                .map(|attachment| {
-                    let declaration = &product.declarations()[attachment.declaration.index()];
-                    StableAttachmentRow {
-                        source_ordinal: usize::try_from(
-                            product.sources()[declaration.site.source.index()].ordinal,
-                        )
-                        .expect("source ordinal fits usize"),
-                        declaration_start: declaration.site.start,
-                        binding_start: declaration.binding_site.start,
-                        slot: "namespace",
-                    }
-                }),
-        )
-        .collect::<Vec<_>>();
-    product_attachments.sort();
-    assert_eq!(product_attachments, binder_attachments);
-    assert_eq!(
-        rows_digest(&product_attachments),
-        rows_digest(&binder_attachments)
-    );
 }
 
 #[test]
@@ -1831,16 +1744,11 @@ fn product_builds_one_manifest_per_source() {
 #[test]
 fn product_drops_ast_allocator_and_binder() {
     let provider = super::provider::LibraryBaseProvider::new();
-    provider.get().expect("existing base initializes");
-    assert!(!provider.declaration_product_initialized_for_test());
-    let lazy_product = provider
-        .declaration_product()
-        .expect("declaration product initializes independently");
-    assert!(provider.declaration_product_initialized_for_test());
-    assert_eq!(lazy_product.source_count(), 82);
-    let product = build_packaged_declaration_product().expect("packaged declaration product");
+    let product = provider.get().expect("packaged declaration product");
+    let second_owner = provider.get().expect("cached declaration product");
+
     assert_owned_product(&product);
-    let second_owner = Arc::clone(&product);
+    assert!(Arc::ptr_eq(&product, &second_owner));
     drop(product);
     assert_eq!(second_owner.source_count(), 82);
 }

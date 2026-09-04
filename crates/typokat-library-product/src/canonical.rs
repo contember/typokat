@@ -249,17 +249,6 @@ fn dependency_scc_rows(product: &LibraryDeclarationProduct) -> String {
     output
 }
 
-#[cfg(test)]
-std::thread_local! {
-    static DEPENDENCY_SCC_COMPUTATION_COUNT: std::cell::Cell<usize> =
-        const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-fn dependency_scc_computation_count() -> usize {
-    DEPENDENCY_SCC_COMPUTATION_COUNT.get()
-}
-
 pub(crate) fn canonical_dependency_sccs(
     product: &LibraryDeclarationProduct,
 ) -> Box<[Vec<GroupKey>]> {
@@ -275,13 +264,6 @@ pub(crate) fn canonical_dependency_sccs(
 }
 
 fn dependency_scc_indices(product: &LibraryDeclarationProduct) -> Vec<Vec<usize>> {
-    #[cfg(test)]
-    DEPENDENCY_SCC_COMPUTATION_COUNT.set(
-        dependency_scc_computation_count()
-            .checked_add(1)
-            .expect("SCC computation count"),
-    );
-
     let mut edges = vec![Vec::new(); product.groups.len()];
     for dependency in &product.dependencies {
         if let DependencyTarget::Group(target) = dependency.target {
@@ -438,30 +420,10 @@ fn compress(state: &mut [u32; 8], chunk: &[u8]) {
 
 #[cfg(test)]
 mod tests {
-    use super::dependency_scc_computation_count;
     use crate::{
-        ContainerKind, ContainerRecipe, DeclarationGroupRecipe, DeclarationSlots, GroupKey,
-        ProductAssembly, RegionKind, RegionRecipe, SourceClassification, SourceRecipe, SourceSite,
+        ContainerKind, ContainerRecipe, DeclarationGroupRecipe, DeclarationSlots, ProductAssembly,
+        RegionKind, RegionRecipe, SourceClassification, SourceRecipe, SourceSite,
     };
-
-    struct DependencySccComputationScope {
-        initial_count: usize,
-    }
-
-    impl DependencySccComputationScope {
-        fn start() -> Self {
-            Self {
-                initial_count: dependency_scc_computation_count(),
-            }
-        }
-
-        fn observed(&self) -> usize {
-            dependency_scc_computation_count()
-                .checked_sub(self.initial_count)
-                .expect("SCC computation counter must not move backwards")
-        }
-    }
-
     #[test]
     fn immutable_product_reuses_dependency_sccs_after_construction() {
         let mut assembly = ProductAssembly::new();
@@ -511,22 +473,17 @@ mod tests {
                 .expect("group")
         });
         let product = assembly.finish("scc-cache-test").expect("valid product");
-        let computation_scope = DependencySccComputationScope::start();
 
         let first = product.dependency_sccs();
         let second = product.dependency_sccs();
-        let first: &[Vec<GroupKey>] = first.as_ref();
-        let second: &[Vec<GroupKey>] = second.as_ref();
         let expected = [vec![groups[0]], vec![groups[1]], vec![groups[2]]];
 
         assert_eq!(first, expected.as_slice());
         assert_eq!(second, expected.as_slice());
         assert_eq!(first, second);
-        assert_eq!(
-            computation_scope.observed(),
-            0,
-            "immutable product dependency SCCs must be computed during ProductAssembly::finish \
-             and reused by checker sessions"
+        assert!(
+            std::ptr::eq(first, second),
+            "immutable product dependency SCCs must reuse one stored slice"
         );
     }
 }

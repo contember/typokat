@@ -12,7 +12,6 @@ pub use validate::ProductValidationError;
 pub use validate::{
     lexical_scope_corruption_receipt_for_test, validate_with_qualified_path_tables_for_test,
     with_changed_callable_site_for_test, LexicalScopeCorruptionReceipt,
-    LibraryProductValidationScopeForTest,
 };
 pub use walk::{ProductFieldClass, ProductFieldVisitor};
 

@@ -685,6 +685,12 @@ impl<'a> Relater<'a> {
 
         let original_src = src;
         let original_tgt = tgt;
+        // A lazy attempt stops after its first singular evaluation demand so later
+        // siblings cannot manufacture verdicts from that demand's placeholder `No`.
+        // Apparent-surface demands remain batchable within the same attempt.
+        if self.allow_relation_demand && self.query_demand.is_some() {
+            return Relation::No(ReasonChain::leaf(original_src, original_tgt));
+        }
         let (src, tgt) = if let Some(normalization) = self.normalization {
             let src = match normalization.normalize(src) {
                 Ok(src) => src,

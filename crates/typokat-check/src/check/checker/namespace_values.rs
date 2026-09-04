@@ -8,10 +8,7 @@ use super::context::{
 };
 use super::events::UserRecordTicket;
 use super::function_groups::FunctionNamespacePayload;
-#[cfg(any(test, feature = "test-utils"))]
-use super::lexical_events::SourceSite;
 use super::lexical_events::{source_ordinal, LexicalOwnerPhase};
-use super::replay_index::ReplayOwner;
 use super::source_ordinal_from_origin;
 use super::statements::{function_decl_from_statement, function_overload_group};
 use crate::binder::declaration::{DeclId, TypeGroupId, ValueStorageId};
@@ -25,7 +22,6 @@ use crate::class_semantics::DemandOutcome;
 use crate::diagnostics::Diagnostic;
 use crate::source::SourceOrdinal;
 use crate::span::Span;
-use crate::types::layered::LayeredMap;
 use crate::types::repr::{ClassId, FunctionType, ObjectType, PropertyType};
 use crate::types::store::TypeId;
 use oxc_ast::ast::{
@@ -48,21 +44,13 @@ pub(in crate::check::checker) struct NamespaceValueRegistry<Ticket: Copy = UserR
     ambient_fragments: FxHashSet<(ScopeId, u32)>,
     prepared_owners: FxHashSet<(ScopeId, String)>,
     standalone_plans: FxHashMap<NamespaceId, StandaloneNamespacePlan<Ticket>>,
-    standalone_terminals: LayeredMap<NamespaceId, StandaloneNamespaceTerminal>,
-    terminal_planning_failed: bool,
-    #[cfg(any(test, feature = "test-utils"))]
-    namespace_function_reservations: FxHashMap<DeclId, SourceSite>,
+    standalone_terminals: FxHashMap<NamespaceId, StandaloneNamespaceTerminal>,
     #[cfg(any(test, feature = "test-utils"))]
     project_local_discarded_writes: FxHashMap<NamespaceId, Vec<String>>,
     #[cfg(any(test, feature = "test-utils"))]
     project_local_published_provisional_writes: FxHashMap<NamespaceId, Vec<String>>,
     #[cfg(test)]
     standalone_query_root_calls: u64,
-}
-
-#[derive(Default)]
-pub(in crate::check::checker) struct FrozenNamespaceValueTerminals {
-    standalone: LayeredMap<NamespaceId, StandaloneNamespaceTerminal>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -92,29 +80,12 @@ pub(in crate::check::checker) enum NamespaceValueUnavailableCause {
     ClassValueSurfaceUnavailable = 21,
 }
 
-pub(in crate::check::checker) type FrozenNamespaceUnavailableCause = NamespaceValueUnavailableCause;
-
 type StandaloneMemberFacts = (
     MergeDeclarationKind,
     Option<ValueStorageId>,
     Option<NamespaceId>,
     Option<SymbolId>,
 );
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(in crate::check::checker) enum FrozenNamespaceValueTerminalSnapshot {
-    Ready { storage: ValueStorageId, ty: TypeId },
-    Unavailable(FrozenNamespaceUnavailableCause),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(in crate::check::checker) struct FrozenNamespaceValueTerminalSnapshotRow {
-    pub(in crate::check::checker) namespace: NamespaceId,
-    pub(in crate::check::checker) terminal: FrozenNamespaceValueTerminalSnapshot,
-}
-
-pub(in crate::check::checker) type FrozenNamespaceValueTerminalsSnapshotParts =
-    Vec<FrozenNamespaceValueTerminalSnapshotRow>;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(in crate::check::checker) enum StandaloneNamespaceTerminal {
@@ -351,10 +322,7 @@ impl<Ticket: Copy> Default for NamespaceValueRegistry<Ticket> {
             ambient_fragments: FxHashSet::default(),
             prepared_owners: FxHashSet::default(),
             standalone_plans: FxHashMap::default(),
-            standalone_terminals: LayeredMap::default(),
-            terminal_planning_failed: false,
-            #[cfg(any(test, feature = "test-utils"))]
-            namespace_function_reservations: FxHashMap::default(),
+            standalone_terminals: FxHashMap::default(),
             #[cfg(any(test, feature = "test-utils"))]
             project_local_discarded_writes: FxHashMap::default(),
             #[cfg(any(test, feature = "test-utils"))]
@@ -366,58 +334,6 @@ impl<Ticket: Copy> Default for NamespaceValueRegistry<Ticket> {
 }
 
 impl<Ticket: Copy> NamespaceValueRegistry<Ticket> {
-    pub(in crate::check::checker) fn try_freeze_terminals(
-        &self,
-    ) -> Result<FrozenNamespaceValueTerminals, &'static str> {
-        if self
-            .standalone_terminals
-            .values()
-            .any(|terminal| matches!(terminal, StandaloneNamespaceTerminal::Planned))
-        {
-            return Err("frozen namespace terminals are incomplete");
-        }
-        Ok(FrozenNamespaceValueTerminals {
-            standalone: self.standalone_terminals.clone(),
-        })
-    }
-
-    pub(in crate::check::checker) fn install_frozen_terminals(
-        &mut self,
-        frozen: FrozenNamespaceValueTerminals,
-    ) {
-        assert_eq!(self.standalone_terminals.len(), 0);
-        self.standalone_terminals = frozen.standalone;
-    }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(in crate::check::checker) fn terminals_share_base_with(
-        &self,
-        frozen: &FrozenNamespaceValueTerminals,
-    ) -> bool {
-        self.standalone_terminals
-            .shares_base_with(&frozen.standalone)
-    }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(in crate::check::checker) fn local_terminal_row_count_for_test(&self) -> usize {
-        self.standalone_terminals.local_len()
-    }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(in crate::check::checker) fn replacement_terminal_row_count_for_test(&self) -> usize {
-        self.standalone_terminals.replacement_len()
-    }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(in crate::check::checker) fn changed_terminal_snapshot_parts_for_test(
-        &self,
-    ) -> Result<FrozenNamespaceValueTerminalsSnapshotParts, &'static str> {
-        FrozenNamespaceValueTerminals {
-            standalone: self.standalone_terminals.clone(),
-        }
-        .changed_snapshot_parts()
-    }
-
     pub(in crate::check::checker) fn standalone_terminal(
         &self,
         namespace: NamespaceId,
@@ -469,26 +385,6 @@ impl<Ticket: Copy> NamespaceValueRegistry<Ticket> {
         self.standalone_query_root_calls
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
-    fn record_namespace_function_reservation(&mut self, declaration: DeclId, source: SourceSite) {
-        if let Some(previous) = self
-            .namespace_function_reservations
-            .insert(declaration, source)
-        {
-            assert_eq!(previous, source, "one exact callable reservation source");
-        }
-    }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(in crate::check::checker) fn namespace_function_reservation(
-        &self,
-        declaration: DeclId,
-    ) -> Option<SourceSite> {
-        self.namespace_function_reservations
-            .get(&declaration)
-            .copied()
-    }
-
     fn insert_standalone_plan(
         &mut self,
         namespace: NamespaceId,
@@ -498,21 +394,13 @@ impl<Ticket: Copy> NamespaceValueRegistry<Ticket> {
             self.standalone_plans.insert(namespace, plan).is_none(),
             "standalone namespace planned once"
         );
-        let Ok(previous) = self
+        let previous = self
             .standalone_terminals
-            .insert_local(namespace, StandaloneNamespaceTerminal::Planned)
-        else {
-            self.terminal_planning_failed = true;
-            return;
-        };
+            .insert(namespace, StandaloneNamespaceTerminal::Planned);
         assert!(
             !matches!(previous, Some(StandaloneNamespaceTerminal::Planned)),
             "standalone namespace terminal reserved once"
         );
-    }
-
-    pub(in crate::check::checker) fn terminal_planning_failed(&self) -> bool {
-        self.terminal_planning_failed
     }
 
     fn is_prepared_owner(&self, scope: ScopeId, name: &str) -> bool {
@@ -630,114 +518,6 @@ impl<Ticket: Copy> NamespaceValueRegistry<Ticket> {
     }
 }
 
-impl FrozenNamespaceValueTerminals {
-    pub(in crate::check::checker) fn snapshot_parts(
-        &self,
-    ) -> Result<FrozenNamespaceValueTerminalsSnapshotParts, &'static str> {
-        let mut rows = self
-            .standalone
-            .iter()
-            .map(|(&namespace, &terminal)| {
-                let terminal = match terminal {
-                    StandaloneNamespaceTerminal::Planned => {
-                        return Err("snapshot namespace terminal is still planned")
-                    }
-                    StandaloneNamespaceTerminal::Ready { storage, ty } => {
-                        FrozenNamespaceValueTerminalSnapshot::Ready { storage, ty }
-                    }
-                    StandaloneNamespaceTerminal::Unavailable { cause } => {
-                        FrozenNamespaceValueTerminalSnapshot::Unavailable(cause)
-                    }
-                };
-                Ok(FrozenNamespaceValueTerminalSnapshotRow {
-                    namespace,
-                    terminal,
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        rows.sort_by_key(|row| row.namespace.0);
-        Ok(rows)
-    }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(in crate::check::checker) fn changed_snapshot_parts(
-        &self,
-    ) -> Result<FrozenNamespaceValueTerminalsSnapshotParts, &'static str> {
-        let mut rows = self
-            .standalone
-            .changed_iter()
-            .map(|(&namespace, &terminal)| {
-                let terminal = match terminal {
-                    StandaloneNamespaceTerminal::Planned => {
-                        return Err("changed namespace terminal is still planned")
-                    }
-                    StandaloneNamespaceTerminal::Ready { storage, ty } => {
-                        FrozenNamespaceValueTerminalSnapshot::Ready { storage, ty }
-                    }
-                    StandaloneNamespaceTerminal::Unavailable { cause } => {
-                        FrozenNamespaceValueTerminalSnapshot::Unavailable(cause)
-                    }
-                };
-                Ok(FrozenNamespaceValueTerminalSnapshotRow {
-                    namespace,
-                    terminal,
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        rows.sort_by_key(|row| row.namespace.0);
-        Ok(rows)
-    }
-
-    #[cfg(test)]
-    pub(in crate::check::checker) fn from_snapshot_parts(
-        rows: FrozenNamespaceValueTerminalsSnapshotParts,
-    ) -> Result<Self, &'static str> {
-        if rows
-            .windows(2)
-            .any(|pair| pair[0].namespace.0 >= pair[1].namespace.0)
-        {
-            return Err("snapshot namespace terminals are not strictly ordered");
-        }
-        let standalone = rows
-            .into_iter()
-            .map(|row| {
-                let terminal = match row.terminal {
-                    FrozenNamespaceValueTerminalSnapshot::Ready { storage, ty } => {
-                        StandaloneNamespaceTerminal::Ready { storage, ty }
-                    }
-                    FrozenNamespaceValueTerminalSnapshot::Unavailable(cause) => {
-                        StandaloneNamespaceTerminal::Unavailable { cause }
-                    }
-                };
-                (row.namespace, terminal)
-            })
-            .collect::<FxHashMap<_, _>>()
-            .into();
-        Ok(Self { standalone })
-    }
-
-    pub(in crate::check::checker) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
-        self.standalone.freeze_as_base()
-    }
-
-    pub(in crate::check::checker) fn fork_delta(&self) -> Result<Self, &'static str> {
-        Ok(Self {
-            standalone: self.standalone.fork_delta()?,
-        })
-    }
-
-    pub(in crate::check::checker) fn fork_sparse_delta(&self) -> Result<Self, &'static str> {
-        Ok(Self {
-            standalone: self.standalone.fork_sparse_delta()?,
-        })
-    }
-
-    #[cfg(test)]
-    pub(in crate::check::checker) fn shares_base_with(&self, other: &Self) -> bool {
-        self.standalone.shares_base_with(&other.standalone)
-    }
-}
-
 impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     pub(in crate::check::checker) fn install_project_local_namespace_seeds(
         &mut self,
@@ -762,16 +542,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             if has_user_fragment {
                 continue;
             }
-            self.namespace_values
-                .standalone_terminals
-                .insert_local(
-                    seed.namespace,
-                    StandaloneNamespaceTerminal::Ready {
-                        storage: seed.storage,
-                        ty: seed.ty,
-                    },
-                )
-                .map_err(|_| "project-local namespace seed replaced a terminal")?;
+            let _ = self.namespace_values.standalone_terminals.insert(
+                seed.namespace,
+                StandaloneNamespaceTerminal::Ready {
+                    storage: seed.storage,
+                    ty: seed.ty,
+                },
+            );
         }
         Ok(())
     }
@@ -800,10 +577,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
     }
 
-    pub(in crate::check::checker) fn namespace_terminal_planning_failed(&self) -> bool {
-        self.namespace_values.terminal_planning_failed()
-    }
-
+    #[cfg(any(test, feature = "test-utils"))]
     /// Prepare one module's attached namespace values before class/callable publication.
     pub(in crate::check::checker) fn prepare_attached_namespace_values(
         &mut self,
@@ -828,25 +602,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
             let owner_scope = attachment.owner_scope;
             let name = attachment.name.clone();
-            let replay_owner = self
-                .binder
-                .graph
-                .get(owner_scope)
-                .and_then(|scope| scope.symbols.get(&name))
-                .and_then(|symbol| self.binder.symbols.get(*symbol))
-                .and_then(|symbol| {
-                    symbol
-                        .ns
-                        .map(ReplayOwner::Namespace)
-                        .or_else(|| symbol.value.map(ReplayOwner::Value))
-                });
-            let _replay_owner_scope = replay_owner
-                .and_then(|owner| self.replay_trace.as_ref().map(|trace| trace.scope(owner)));
             self.prepare_namespace_attachment(attachment, &syntax);
             self.namespace_values.mark_prepared_owner(owner_scope, name);
         }
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     /// Stage every standalone group in this module without publishing its root slot.
     pub(in crate::check::checker) fn prepare_standalone_namespace_values(
         &mut self,
@@ -864,18 +625,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let query_roots_before = crate::check::query::query_demand_measure().root_calls;
         let syntax = project_syntax_index(modules);
         for attachment in collect_all_standalone_attachment_inputs(self) {
-            if self.private_collision_affected.is_empty()
-                && self
-                    .namespace_values
-                    .standalone_terminal(attachment.namespace)
-                    .is_some()
+            if self
+                .namespace_values
+                .standalone_terminal(attachment.namespace)
+                .is_some()
             {
                 continue;
             }
-            let _replay_owner_scope = self
-                .replay_trace
-                .as_ref()
-                .map(|trace| trace.scope(ReplayOwner::Namespace(attachment.namespace)));
             self.prepare_standalone_namespace_attachment(attachment, &syntax);
         }
         #[cfg(test)]
@@ -885,150 +641,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
     }
 
-    /// Refresh variable-backed namespace properties after merged interface publication.
-    pub(in crate::check::checker) fn refresh_colliding_standalone_variable_surfaces(
-        &mut self,
-        modules: &[(ScopeId, &'ast [Statement<'ast>])],
-        user_modules: &FxHashSet<ScopeId>,
-    ) {
-        let suppress_effects = self.suppress_effects;
-        self.suppress_effects = true;
-        let syntax = project_syntax_index(modules);
-        for attachment in collect_all_standalone_attachment_inputs(self) {
-            let has_user_fragment = attachment
-                .fragments
-                .iter()
-                .any(|fragment| user_modules.contains(&fragment.module));
-            let has_library_fragment = attachment
-                .fragments
-                .iter()
-                .any(|fragment| !user_modules.contains(&fragment.module));
-            if !has_user_fragment || !has_library_fragment {
-                continue;
-            }
-            let mut refreshed = Vec::new();
-            for member in &attachment.members {
-                if member.kind != MergeDeclarationKind::Variable
-                    || matches!(member.publication, NamespacePublication::Private)
-                {
-                    continue;
-                }
-                let (Some(name), Some(scope), Some(declaration)) =
-                    (&member.name, member.scope, member.declaration)
-                else {
-                    continue;
-                };
-                let Some((kind, declarator)) = syntax
-                    .variables
-                    .get(&(member.module, member.source_start))
-                    .copied()
-                else {
-                    continue;
-                };
-                let Some(annotation) = declarator.type_annotation.as_ref() else {
-                    continue;
-                };
-                let Some(member_ty) = self.lower_namespace_member_annotation(
-                    declaration,
-                    scope,
-                    &annotation.type_annotation,
-                ) else {
-                    continue;
-                };
-                refreshed.push((
-                    name.clone(),
-                    member_ty,
-                    kind.is_const(),
-                    member.value_storage,
-                ));
-            }
-            if refreshed.is_empty() {
-                continue;
-            }
-            for (_, ty, _, storage) in &refreshed {
-                if let Some(storage) = storage {
-                    self.publish_copied_decl_type_replay(*storage, *ty);
-                }
-            }
-            match self
-                .namespace_values
-                .standalone_terminal(attachment.namespace)
-            {
-                Some(StandaloneNamespaceTerminal::Planned) => {
-                    let Some(plan) = self
-                        .namespace_values
-                        .standalone_plans
-                        .get_mut(&attachment.namespace)
-                    else {
-                        continue;
-                    };
-                    for (name, ty, readonly, _) in refreshed {
-                        if let Some(property) = plan
-                            .properties
-                            .iter_mut()
-                            .find(|property| property.key.as_string() == Some(&name))
-                        {
-                            property.ty = ty;
-                            property.readonly = readonly;
-                        } else {
-                            let mut property = PropertyType::public(name, ty);
-                            property.readonly = readonly;
-                            plan.properties.push(property);
-                        }
-                    }
-                    if plan.unavailable
-                        == Some(NamespaceValueUnavailableCause::VariableSurfaceUnavailable)
-                    {
-                        // Recovered members remain sound as a partial object: unsupported
-                        // siblings keep their library incomplete and read as missing.
-                        plan.unavailable = None;
-                    }
-                }
-                Some(StandaloneNamespaceTerminal::Ready { storage, ty }) => {
-                    let Some(mut object) = self.interner.store().object_type(ty).cloned() else {
-                        continue;
-                    };
-                    for (name, ty, readonly, _) in refreshed {
-                        if let Some(property) = object
-                            .properties
-                            .iter_mut()
-                            .find(|property| property.key.as_string() == Some(&name))
-                        {
-                            property.ty = ty;
-                            property.readonly = readonly;
-                        }
-                    }
-                    let ty = self.interner.intern_object(object);
-                    self.publish_copied_decl_type_replay(storage, ty);
-                    if self
-                        .namespace_values
-                        .standalone_terminals
-                        .insert_local(
-                            attachment.namespace,
-                            StandaloneNamespaceTerminal::Ready { storage, ty },
-                        )
-                        .is_err()
-                    {
-                        self.namespace_values.terminal_planning_failed = true;
-                    }
-                }
-                Some(StandaloneNamespaceTerminal::Unavailable { .. }) | None => {}
-            }
-        }
-        self.suppress_effects = suppress_effects;
-    }
-
     fn prepare_standalone_namespace_attachment(
         &mut self,
         attachment: StandaloneAttachmentInput,
         syntax: &ProjectSyntaxIndex<'_, '_>,
     ) {
-        let user_delta_only = self
-            .private_collision_affected
-            .contains(&ReplayOwner::Namespace(attachment.namespace));
-        // An affected namespace is rebuilt from every selected library member plus the user
-        // augmentation. Inheriting its frozen object would retain stale TypeIds in nested
-        // constructor and overload payloads.
+        let user_delta_only = false;
         let inherited_properties = Vec::new();
         for fragment in &attachment.fragments {
             if fragment.ambient {
@@ -1224,8 +842,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                             Some(NamespaceValueUnavailableCause::MissingExportedFunctionSyntax);
                         continue;
                     };
-                    let reservation =
-                        self.reserve_namespace_function(member.declaration, scope, function);
+                    let reservation = self.reserve_namespace_function(scope, function);
                     functions.push(StagedFunction {
                         input: OwnedMemberInput {
                             declaration: member.declaration.expect("function declaration"),
@@ -1480,8 +1097,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             unavailable = Some(NamespaceValueUnavailableCause::FunctionSurfaceUnavailable);
         }
         for (storage, module, source_start, scope, annotation, ty) in variables {
-            if self.decl_type_replay(storage).is_none() {
-                self.publish_copied_decl_type_replay(storage, ty);
+            if self.decl_type(storage).is_none() {
+                self.publish_copied_decl_type(storage, ty);
             }
             self.namespace_values.insert_member(
                 module,
@@ -1495,8 +1112,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 .find(|property| property.key.as_string() == Some(&function.input.name))
                 .map(|property| property.ty);
             if let Some(property_ty) = property_ty {
-                if self.decl_type_replay(function.input.storage).is_none() {
-                    self.publish_copied_decl_type_replay(function.input.storage, property_ty);
+                if self.decl_type(function.input.storage).is_none() {
+                    self.publish_copied_decl_type(function.input.storage, property_ty);
                 }
             }
             self.namespace_values.insert_member(
@@ -1613,8 +1230,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         })
                     });
                     if let (Some(storage), Some(ty)) = (member.value_storage, ty) {
-                        if self.decl_type_replay(storage).is_none() {
-                            self.publish_copied_decl_type_replay(storage, ty);
+                        if self.decl_type(storage).is_none() {
+                            self.publish_copied_decl_type(storage, ty);
                         }
                     }
                     self.namespace_values.insert_member(
@@ -1631,15 +1248,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     else {
                         continue;
                     };
-                    let reservation =
-                        self.reserve_namespace_function(member.declaration, scope, function);
+                    let reservation = self.reserve_namespace_function(scope, function);
                     if let (Some(storage), FunctionReservation::Ready(surface)) =
                         (member.value_storage, &reservation)
                     {
                         if (function.body.is_none() || surface.declared_return.is_some())
-                            && self.decl_type_replay(storage).is_none()
+                            && self.decl_type(storage).is_none()
                         {
-                            self.publish_copied_decl_type_replay(storage, surface.function_ty);
+                            self.publish_copied_decl_type(storage, surface.function_ty);
                         }
                     }
                     self.namespace_values.insert_member(
@@ -1684,10 +1300,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             let mut next = Vec::new();
             let mut progressed = false;
             for namespace in remaining {
-                let _replay_owner_scope = self
-                    .replay_trace
-                    .as_ref()
-                    .map(|trace| trace.scope(ReplayOwner::Namespace(namespace)));
                 let Some(plan) = self.namespace_values.standalone_plans.get(&namespace) else {
                     continue;
                 };
@@ -1695,13 +1307,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     #[cfg(any(test, feature = "test-utils"))]
                     self.namespace_values
                         .record_project_local_discard(namespace);
-                    self.namespace_values
-                        .standalone_terminals
-                        .insert_local(
-                            namespace,
-                            StandaloneNamespaceTerminal::Unavailable { cause },
-                        )
-                        .expect("namespace terminals cannot replace a frozen base row");
+                    let _ = self.namespace_values.standalone_terminals.insert(
+                        namespace,
+                        StandaloneNamespaceTerminal::Unavailable { cause },
+                    );
                     progressed = true;
                     continue;
                 }
@@ -1725,31 +1334,21 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                                     Some(NamespaceValueUnavailableCause::ClassSurfaceUnavailable);
                                 None
                             } else {
-                                if let Some(trace) = &self.replay_trace {
-                                    let _observation =
-                                        trace.observe_typed_demand("namespace-class-terminal");
-                                    trace.demand_at(
-                                        ReplayOwner::Class(*class),
-                                        "namespace-class-terminal",
-                                    );
-                                }
                                 match self
                                     .staged_published_classes
                                     .as_ref()
                                     .expect("class publication precedes namespace finalization")
                                     .published_class(*class)
                                 {
-                                    DemandOutcome::Ready(_) => {
-                                        match self.decl_type_replay(*storage) {
-                                            Some(ty) => Some(ty),
-                                            None => {
-                                                unavailable = Some(
+                                    DemandOutcome::Ready(_) => match self.decl_type(*storage) {
+                                        Some(ty) => Some(ty),
+                                        None => {
+                                            unavailable = Some(
                                                     NamespaceValueUnavailableCause::ClassValueSurfaceUnavailable,
                                                 );
-                                                None
-                                            }
+                                            None
                                         }
-                                    }
+                                    },
                                     DemandOutcome::Exhausted(_) => {
                                         unavailable = Some(
                                             NamespaceValueUnavailableCause::ClassSurfaceUnavailable,
@@ -1762,7 +1361,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         StandaloneNamespaceDependencyKind::Namespace {
                             namespace: child,
                             alias_failure,
-                        } => match self.standalone_namespace_terminal_replay(*child) {
+                        } => match self.standalone_namespace_terminal(*child) {
                             Some(StandaloneNamespaceTerminal::Ready { ty, .. }) => Some(ty),
                             Some(StandaloneNamespaceTerminal::Unavailable { .. }) => {
                                 if let Some(failure) = alias_failure {
@@ -1781,7 +1380,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         StandaloneNamespaceDependencyKind::ExistingValue {
                             storage,
                             alias_failure,
-                        } => match self.decl_type_replay(*storage) {
+                        } => match self.decl_type(*storage) {
                             Some(ty) => Some(ty),
                             None => {
                                 if let Some(failure) = alias_failure {
@@ -1820,13 +1419,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     #[cfg(any(test, feature = "test-utils"))]
                     self.namespace_values
                         .record_project_local_discard(namespace);
-                    self.namespace_values
-                        .standalone_terminals
-                        .insert_local(
-                            namespace,
-                            StandaloneNamespaceTerminal::Unavailable { cause },
-                        )
-                        .expect("namespace terminals cannot replace a frozen base row");
+                    let _ = self.namespace_values.standalone_terminals.insert(
+                        namespace,
+                        StandaloneNamespaceTerminal::Unavailable { cause },
+                    );
                     progressed = true;
                     continue;
                 }
@@ -1845,24 +1441,15 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     properties: all_properties,
                     ..Default::default()
                 });
-                let replacing_private_prefix = self
-                    .private_collision_affected
-                    .contains(&ReplayOwner::Namespace(namespace))
-                    && self
-                        .private_collision_affected
-                        .contains(&ReplayOwner::Value(plan.storage));
-                assert!(self.decl_type_replay(plan.storage).is_none() || replacing_private_prefix);
-                self.publish_copied_decl_type_replay(plan.storage, ty);
-                self.namespace_values
-                    .standalone_terminals
-                    .insert_local(
-                        namespace,
-                        StandaloneNamespaceTerminal::Ready {
-                            storage: plan.storage,
-                            ty,
-                        },
-                    )
-                    .expect("namespace terminals cannot replace a frozen base row");
+                assert!(self.decl_type(plan.storage).is_none());
+                self.publish_copied_decl_type(plan.storage, ty);
+                let _ = self.namespace_values.standalone_terminals.insert(
+                    namespace,
+                    StandaloneNamespaceTerminal::Ready {
+                        storage: plan.storage,
+                        ty,
+                    },
+                );
                 progressed = true;
             }
             if !progressed {
@@ -1870,15 +1457,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     #[cfg(any(test, feature = "test-utils"))]
                     self.namespace_values
                         .record_project_local_discard(namespace);
-                    self.namespace_values
-                        .standalone_terminals
-                        .insert_local(
-                            namespace,
-                            StandaloneNamespaceTerminal::Unavailable {
-                                cause: NamespaceValueUnavailableCause::NamespaceContainmentCycle,
-                            },
-                        )
-                        .expect("namespace terminals cannot replace a frozen base row");
+                    let _ = self.namespace_values.standalone_terminals.insert(
+                        namespace,
+                        StandaloneNamespaceTerminal::Unavailable {
+                            cause: NamespaceValueUnavailableCause::NamespaceContainmentCycle,
+                        },
+                    );
                 }
                 break;
             }
@@ -2095,11 +1679,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         unavailable = true;
                         continue;
                     };
-                    let reservation = self.reserve_namespace_function(
-                        Some(member.declaration),
-                        member.scope,
-                        function,
-                    );
+                    let reservation = self.reserve_namespace_function(member.scope, function);
                     functions.push(StagedFunction {
                         input: member.clone(),
                         syntax: function,
@@ -2157,8 +1737,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         });
 
         for variable in variables {
-            if self.decl_type_replay(variable.input.storage).is_none() {
-                self.publish_copied_decl_type_replay(variable.input.storage, variable.ty);
+            if self.decl_type(variable.input.storage).is_none() {
+                self.publish_copied_decl_type(variable.input.storage, variable.ty);
             }
             self.namespace_values.insert_member(
                 variable.input.module,
@@ -2175,8 +1755,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 .find(|property| property.key.as_string() == Some(&function.input.name))
                 .map(|property| property.ty);
             if let Some(property_ty) = property_ty {
-                if self.decl_type_replay(function.input.storage).is_none() {
-                    self.publish_copied_decl_type_replay(function.input.storage, property_ty);
+                if self.decl_type(function.input.storage).is_none() {
+                    self.publish_copied_decl_type(function.input.storage, property_ty);
                 }
             }
             self.namespace_values.insert_member(
@@ -2294,11 +1874,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     else {
                         continue;
                     };
-                    let reservation = self.reserve_namespace_function(
-                        Some(member.declaration),
-                        member.scope,
-                        function,
-                    );
+                    let reservation = self.reserve_namespace_function(member.scope, function);
                     self.namespace_values.insert_member(
                         member.module,
                         member.source_start,
@@ -2341,7 +1917,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
     fn reserve_namespace_function(
         &mut self,
-        declaration: Option<DeclId>,
         scope: ScopeId,
         function: &Function<'_>,
     ) -> FunctionReservation<Ticket> {
@@ -2369,19 +1944,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             return unavailable(Some(tickets));
         };
         let type_params = binding.type_params.clone();
-        #[cfg(any(test, feature = "test-utils"))]
-        self.namespace_values.record_namespace_function_reservation(
-            declaration.expect("namespace function declaration"),
-            callable_source,
-        );
         let type_param_frame =
             self.build_type_param_frame(function.type_parameters.as_deref(), &type_params);
-        let storage = declaration.and_then(|declaration| {
-            self.binder
-                .declarations
-                .get(declaration)
-                .and_then(|declaration| declaration.value_storage)
-        });
         let reserve = |pass: &mut Self| {
             pass.with_explicit_native_array_source(Some(callable_source.unit), |pass| {
                 pass.with_ticket_effects(tickets.signature, |pass| {
@@ -2486,12 +2050,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 })
             })
         };
-        match storage {
-            Some(storage) => {
-                self.with_replay_publication_owner(ReplayOwner::Value(storage), reserve)
-            }
-            None => reserve(self),
-        }
+        reserve(self)
     }
 
     fn lower_namespace_member_annotation(
@@ -2513,13 +2072,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             pass.with_explicit_native_array_source(source, |pass| {
                 pass.with_ticket_effects(owner, |pass| {
                     if let Some(ty) = pass.try_plan_declared_annotation(scope, annotation) {
-                        #[cfg(test)]
-                        super::declaration_surface_measure::record_planned_namespace_variable_root(
-                        );
                         return Some(ty);
                     }
-                    #[cfg(test)]
-                    super::declaration_surface_measure::record_eager_namespace_variable_root();
                     let (result, child_failures) =
                         pass.lower_namespace_type_surface(scope, annotation, owner);
                     let (ty, primary_failure) = match result {
@@ -2542,15 +2096,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 })
             })
         };
-        match self
-            .binder
-            .declarations
-            .get(declaration)
-            .and_then(|declaration| declaration.value_storage)
-        {
-            Some(storage) => self.with_replay_publication_owner(ReplayOwner::Value(storage), lower),
-            None => lower(self),
-        }
+        lower(self)
     }
 
     fn class_namespace_property_payload(
@@ -2730,27 +2276,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .namespace_values
             .is_ambient_fragment(self.current_module, declaration.span.start);
         if !consumed && !has_private_checks {
-            let frozen = (!self.private_collision_affected.is_empty()
-                && matches!(
-                    self.current_source,
-                    crate::source::SourceUnit::Library { .. }
-                ))
-            .then(|| match &declaration.id {
-                TSModuleDeclarationName::Identifier(identifier) => self
-                    .binder
-                    .namespace_fragment_terminal_input(self.current_module, identifier.span.start),
-                TSModuleDeclarationName::StringLiteral(_) => None,
-            })
-            .flatten()
-            .filter(|(namespace, _, _)| {
-                self.namespace_values
-                    .standalone_terminal(*namespace)
-                    .is_some()
-            });
-            if let Some((_, scope, ambient)) = frozen {
-                self.check_prepared_namespace_body(declaration, ambient, scope, false);
-                return true;
-            }
             return false;
         }
         let scope = self
@@ -3598,15 +3123,13 @@ fn query_free_initializer_type<Ticket: Copy + PartialEq>(
             .intern_literal(crate::types::repr::LiteralValue::Boolean(literal.value)),
         Expression::NullLiteral(_) => pass.interner.well_known().null,
         Expression::Identifier(identifier)
-            if pass.combined_user_source
-                || (matches!(pass.current_source, crate::source::SourceUnit::User { .. })
-                    && !pass.private_collision_affected.is_empty()) =>
+            if matches!(pass.current_source, crate::source::SourceUnit::User { .. }) =>
         {
             let storage = pass
-                .resolve_value_replay(scope, identifier.name.as_str())
+                .resolve_value_symbol(scope, identifier.name.as_str())
                 .and_then(|symbol| pass.binder.symbols.get(symbol))
                 .and_then(|symbol| symbol.value)?;
-            pass.decl_type_replay(storage)?
+            pass.decl_type(storage)?
         }
         Expression::ParenthesizedExpression(parenthesized) => {
             return query_free_initializer_type(pass, scope, kind, &parenthesized.expression)
@@ -3699,195 +3222,16 @@ mod tests {
     use super::{
         duplicate_property_kind, namespace_member_participates_in_payload,
         namespace_payload_duplicate, namespace_payload_unavailable, prepared_namespace_value_kind,
-        project_syntax_index, FrozenNamespaceUnavailableCause,
-        FrozenNamespaceValueTerminalSnapshot, FrozenNamespaceValueTerminalSnapshotRow,
-        FrozenNamespaceValueTerminals, MergeDeclarationKind, NamespacePublication,
-        PreparedNamespaceValueKind, StandaloneNamespaceTerminal,
+        MergeDeclarationKind, NamespacePublication, PreparedNamespaceValueKind,
+        StandaloneNamespaceTerminal,
     };
-    use crate::binder::declaration::ValueStorageId;
-    use crate::binder::namespace::NamespaceId;
     use crate::binder::namespace::NamespaceInstanceState;
-    use crate::binder::scope::ScopeId;
-    use crate::check::checker::events_library::LibraryEventLedger;
-    use crate::check::checker::lexical_events::LexicalReservations;
     use crate::check::query::reset_query_demand_measure;
     use crate::check::test_support::check_source;
-    use crate::source::{LibraryFileOrdinal, SourceOrdinal, SourceUnit};
-    use crate::types::{Interner, TypeId};
+    use crate::types::Interner;
     use oxc_allocator::Allocator;
     use oxc_parser::Parser;
     use oxc_span::SourceType;
-    use rustc_hash::FxHashMap;
-
-    #[test]
-    fn frozen_namespace_snapshot_round_trips_closed_terminals() {
-        let causes = [
-            FrozenNamespaceUnavailableCause::MissingExportedMemberName,
-            FrozenNamespaceUnavailableCause::DuplicateExportedValue,
-            FrozenNamespaceUnavailableCause::UnboundExportedVariable,
-            FrozenNamespaceUnavailableCause::MissingExportedVariableSyntax,
-            FrozenNamespaceUnavailableCause::InvalidUsingDeclaration,
-            FrozenNamespaceUnavailableCause::VariableSurfaceUnavailable,
-            FrozenNamespaceUnavailableCause::UnboundExportedFunction,
-            FrozenNamespaceUnavailableCause::MissingExportedFunctionSyntax,
-            FrozenNamespaceUnavailableCause::UnboundExportedClass,
-            FrozenNamespaceUnavailableCause::UnboundExportedClassIdentity,
-            FrozenNamespaceUnavailableCause::UnboundNestedNamespace,
-            FrozenNamespaceUnavailableCause::UnsupportedExportedMember,
-            FrozenNamespaceUnavailableCause::DeferredExportedMember,
-            FrozenNamespaceUnavailableCause::FunctionNamespacePayloadUnavailable,
-            FrozenNamespaceUnavailableCause::FunctionOwnerCallSurfaceUnavailable,
-            FrozenNamespaceUnavailableCause::FunctionSurfaceUnavailable,
-            FrozenNamespaceUnavailableCause::ClassSurfaceUnavailable,
-            FrozenNamespaceUnavailableCause::NestedNamespaceUnavailable,
-            FrozenNamespaceUnavailableCause::ExistingOwnerUnavailable,
-            FrozenNamespaceUnavailableCause::NamespaceContainmentCycle,
-            FrozenNamespaceUnavailableCause::InvalidPrivateNamespaceMember,
-            FrozenNamespaceUnavailableCause::ClassValueSurfaceUnavailable,
-        ];
-        let mut standalone = causes
-            .into_iter()
-            .enumerate()
-            .map(|(index, cause)| {
-                (
-                    NamespaceId(u32::try_from(index).expect("cause index fits u32")),
-                    StandaloneNamespaceTerminal::Unavailable { cause },
-                )
-            })
-            .collect::<FxHashMap<_, _>>();
-        standalone.insert(
-            NamespaceId(30),
-            StandaloneNamespaceTerminal::Ready {
-                storage: ValueStorageId(11),
-                ty: TypeId(13),
-            },
-        );
-        let frozen = FrozenNamespaceValueTerminals {
-            standalone: standalone.into(),
-        };
-
-        let parts = frozen.snapshot_parts().expect("snapshot terminals");
-        let restored =
-            FrozenNamespaceValueTerminals::from_snapshot_parts(parts.clone()).expect("restore");
-
-        assert_eq!(restored.snapshot_parts(), Ok(parts));
-    }
-
-    #[test]
-    fn frozen_namespace_terminals_share_their_base_between_deltas() {
-        let mut frozen = FrozenNamespaceValueTerminals {
-            standalone: FxHashMap::from_iter([(
-                NamespaceId(4),
-                StandaloneNamespaceTerminal::Ready {
-                    storage: ValueStorageId(6),
-                    ty: TypeId(8),
-                },
-            )])
-            .into(),
-        };
-        frozen.freeze_as_base().expect("namespace base seals");
-        let first = frozen.fork_delta().expect("first namespace suffix");
-        let second = frozen.fork_delta().expect("second namespace suffix");
-        assert!(first.shares_base_with(&second));
-        assert_eq!(first.snapshot_parts(), second.snapshot_parts());
-    }
-
-    #[test]
-    fn frozen_namespace_snapshot_rejects_noncanonical_input() {
-        assert!(FrozenNamespaceValueTerminals::from_snapshot_parts(vec![
-            FrozenNamespaceValueTerminalSnapshotRow {
-                namespace: NamespaceId(3),
-                terminal: FrozenNamespaceValueTerminalSnapshot::Unavailable(
-                    FrozenNamespaceUnavailableCause::DeferredExportedMember,
-                ),
-            },
-            FrozenNamespaceValueTerminalSnapshotRow {
-                namespace: NamespaceId(1),
-                terminal: FrozenNamespaceValueTerminalSnapshot::Ready {
-                    storage: ValueStorageId(2),
-                    ty: TypeId(4),
-                },
-            },
-        ])
-        .is_err());
-    }
-
-    #[test]
-    fn project_attached_callables_keep_exact_sources_at_identical_offsets() {
-        let alpha_source = "declare namespace Attached { function alpha(value: string): string; }";
-        let bravo_source = "declare namespace Attached { function bravo(value: number): number; }";
-        let alpha_allocator = Allocator::default();
-        let bravo_allocator = Allocator::default();
-        let alpha = Parser::new(&alpha_allocator, alpha_source, SourceType::ts()).parse();
-        let bravo = Parser::new(&bravo_allocator, bravo_source, SourceType::ts()).parse();
-        assert!(!alpha.panicked);
-        assert!(!bravo.panicked);
-
-        let alpha_scope = ScopeId(10);
-        let bravo_scope = ScopeId(20);
-        let alpha_file = LibraryFileOrdinal::new(4);
-        let bravo_file = LibraryFileOrdinal::new(9);
-        let alpha_start = alpha_source.find("function").expect("alpha function") as u32;
-        let bravo_start = bravo_source.find("function").expect("bravo function") as u32;
-        assert_eq!(alpha_start, bravo_start);
-
-        let forward = project_syntax_index(&[
-            (alpha_scope, alpha.program.body.as_slice()),
-            (bravo_scope, bravo.program.body.as_slice()),
-        ]);
-        let reverse = project_syntax_index(&[
-            (bravo_scope, bravo.program.body.as_slice()),
-            (alpha_scope, alpha.program.body.as_slice()),
-        ]);
-        for syntax in [&forward, &reverse] {
-            assert_eq!(
-                syntax
-                    .functions
-                    .get(&(alpha_scope, alpha_start))
-                    .and_then(|function| function.id.as_ref())
-                    .map(|id| id.name.as_str()),
-                Some("alpha")
-            );
-            assert_eq!(
-                syntax
-                    .functions
-                    .get(&(bravo_scope, bravo_start))
-                    .and_then(|function| function.id.as_ref())
-                    .map(|id| id.name.as_str()),
-                Some("bravo")
-            );
-        }
-
-        let mut ledger = LibraryEventLedger::default();
-        let mut reservations = LexicalReservations::default();
-        reservations
-            .reserve_library_program(bravo_file, &bravo.program, &mut ledger)
-            .expect("reserve bravo first");
-        reservations
-            .reserve_library_program(alpha_file, &alpha.program, &mut ledger)
-            .expect("reserve alpha second");
-        let alpha_callable = reservations
-            .callable_at(SourceOrdinal::Library(alpha_file), alpha_start)
-            .and_then(|site| reservations.callable(site))
-            .expect("alpha callable");
-        let bravo_callable = reservations
-            .callable_at(SourceOrdinal::Library(bravo_file), bravo_start)
-            .and_then(|site| reservations.callable(site))
-            .expect("bravo callable");
-        assert_eq!(
-            alpha_callable.source.unit,
-            SourceUnit::Library {
-                file_ordinal: alpha_file
-            }
-        );
-        assert_eq!(
-            bravo_callable.source.unit,
-            SourceUnit::Library {
-                file_ordinal: bravo_file
-            }
-        );
-        assert_ne!(alpha_callable.tickets, bravo_callable.tickets);
-    }
 
     #[test]
     fn standalone_terminals_are_atomic_distinct_nested_and_query_free() {

@@ -84,7 +84,7 @@ import time
 if sys.argv[1:] != ["official-batch"]:
     sys.exit(64)
 {textwrap.dedent(before_loop)}
-provider_route = "production-default-library"
+route = "production-checker-session"
 provider_profile_sha256 = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d"
 for raw in sys.stdin:
     request = json.loads(raw)
@@ -102,7 +102,7 @@ print(json.dumps({
     "schema": 1,
     "case_id": request["case_id"],
     "worker_pid": os.getpid(),
-    "provider_route": provider_route,
+    "provider_route": route,
     "profile_sha256": provider_profile_sha256,
     "exit_code": 0,
     "stdout": "",
@@ -1358,7 +1358,7 @@ response = {
     "schema": 1,
     "case_id": request["case_id"],
     "worker_pid": os.getpid(),
-    "provider_route": provider_route,
+    "provider_route": route,
     "profile_sha256": provider_profile_sha256,
     "exit_code": 0,
     "stdout": "",
@@ -1524,7 +1524,7 @@ print(json.dumps({{
     "schema": 1,
     "case_id": request["case_id"],
     "worker_pid": os.getpid(),
-    "provider_route": provider_route,
+    "provider_route": route,
     "profile_sha256": provider_profile_sha256,
     "exit_code": 0,
     "stdout": "",
@@ -1611,7 +1611,7 @@ print(json.dumps({{
         with tempfile.TemporaryDirectory() as root:
             failure = (
                 'print(json.dumps({"schema": 1, "case_id": "middle.ts", '
-                '"worker_pid": os.getpid(), "provider_route": provider_route, '
+                '"worker_pid": os.getpid(), "provider_route": route, '
                 '"profile_sha256": provider_profile_sha256, "infrastructure_error": '
                 '"check worker panicked"}), flush=True); time.sleep(10)'
             )
@@ -1635,7 +1635,7 @@ print(json.dumps({{
             'print("{", flush=True); time.sleep(10)',
             (
                 'print(json.dumps({"schema": 1, "case_id": "wrong.ts", '
-                '"worker_pid": os.getpid(), "provider_route": provider_route, '
+                '"worker_pid": os.getpid(), "provider_route": route, '
                 '"profile_sha256": provider_profile_sha256, '
                 '"exit_code": 0, "stdout": "", '
                 '"stderr": ""}), flush=True); time.sleep(10)'
@@ -1694,7 +1694,7 @@ print(json.dumps({
     "schema": 1,
     "case_id": request["case_id"] + "-wrong",
     "worker_pid": os.getpid(),
-    "provider_route": provider_route,
+    "provider_route": route,
     "profile_sha256": provider_profile_sha256,
     "exit_code": 0,
     "stdout": "",
@@ -1709,7 +1709,7 @@ print(json.dumps({
     "schema": 1,
     "case_id": "first.ts",
     "worker_pid": os.getpid(),
-    "provider_route": provider_route,
+    "provider_route": route,
     "profile_sha256": provider_profile_sha256,
     "exit_code": 0,
     "stdout": "",
@@ -1728,7 +1728,7 @@ if request["case_id"] == "first.ts":
         "schema": 1,
         "case_id": "first.ts",
         "worker_pid": os.getpid(),
-        "provider_route": provider_route,
+        "provider_route": route,
         "profile_sha256": provider_profile_sha256,
         "exit_code": 0,
         "stdout": "",
@@ -1767,7 +1767,7 @@ print(json.dumps({
     "schema": 1,
     "case_id": request["case_id"],
     "worker_pid": os.getpid(),
-    "provider_route": provider_route if request["case_id"] == "first.ts" else "prelude",
+    "provider_route": route if request["case_id"] == "first.ts" else "prelude",
     "profile_sha256": provider_profile_sha256,
     "exit_code": 0,
     "stdout": "",
@@ -1783,7 +1783,7 @@ print(json.dumps({
     def test_schema_key_type_bounds_and_stdout_contamination_fail_closed(self):
         valid_prefix = (
             '"case_id": request["case_id"], "worker_pid": os.getpid(), '
-            '"provider_route": provider_route, '
+            '"provider_route": route, '
             '"profile_sha256": provider_profile_sha256'
         )
         invalid_frames = [
@@ -1796,16 +1796,16 @@ print(json.dumps({
             f'print(json.dumps({{"schema": 1, {valid_prefix}, "exit_code": 4, "stdout": "", "stderr": ""}}), flush=True)',
             f'print(json.dumps({{"schema": 1, {valid_prefix}, "exit_code": 0, "stdout": 7, "stderr": ""}}), flush=True)',
             f'print(json.dumps({{"schema": 1, {valid_prefix}, "exit_code": 0, "stdout": "", "stderr": False}}), flush=True)',
-            f'print(json.dumps({{"schema": 1, "case_id": 7, "worker_pid": os.getpid(), "provider_route": provider_route, "profile_sha256": provider_profile_sha256, "exit_code": 0, "stdout": "", "stderr": ""}}), flush=True)',
-            f'print(json.dumps({{"schema": 1, "case_id": request["case_id"], "worker_pid": True, "provider_route": provider_route, "profile_sha256": provider_profile_sha256, "exit_code": 0, "stdout": "", "stderr": ""}}), flush=True)',
-            f'print(json.dumps({{"schema": 1, "case_id": request["case_id"], "worker_pid": os.getpid() + 1, "provider_route": provider_route, "profile_sha256": provider_profile_sha256, "exit_code": 0, "stdout": "", "stderr": ""}}), flush=True)',
-            f'print(json.dumps({{"schema": 1, "case_id": request["case_id"], "provider_route": provider_route, "profile_sha256": provider_profile_sha256, "exit_code": 0, "stdout": "", "stderr": ""}}), flush=True)',
+            f'print(json.dumps({{"schema": 1, "case_id": 7, "worker_pid": os.getpid(), "provider_route": route, "profile_sha256": provider_profile_sha256, "exit_code": 0, "stdout": "", "stderr": ""}}), flush=True)',
+            f'print(json.dumps({{"schema": 1, "case_id": request["case_id"], "worker_pid": True, "provider_route": route, "profile_sha256": provider_profile_sha256, "exit_code": 0, "stdout": "", "stderr": ""}}), flush=True)',
+            f'print(json.dumps({{"schema": 1, "case_id": request["case_id"], "worker_pid": os.getpid() + 1, "provider_route": route, "profile_sha256": provider_profile_sha256, "exit_code": 0, "stdout": "", "stderr": ""}}), flush=True)',
+            f'print(json.dumps({{"schema": 1, "case_id": request["case_id"], "provider_route": route, "profile_sha256": provider_profile_sha256, "exit_code": 0, "stdout": "", "stderr": ""}}), flush=True)',
             f'print(json.dumps({{"schema": 1, "case_id": request["case_id"], "worker_pid": os.getpid(), "profile_sha256": provider_profile_sha256, "exit_code": 0, "stdout": "", "stderr": ""}}), flush=True)',
-            f'print(json.dumps({{"schema": 1, "case_id": request["case_id"], "worker_pid": os.getpid(), "provider_route": provider_route, "exit_code": 0, "stdout": "", "stderr": ""}}), flush=True)',
+            f'print(json.dumps({{"schema": 1, "case_id": request["case_id"], "worker_pid": os.getpid(), "provider_route": route, "exit_code": 0, "stdout": "", "stderr": ""}}), flush=True)',
             f'print(json.dumps({{"schema": 1, "case_id": request["case_id"], "worker_pid": os.getpid(), "provider_route": True, "profile_sha256": provider_profile_sha256, "exit_code": 0, "stdout": "", "stderr": ""}}), flush=True)',
             f'print(json.dumps({{"schema": 1, "case_id": request["case_id"], "worker_pid": os.getpid(), "provider_route": "prelude", "profile_sha256": provider_profile_sha256, "exit_code": 0, "stdout": "", "stderr": ""}}), flush=True)',
-            f'print(json.dumps({{"schema": 1, "case_id": request["case_id"], "worker_pid": os.getpid(), "provider_route": provider_route, "profile_sha256": True, "exit_code": 0, "stdout": "", "stderr": ""}}), flush=True)',
-            f'print(json.dumps({{"schema": 1, "case_id": request["case_id"], "worker_pid": os.getpid(), "provider_route": provider_route, "profile_sha256": "wrong", "exit_code": 0, "stdout": "", "stderr": ""}}), flush=True)',
+            f'print(json.dumps({{"schema": 1, "case_id": request["case_id"], "worker_pid": os.getpid(), "provider_route": route, "profile_sha256": True, "exit_code": 0, "stdout": "", "stderr": ""}}), flush=True)',
+            f'print(json.dumps({{"schema": 1, "case_id": request["case_id"], "worker_pid": os.getpid(), "provider_route": route, "profile_sha256": "wrong", "exit_code": 0, "stdout": "", "stderr": ""}}), flush=True)',
             f'print(json.dumps({{"schema": 1, {valid_prefix}, "exit_code": 0, "stdout": ""}}), flush=True)',
             f'print(json.dumps({{"schema": 1, {valid_prefix}, "exit_code": 0, "stdout": "", "stderr": "", "extra": 1}}), flush=True)',
             f'print(json.dumps({{"schema": 1, {valid_prefix}, "exit_code": 0, "stdout": "x" * 1048577, "stderr": ""}}), flush=True)',
@@ -1843,7 +1843,7 @@ print(json.dumps({
     "schema": 1,
     "case_id": request["case_id"],
     "worker_pid": os.getpid(),
-    "provider_route": provider_route,
+    "provider_route": route,
     "profile_sha256": provider_profile_sha256,
     "exit_code": exit_code,
     "stdout": "",
@@ -1868,7 +1868,7 @@ print(json.dumps({
     "schema": 1,
     "case_id": request["case_id"],
     "worker_pid": os.getpid(),
-    "provider_route": provider_route,
+    "provider_route": route,
     "profile_sha256": provider_profile_sha256,
     "exit_code": 0,
     "stdout": "",
