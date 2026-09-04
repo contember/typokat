@@ -637,16 +637,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 .is_some()
             && !self.type_group_construction_is_pending(decl_id)
             && match self.type_decls.get(decl_id.index()) {
-                Some(TypeDecl::Alias {
-                    conditional_template,
-                    mapped_template,
-                    object_template,
-                    ..
-                }) => {
-                    conditional_template.is_some()
-                        || mapped_template.is_some()
-                        || object_template.is_some()
-                }
+                Some(TypeDecl::Alias { .. }) => true,
                 Some(TypeDecl::Interface { params, .. }) => params.is_empty(),
                 _ => false,
             };
