@@ -325,6 +325,11 @@ pub trait RelationNormalization {
         self.normalize(derived.ty).map(DerivedType::plain)
     }
 
+    /// Stable head used to recognize recursive generic expansion after normalization.
+    fn recursion_identity(&self, _store: &Store, _raw: TypeId, normalized: TypeId) -> TypeId {
+        normalized
+    }
+
     /// Whether the active semantic universe proves that `ty` lacks a callable member.
     /// The default stays conservative for normalization providers without library data.
     fn definitely_lacks_callable_member(&self, _store: &Store, _ty: TypeId, _name: &str) -> bool {
@@ -391,6 +396,7 @@ pub struct Relater<'a> {
     /// recursive/mutually-recursive types (`interface List { tail: List | null }`)
     /// re-enter an in-flight key and rely on this to terminate.
     stack: FxHashSet<StackRelationKey>,
+    recursion_stack: Vec<(RecursionRelationKey, StackRelationKey)>,
     /// Ground contextual successes completed during the current top-level
     /// relation operation. Unlike the durable cache, this key includes the
     /// effective binder environment and stores only fully-discharged `Yes`es.
@@ -420,6 +426,14 @@ pub struct Relater<'a> {
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct StackRelationKey {
     relation: RelationKey,
+    environment: BinderEnvironmentId,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct RecursionRelationKey {
+    source: TypeId,
+    target: TypeId,
+    kind: RelationKind,
     environment: BinderEnvironmentId,
 }
 
@@ -549,6 +563,7 @@ impl<'a> Relater<'a> {
             query_apparent_demand_set: FxHashSet::default(),
             query_demand_observed: false,
             stack: FxHashSet::default(),
+            recursion_stack: Vec::new(),
             completed_contextual_yes: FxHashSet::default(),
             binder_contexts: Vec::new(),
             binder_environments: FxHashMap::default(),
@@ -579,6 +594,7 @@ impl<'a> Relater<'a> {
             query_apparent_demand_set: FxHashSet::default(),
             query_demand_observed: false,
             stack: FxHashSet::default(),
+            recursion_stack: Vec::new(),
             completed_contextual_yes: FxHashSet::default(),
             binder_contexts: Vec::new(),
             binder_environments: FxHashMap::default(),
@@ -757,6 +773,24 @@ impl<'a> Relater<'a> {
             return Relation::Yes;
         }
 
+        let recursion_key = self.recursion_relation_key(
+            original_src,
+            original_tgt,
+            src,
+            tgt,
+            kind,
+            stack_key.environment,
+        );
+        if let Some((_, ancestor)) = self
+            .recursion_stack
+            .iter()
+            .rev()
+            .find(|(active, _)| active == &recursion_key)
+        {
+            assumed.insert(ancestor.clone());
+            return Relation::Yes;
+        }
+
         // Contextual successes cannot use the durable three-word cache, but a
         // completed ground result is reusable under the exact same effective
         // binder environment for the remainder of this relation operation.
@@ -827,6 +861,8 @@ impl<'a> Relater<'a> {
         }
 
         self.stack.insert(stack_key.clone());
+        self.recursion_stack
+            .push((recursion_key, stack_key.clone()));
         // This frame's own assumption accumulator. Children record the ancestor
         // keys (including, possibly, this frame's own key) they assumed true.
         let mut frame_assumed: AssumedSet = FxHashSet::default();
@@ -839,6 +875,11 @@ impl<'a> Relater<'a> {
             relater.relate_uncached(src, tgt, kind, &mut frame_assumed)
         });
         self.stack.remove(&stack_key);
+        let popped = self
+            .recursion_stack
+            .pop()
+            .expect("relation recursion stack remains balanced");
+        debug_assert!(popped.1 == stack_key);
 
         // Clamp the recompute of an already-cached failure to its cached verdict.
         // The recompute runs UNDER the stack push above, so a self-referential subtree
@@ -1002,6 +1043,37 @@ impl<'a> Relater<'a> {
         let environment = self.binder_environment_id();
         StackRelationKey {
             relation,
+            environment,
+        }
+    }
+
+    fn recursion_relation_key(
+        &self,
+        raw_source: TypeId,
+        raw_target: TypeId,
+        source: TypeId,
+        target: TypeId,
+        kind: RelationKind,
+        environment: BinderEnvironmentId,
+    ) -> RecursionRelationKey {
+        let structural =
+            self.store.tag(source) == TypeTag::Object && self.store.tag(target) == TypeTag::Object;
+        let source = self
+            .normalization
+            .filter(|_| structural)
+            .map_or(source, |normalization| {
+                normalization.recursion_identity(self.store, raw_source, source)
+            });
+        let target = self
+            .normalization
+            .filter(|_| structural)
+            .map_or(target, |normalization| {
+                normalization.recursion_identity(self.store, raw_target, target)
+            });
+        RecursionRelationKey {
+            source,
+            target,
+            kind,
             environment,
         }
     }

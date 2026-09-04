@@ -19,7 +19,8 @@ use crate::relate::{
     ReasonChain, Relater, RelationAttempt, RelationDemand, RelationNormalization, RelationOutcome,
 };
 use crate::types::repr::{
-    AliasId, ClassId, IntrinsicKind, LiteralValue, TypeParamId, TypeTag, Visibility,
+    AliasId, ClassId, DeclaredRecipeNode, IntrinsicKind, LiteralValue, TypeParamId, TypeTag,
+    Visibility,
 };
 use crate::types::store::{Store, TypeId};
 use crate::types::substitute::{DerivedSubstitutionOutcome, SubstitutionOutcome};
@@ -2802,9 +2803,26 @@ impl RelationNormalization for ProjectionPlan<'_> {
                         derivation: None,
                     };
                 }
+
                 _ => return Ok(current),
             }
         }
+    }
+    fn recursion_identity(&self, store: &Store, raw: TypeId, normalized: TypeId) -> TypeId {
+        if store.tag(normalized) != TypeTag::Object {
+            return normalized;
+        }
+        if let Some(instantiation) = store.instantiation_type(raw) {
+            return instantiation.base;
+        }
+        store
+            .declared_type(raw)
+            .and_then(|declared| store.declared_recipe(declared.recipe))
+            .and_then(|recipe| match &recipe.node {
+                DeclaredRecipeNode::Application { template, .. } => Some(*template),
+                _ => None,
+            })
+            .unwrap_or(normalized)
     }
 
     fn definitely_lacks_callable_member(&self, store: &Store, ty: TypeId, name: &str) -> bool {
