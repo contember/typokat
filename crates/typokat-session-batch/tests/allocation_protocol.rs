@@ -63,11 +63,13 @@ fn assert_real_clean_frame(receipt: &Value) {
         receipt["shared_product_identity"],
         typokat_library::embedded_library_profile_metadata().profile_identity()
     );
+    let materialized = receipt["materialized_product_owner_count"]
+        .as_u64()
+        .expect("materialized product owner count");
+    assert!(materialized > 0, "the real session must own demanded library work");
     assert!(
-        receipt["materialized_product_owner_count"]
-            .as_u64()
-            .is_some_and(|count| count > 0),
-        "the real session must own the materialized library product"
+        materialized < 100,
+        "a narrow Array frame must not force the full library: {materialized} owners"
     );
 
     let identities = [
