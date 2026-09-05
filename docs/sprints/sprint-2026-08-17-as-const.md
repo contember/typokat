@@ -230,6 +230,28 @@ records significant choices in an ADR before production integration. No push, pu
   projection; their true/false branch controls are now separately tsc-verified. The scoreboard is
   unchanged. Root source guards also require a new-tag audit and a clean-worktree fix: `examples/`
   exists locally but is untracked, while the production lifecycle scanner currently requires it.
+- R1a has narrow independent GO; the leader repeated all 68 inference tests successfully. This
+  accepts the prepared multi-candidate result correction only, not M1 integration. R1b addresses
+  recursive fallback identity next; enum direct-return transport remains a separate inference
+  policy dependency.
+- R2 decisions: preserve the ordinary object callback's outer-obligation owner/span. Replace only
+  the old callback source-parameter expectation `any` with `number` and rename that unit test;
+  independent tsc source-type inspection proves `(value: number) => string`. Keep its actual
+  `string` return, one-error assertion, and no-incomplete assertion. R2a also owns mixed bare-return
+  and fallthrough source types; they cannot be replaced by a contextual return annotation.
+- Contextual tuple-row correlation is disabled when a participant is written anywhere in the
+  callback, including later or captured writes; shadowed and unrelated writes do not disable it.
+  Generic source signatures must retain their binders and positional indexed types. A leader tsc
+  declaration probe confirms that a `satisfies` source remains generic and accepts valid explicit
+  type arguments, so a broad non-generic source approximation is not accepted. Any required shared
+  projection extension is limited to closed finite tuple-row constraints and static positions,
+  not general generic indexed-access breadth. New source tests pin both boundaries.
+- The complete frozen-M1 differential replay classified all 111 divergent programs: 110 are
+  contextual object-arrow return relocation (R2), and one is union-member display order after
+  introducing the widening wrapper. No line/code/cardinality/exit/incomplete delta occurred in
+  that generated inventory. This classification does not override the separately reproduced
+  default/empty-return false negatives or approve the changed route. No scoreboard or allowlist
+  changed; final acceptance still requires rerunning the repaired tree.
 
 ### Approved feasibility reset — 2026-09-05
 
