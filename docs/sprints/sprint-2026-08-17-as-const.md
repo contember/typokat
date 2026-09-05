@@ -216,6 +216,20 @@ records significant choices in an ADR before production integration. No push, pu
   literal-mode and source-product decisions are
   [ADR-0031](../decisions/0031-preserve-literal-widening-in-immutable-type-identity.md) and
   [ADR-0032](../decisions/0032-own-semantic-assignment-work-by-source-and-query-environment.md).
+- M1 independent review returned FAIL: contextual arrows skipped parameter defaults and treated
+  contextual returns as annotations; merged inference candidates leaked widening modes; recursive
+  constraint fallbacks expanded on every stabilization step. The leader's full suite additionally
+  exposed enum identity transport and existing contextual callback ownership controls. These are
+  acceptance blockers, not permission to weaken the older tests. Remediation starts with terminal
+  candidate modes (R1a), then recursive fallback identity (R1b), then contextual arrow ownership and
+  dependent rest parameters. Return-contribution ordering is an older as-const gap now pinned as an
+  explicit in-sprint obligation rather than left as an unrecorded review caveat.
+- The M1 official gate failed four files. Two mapped-string/numeric deltas share the M2 target-flow
+  cause, not a string-intrinsic relation bug. The known inferred-default delta remains M3. Newly
+  contextualized rest-tuple arrows expose missing positional correlation and generic rest
+  projection; their true/false branch controls are now separately tsc-verified. The scoreboard is
+  unchanged. Root source guards also require a new-tag audit and a clean-worktree fix: `examples/`
+  exists locally but is untracked, while the production lifecycle scanner currently requires it.
 
 ### Approved feasibility reset — 2026-09-05
 
