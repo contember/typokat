@@ -616,6 +616,17 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
         }
         let group = self.type_decl_id(scope, name)?;
+        let project_local_native_array_alias =
+            matches!(self.current_source, crate::source::SourceUnit::User { .. })
+                .then(|| self.project_local_native_array_alias(group))
+                .flatten();
+        if project_local_native_array_alias.is_some()
+            && !self.demand_project_local_type_group(group)
+        {
+            return None;
+        }
+        let native_array_alias =
+            project_local_native_array_alias.or_else(|| self.native_array_groups().alias_of(group));
         if !self.type_environment.is_published() && !self.type_group_construction_is_frozen(group) {
             return None;
         }
@@ -631,7 +642,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
         // `Array<E>` / `ReadonlyArray<E>` name the native array types, not the library
         // interface body that carries their member surface (see `library_identities`).
-        if let Some(alias) = self.native_array_groups().alias_of(group) {
+        if let Some(alias) = native_array_alias {
             let [argument] = arguments.map(|arguments| arguments.params.as_slice())? else {
                 return None;
             };

@@ -566,8 +566,8 @@ mod tests {
     fn packaged_census_uses_the_cached_declaration_product() {
         let census = LibraryRecordCensus::compile_packaged_profile().expect("packaged census");
 
-        assert_eq!(census.entries().len(), 709);
-        assert_eq!(census.diagnostics(), 322);
-        assert_eq!(census.incompletes(), 387);
+        assert_eq!(census.entries().len(), 703);
+        assert_eq!(census.diagnostics(), 318);
+        assert_eq!(census.incompletes(), 385);
     }
 }

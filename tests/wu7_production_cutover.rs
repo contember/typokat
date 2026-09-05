@@ -95,6 +95,7 @@ fn production_sources_use_only_checker_session_lifecycle() {
         "tests/library_checkpoint_release_compile.rs",
         "tests/project_local_library_candidate.rs",
         "tests/wu4_force_all_audit_boundary.rs",
+        "tests/cases/sr_project_local_library_candidate/semantic-demand-oracle.json",
         "examples/one_pass_probe.rs",
     ] {
         assert!(

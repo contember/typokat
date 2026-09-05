@@ -106,11 +106,23 @@ pub(super) struct ProjectLocalSemanticCoordinator {
     product_lowering_metadata_plan: Option<ProductLoweringMetadataPlan>,
 }
 
+pub(super) struct ProjectLocalDemandGatewayConfig<'a> {
+    pub(super) product: &'a LibraryDeclarationProduct,
+    pub(super) augmented_groups: &'a BTreeMap<usize, TypeGroupId>,
+    pub(super) native_array_groups: [Option<usize>; 2],
+    pub(super) enable_native_array_alias: bool,
+    pub(super) user_type_products: &'a BTreeMap<TypeGroupId, Vec<usize>>,
+    pub(super) product_value_demands: &'a [(usize, ValueStorageId)],
+    pub(super) product_value_publications: &'a [(usize, ValueStorageId)],
+    pub(super) global_value_products: Vec<usize>,
+}
+
 pub(super) struct ProjectLocalPassDemandGateway<'a, Commit> {
     coordinator: &'a mut ProjectLocalSemanticCoordinator,
     product: &'a LibraryDeclarationProduct,
     augmented_groups: &'a BTreeMap<usize, TypeGroupId>,
     native_array_groups: [Option<usize>; 2],
+    enable_native_array_alias: bool,
     type_products: BTreeMap<TypeGroupId, usize>,
     user_type_products: &'a BTreeMap<TypeGroupId, Vec<usize>>,
     value_products: BTreeMap<usize, usize>,
@@ -120,15 +132,9 @@ pub(super) struct ProjectLocalPassDemandGateway<'a, Commit> {
 }
 
 impl<'a, Commit> ProjectLocalPassDemandGateway<'a, Commit> {
-    fn new_inner(
+    pub(super) fn with_commit(
         coordinator: &'a mut ProjectLocalSemanticCoordinator,
-        product: &'a LibraryDeclarationProduct,
-        augmented_groups: &'a BTreeMap<usize, TypeGroupId>,
-        native_array_groups: [Option<usize>; 2],
-        user_type_products: &'a BTreeMap<TypeGroupId, Vec<usize>>,
-        product_value_demands: &[(usize, ValueStorageId)],
-        product_value_publications: &[(usize, ValueStorageId)],
-        global_value_products: Vec<usize>,
+        config: ProjectLocalDemandGatewayConfig<'a>,
         commit: Commit,
     ) -> Self {
         let type_products = coordinator
@@ -144,11 +150,11 @@ impl<'a, Commit> ProjectLocalPassDemandGateway<'a, Commit> {
             .collect();
         let mut value_products = BTreeMap::new();
         let mut value_storages = BTreeMap::<usize, Vec<ValueStorageId>>::new();
-        for (product_group, storage) in product_value_demands {
+        for (product_group, storage) in config.product_value_demands {
             let replaced = value_products.insert(storage.index(), *product_group);
             debug_assert!(replaced.is_none() || replaced == Some(*product_group));
         }
-        for (product_group, storage) in product_value_publications {
+        for (product_group, storage) in config.product_value_publications {
             value_storages
                 .entry(*product_group)
                 .or_default()
@@ -156,40 +162,17 @@ impl<'a, Commit> ProjectLocalPassDemandGateway<'a, Commit> {
         }
         Self {
             coordinator,
-            product,
-            augmented_groups,
-            native_array_groups,
+            product: config.product,
+            augmented_groups: config.augmented_groups,
+            native_array_groups: config.native_array_groups,
+            enable_native_array_alias: config.enable_native_array_alias,
             type_products,
-            user_type_products,
+            user_type_products: config.user_type_products,
             value_products,
             value_storages,
-            global_value_products,
+            global_value_products: config.global_value_products,
             commit,
         }
-    }
-
-    pub(super) fn with_commit(
-        coordinator: &'a mut ProjectLocalSemanticCoordinator,
-        product: &'a LibraryDeclarationProduct,
-        augmented_groups: &'a BTreeMap<usize, TypeGroupId>,
-        native_array_groups: [Option<usize>; 2],
-        user_type_products: &'a BTreeMap<TypeGroupId, Vec<usize>>,
-        product_value_demands: &[(usize, ValueStorageId)],
-        product_value_publications: &[(usize, ValueStorageId)],
-        global_value_products: Vec<usize>,
-        commit: Commit,
-    ) -> Self {
-        Self::new_inner(
-            coordinator,
-            product,
-            augmented_groups,
-            native_array_groups,
-            user_type_products,
-            product_value_demands,
-            product_value_publications,
-            global_value_products,
-            commit,
-        )
     }
 }
 
@@ -197,19 +180,16 @@ impl<Commit> ProjectLocalPassDemandGateway<'_, Commit>
 where
     Commit: FnMut(&mut ProjectLocalSemanticCoordinator) -> Result<(), &'static str>,
 {
-    fn demand(
+    fn materialize_product_groups(
         &mut self,
         interner: &mut super::project_local_pass_port::Interner,
         product_groups: &[usize],
-    ) -> Result<ProjectLocalDemandSnapshot, &'static str> {
+    ) -> Result<(), &'static str> {
         if product_groups
             .iter()
             .all(|group| self.coordinator.session.cache().contains(*group))
         {
-            for group in product_groups {
-                self.verify_requested_ready(*group)?;
-            }
-            return self.snapshot();
+            return Ok(());
         }
         self.coordinator.demand_product_groups_with_interner(
             self.product,
@@ -220,7 +200,15 @@ where
             #[cfg(any(test, feature = "test-utils"))]
             ProjectLocalSemanticPhaseForTest::Ordinary,
         );
-        (self.commit)(self.coordinator)?;
+        (self.commit)(self.coordinator)
+    }
+
+    fn demand(
+        &mut self,
+        interner: &mut super::project_local_pass_port::Interner,
+        product_groups: &[usize],
+    ) -> Result<ProjectLocalDemandSnapshot, &'static str> {
+        self.materialize_product_groups(interner, product_groups)?;
         for group in product_groups {
             self.verify_requested_ready(*group)?;
         }
@@ -237,6 +225,16 @@ where
                 Err("project-local demand left its requested terminal resolving")
             }
             None => Err("project-local demand did not publish its requested terminal"),
+        }
+    }
+
+    fn verify_requested_settled(&self, product_group: usize) -> Result<(), &'static str> {
+        match self.coordinator.session.cache().get(product_group) {
+            Some(ProductTerminal::Ready { .. } | ProductTerminal::Unavailable(_)) => Ok(()),
+            Some(ProductTerminal::Resolving) => {
+                Err("project-local bulk demand left a requested terminal resolving")
+            }
+            None => Err("project-local bulk demand did not publish a requested terminal"),
         }
     }
 
@@ -344,6 +342,25 @@ where
         self.demand(interner, &product_groups)
     }
 
+    fn native_array_alias(
+        &self,
+        group: TypeGroupId,
+    ) -> Option<crate::check::checker::library_identities::NativeArrayAlias> {
+        if !self.enable_native_array_alias {
+            return None;
+        }
+        let product_group = self.type_products.get(&group).copied()?;
+        if self.native_array_groups[0] == Some(product_group) {
+            return Some(crate::check::checker::library_identities::NativeArrayAlias::Array);
+        }
+        if self.native_array_groups[1] == Some(product_group) {
+            return Some(
+                crate::check::checker::library_identities::NativeArrayAlias::ReadonlyArray,
+            );
+        }
+        None
+    }
+
     fn demand_value(
         &mut self,
         interner: &mut super::project_local_pass_port::Interner,
@@ -360,7 +377,11 @@ where
         interner: &mut super::project_local_pass_port::Interner,
     ) -> Result<ProjectLocalDemandSnapshot, &'static str> {
         let roots = self.global_value_products.clone();
-        self.demand(interner, &roots)
+        self.materialize_product_groups(interner, &roots)?;
+        for group in &roots {
+            self.verify_requested_settled(*group)?;
+        }
+        self.snapshot()
     }
 
     fn commit_staged(&mut self) -> Result<ProjectLocalDemandSnapshot, &'static str> {

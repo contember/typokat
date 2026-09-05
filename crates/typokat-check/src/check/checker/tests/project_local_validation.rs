@@ -412,7 +412,12 @@ type Broken = typeof globalThis;\n";
     );
     assert_eq!(
         ready("ValueOnly", false),
-        (None, Some(object_surface(0, 1, 0, false, false)))
+        (
+            None,
+            Some(ProjectLocalForceAllReadySurfaceForTest::Other(
+                ProjectLocalForceAllTypeKindForTest::Function,
+            )),
+        )
     );
     assert!(force_all.terminal_census.iter().any(|row| {
         row.group.name == "Broken"

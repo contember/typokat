@@ -5,7 +5,8 @@ use super::coordinator::product_group_for_test;
 #[cfg(any(test, feature = "test-utils"))]
 use super::coordinator::PublicationInjection;
 use super::coordinator::{
-    ProjectLocalPassDemandGateway, ProjectLocalProductRow, ProjectLocalSemanticCoordinator,
+    ProjectLocalDemandGatewayConfig, ProjectLocalPassDemandGateway, ProjectLocalProductRow,
+    ProjectLocalSemanticCoordinator,
 };
 #[cfg(any(test, feature = "test-utils"))]
 use super::fault_gate::FaultStateForTest;
@@ -308,6 +309,11 @@ fn prepare_project_local_execution_for_test<'run, 'ast>(
             !augmented_product_groups.is_empty(),
         )?
     };
+    let force_all_global_value_roots = if force_all {
+        compilation_global_value_product_keys(product, &bound, coordinator.mapped_groups())?
+    } else {
+        Vec::new()
+    };
     let prepared = prepare_project_local_execution(
         ProjectLocalExecutionInputs {
             product,
@@ -320,6 +326,14 @@ fn prepare_project_local_execution_for_test<'run, 'ast>(
         augmented_product_groups,
         final_type_dependencies,
         move |coordinator, product, augmented_product_groups, native_array_groups| {
+            if !force_all_global_value_roots.is_empty() {
+                let _ = coordinator.demand_product_groups(
+                    product,
+                    &force_all_global_value_roots,
+                    augmented_product_groups,
+                    native_array_groups,
+                );
+            }
             if requested_product_keys.is_empty() {
                 return Ok(());
             }
@@ -628,6 +642,7 @@ fn run_ordinary_project_local_user_pass(
         &prepared.augmented_product_groups,
         &prepared.user_product_dependencies,
         prepared.native_array_groups,
+        true,
         bound,
         prepared.library_identity_groups,
         library_validations,
@@ -647,6 +662,7 @@ fn run_project_local_user_pass_core<'ast, Commit, Run>(
     augmented_product_groups: &std::collections::BTreeMap<usize, TypeGroupId>,
     user_product_dependencies: &std::collections::BTreeMap<TypeGroupId, Vec<usize>>,
     native_array_groups: [Option<usize>; 2],
+    enable_native_array_alias: bool,
     bound: BoundProjectBinder,
     library_identity_groups: [Option<TypeGroupId>; 8],
     library_validations: Vec<super::validation::ProjectLocalValidationCandidate>,
@@ -725,19 +741,24 @@ where
         .into_values()
         .collect::<Vec<_>>();
     let product_primary_value_storage = |product_key: usize| {
-        product
-            .group_key_at(product_key)
-            .and_then(|key| product_map.group(key))
-            .and_then(|binding| binding.value())
+        product_value_publications
+            .iter()
+            .find_map(|(key, storage)| (*key == product_key).then_some(*storage))
             .or_else(|| {
-                product_value_publications
-                    .iter()
-                    .find_map(|(key, storage)| (*key == product_key).then_some(*storage))
+                product
+                    .group_key_at(product_key)
+                    .and_then(|key| product_map.group(key))
+                    .and_then(|binding| binding.value())
             })
     };
     let certified_library_values = super::project_local_pass_port::CertifiedLibraryValues {
-        symbol: certified_well_known_symbol_owner(product)
-            .and_then(|owner| product_primary_value_storage(owner.index())),
+        symbol: certified_well_known_symbol_owner(product).and_then(|owner| {
+            product
+                .group_key_at(owner.index())
+                .and_then(|key| product_map.group(key))
+                .and_then(|binding| binding.value())
+                .or_else(|| product_primary_value_storage(owner.index()))
+        }),
     };
     let product_value_types = coordinator
         .mapped_groups()
@@ -792,13 +813,16 @@ where
         .with_interner(|interner| {
             let mut demand_gateway = ProjectLocalPassDemandGateway::with_commit(
                 coordinator,
-                product,
-                augmented_product_groups,
-                native_array_groups,
-                user_product_dependencies,
-                &product_value_bindings,
-                &product_value_publications,
-                global_value_roots,
+                ProjectLocalDemandGatewayConfig {
+                    product,
+                    augmented_groups: augmented_product_groups,
+                    native_array_groups,
+                    enable_native_array_alias,
+                    user_type_products: user_product_dependencies,
+                    product_value_demands: &product_value_bindings,
+                    product_value_publications: &product_value_publications,
+                    global_value_products: global_value_roots,
+                },
                 commit,
             );
             run(
@@ -986,6 +1010,7 @@ fn run_project_local_semantic_candidate(
         &augmented_product_groups,
         &user_product_dependencies,
         native_array_groups,
+        !request.force_all,
         bound,
         library_identity_groups,
         library_validations,

@@ -1175,7 +1175,7 @@ impl Interner {
     /// right after `reserve_conditional`/`reserve_mapped` for a named alias, so a
     /// deferred instantiation renders as `Extract<K, string>` instead of the raw body.
     pub fn set_template_name(&mut self, id: TypeId, name: impl Into<String>) {
-        if self.store.tag(id) == TypeTag::AliasTemplate {
+        if id.index() < self.store.len() && self.store.tag(id) == TypeTag::AliasTemplate {
             self.store.set_template_name(id, name.into());
             return;
         }

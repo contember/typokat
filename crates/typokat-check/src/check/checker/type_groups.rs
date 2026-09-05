@@ -351,6 +351,15 @@ impl<'ast> TypeEnvironmentState<'ast> {
 }
 
 impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
+    pub(in crate::check::checker) fn project_local_native_array_alias(
+        &self,
+        group: TypeGroupId,
+    ) -> Option<super::library_identities::NativeArrayAlias> {
+        self.project_local_demand_gateway
+            .as_deref()
+            .and_then(|gateway| gateway.native_array_alias(group))
+    }
+
     pub(in crate::check::checker) fn demand_project_local_type_group(
         &mut self,
         group: TypeGroupId,

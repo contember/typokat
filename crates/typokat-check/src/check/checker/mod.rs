@@ -4773,10 +4773,26 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
         &self,
         symbol: SymbolId,
     ) -> Option<ValueStorageId> {
-        self.binder
-            .symbols
-            .get(symbol)
-            .and_then(|binding| binding.value)
+        let binding = self.binder.symbols.get(symbol)?;
+        let value = binding.value?;
+        let rejected = binding.declarations.iter().any(|declaration| {
+            self.binder
+                .namespaces
+                .merge_disposition_for_declaration(*declaration)
+                .is_some_and(|disposition| {
+                    disposition != crate::binder::namespace::MergeDisposition::Admitted
+                })
+        });
+        if matches!(self.current_source, crate::source::SourceUnit::User { .. }) && rejected {
+            if let Some(storage) = binding
+                .function_values
+                .iter()
+                .find(|storage| self.project_local_library_value_storages.contains(storage))
+            {
+                return Some(*storage);
+            }
+        }
+        Some(value)
     }
 
     pub(in crate::check::checker) fn published_class(

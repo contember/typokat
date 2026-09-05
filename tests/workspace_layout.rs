@@ -10,11 +10,39 @@ const MEMBERS: &[&str] = &[
     "typokat-core",
     "typokat-surface",
     "typokat-types",
+    "typokat-library-product",
     "typokat-binder",
     "typokat-relate",
     "typokat-diagnostics",
     "typokat-frontend",
     "typokat-check",
+    "typokat-library",
+    "typokat-driver",
+    "typokat-project-binder-probe",
+    "typokat-session-batch",
+];
+const DEFAULT_MEMBERS: &[&str] = &[
+    "typokat-core",
+    "typokat-surface",
+    "typokat-types",
+    "typokat-binder",
+    "typokat-relate",
+    "typokat-diagnostics",
+    "typokat-frontend",
+    "typokat-check",
+    "typokat-library",
+    "typokat-library-product",
+    "typokat-driver",
+];
+const TOOL_MEMBERS: &[&str] = &["typokat-project-binder-probe", "typokat-session-batch"];
+const ROOT_NORMAL_DEPENDENCIES: &[&str] = &[
+    "typokat-core",
+    "typokat-surface",
+    "typokat-types",
+    "typokat-binder",
+    "typokat-relate",
+    "typokat-diagnostics",
+    "typokat-frontend",
     "typokat-library",
     "typokat-driver",
 ];
@@ -147,7 +175,11 @@ fn exact_normal_edges() -> BTreeMap<String, BTreeSet<String>> {
         ("typokat-core", names(&[])),
         ("typokat-surface", names(&[])),
         ("typokat-types", names(&[])),
-        ("typokat-binder", names(&["typokat-core", "typokat-types"])),
+        ("typokat-library-product", names(&[])),
+        (
+            "typokat-binder",
+            names(&["typokat-core", "typokat-library-product", "typokat-types"]),
+        ),
         ("typokat-relate", names(&["typokat-types"])),
         (
             "typokat-diagnostics",
@@ -169,6 +201,7 @@ fn exact_normal_edges() -> BTreeMap<String, BTreeSet<String>> {
                 "typokat-core",
                 "typokat-diagnostics",
                 "typokat-frontend",
+                "typokat-library-product",
                 "typokat-relate",
                 "typokat-types",
             ]),
@@ -180,6 +213,9 @@ fn exact_normal_edges() -> BTreeMap<String, BTreeSet<String>> {
                 "typokat-check",
                 "typokat-core",
                 "typokat-frontend",
+                "typokat-library-product",
+                "typokat-relate",
+                "typokat-types",
             ]),
         ),
         (
@@ -189,14 +225,25 @@ fn exact_normal_edges() -> BTreeMap<String, BTreeSet<String>> {
                 "typokat-diagnostics",
                 "typokat-frontend",
                 "typokat-library",
-                "typokat-types",
+                "typokat-library-product",
+            ]),
+        ),
+        ("typokat-project-binder-probe", names(&["typokat-library"])),
+        (
+            "typokat-session-batch",
+            names(&[
+                "typokat-check",
+                "typokat-core",
+                "typokat-frontend",
+                "typokat-library",
+                "typokat-library-product",
             ]),
         ),
     ]
     .into_iter()
     .map(|(name, dependencies)| (name.to_string(), dependencies))
     .collect::<BTreeMap<_, _>>();
-    edges.insert(ROOT_PACKAGE.to_string(), names(MEMBERS));
+    edges.insert(ROOT_PACKAGE.to_string(), names(ROOT_NORMAL_DEPENDENCIES));
     edges
 }
 
@@ -236,9 +283,14 @@ fn workspace_has_the_accepted_members_defaults_and_source_owners() {
         package_names_for_ids(&metadata, "workspace_members"),
         expected_packages
     );
+    let expected_default_packages = names(
+        &std::iter::once(ROOT_PACKAGE)
+            .chain(DEFAULT_MEMBERS.iter().copied())
+            .collect::<Vec<_>>(),
+    );
     assert_eq!(
         package_names_for_ids(&metadata, "workspace_default_members"),
-        expected_packages
+        expected_default_packages
     );
 
     for member in MEMBERS {
@@ -248,9 +300,14 @@ fn workspace_has_the_accepted_members_defaults_and_source_owners() {
             member_manifest.starts_with(&format!("[package]\nname = \"{member}\"\n")),
             "{member} manifest must retain package identity"
         );
+        let source_root = if TOOL_MEMBERS.contains(member) {
+            "src/main.rs"
+        } else {
+            "src/lib.rs"
+        };
         assert!(
-            member_root.join("src/lib.rs").is_file(),
-            "{member} must have a library root"
+            member_root.join(source_root).is_file(),
+            "{member} must own {source_root}"
         );
     }
 
@@ -299,6 +356,7 @@ fn workspace_internal_dependencies_are_exact_downward_and_acyclic() {
     let ranks = BTreeMap::from([
         ("typokat-core", 0),
         ("typokat-surface", 0),
+        ("typokat-library-product", 0),
         ("typokat-types", 1),
         ("typokat-binder", 2),
         ("typokat-relate", 2),
@@ -307,6 +365,8 @@ fn workspace_internal_dependencies_are_exact_downward_and_acyclic() {
         ("typokat-check", 4),
         ("typokat-library", 5),
         ("typokat-driver", 6),
+        ("typokat-project-binder-probe", 6),
+        ("typokat-session-batch", 6),
         (ROOT_PACKAGE, 7),
     ]);
 
@@ -341,12 +401,12 @@ fn workspace_internal_dependencies_are_exact_downward_and_acyclic() {
     let root_edges = &edges[ROOT_PACKAGE];
     assert_eq!(
         root_edges[&DependencyKind::Normal],
-        names(MEMBERS),
-        "the root package must depend on every member"
+        names(ROOT_NORMAL_DEPENDENCIES),
+        "the root package must retain its exact facade dependencies"
     );
     assert_eq!(
         root_edges[&DependencyKind::Dev],
-        names(&["typokat-check", "typokat-core"]),
+        names(&["typokat-check", "typokat-core", "typokat-library"]),
         "the root owns only its test-support dependencies"
     );
     assert!(root_edges[&DependencyKind::Build].is_empty());

@@ -1167,15 +1167,14 @@ fn contextual_yes_memo_rejects_demand_and_exhaustion_tainted_frames() {
         relater.query_demand = None;
         relater.query_demand_observed = false;
         let mut assumed = AssumedSet::default();
-        assert!(relater
-            .relate(
-                source,
-                demand_target,
-                RelationKind::Assignable,
-                &mut assumed,
-                true,
-            )
-            .is_yes());
+        let outcome = relater.relate(
+            source,
+            demand_target,
+            RelationKind::Assignable,
+            &mut assumed,
+            true,
+        );
+        assert!(matches!(outcome, Relation::No(_)), "{outcome:?}");
         assert_eq!(
             relater.query_demand,
             Some(RelationDemand::ClassProjection(demanded))

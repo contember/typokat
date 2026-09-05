@@ -1470,10 +1470,10 @@ fn product_receipt_matches_authenticated_edge_and_attachment_oracles() {
     assert_eq!(receipt.resolved_group_dependency_count, 14_235);
     assert_eq!(receipt.type_parameter_dependency_count, 2_207);
     assert_eq!(receipt.unresolved_dependency_count, 3);
-    assert_eq!(receipt.canonical_bytes, 35_707_223);
+    assert_eq!(receipt.canonical_bytes, 35_716_782);
     assert_eq!(
         receipt.canonical_digest,
-        "5a3b85f7f056f642c784b2f871b2df813f59e583742b549ad0f1519cefa97335"
+        "3a5de2006a068752b7f2290ab1a32eec0d2e9d0873e374a6bc33bb0628690cd5"
     );
     assert_eq!(
         receipt.dependency_edge_digest,

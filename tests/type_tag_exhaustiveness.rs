@@ -85,6 +85,7 @@ fn type_tag_variant_list_is_frozen_for_exhaustiveness_audit() {
             "Declared",
             "Enum",
             "EnumMember",
+            "AliasTemplate",
         ],
         "TypeTag changed; adjudicate the new variant at every guarded match site"
     );
@@ -342,7 +343,7 @@ fn production_type_tag_wildcards_adjudicate_enum_variants() {
             "whole and member enum typeof overlap is handled explicitly before the fallback",
         ),
         (
-            "crates/typokat-check/src/check/flow.rs#4:match store.tag(left)",
+            "crates/typokat-check/src/check/flow.rs#5:match store.tag(left)",
             "same-id whole enums can overlap while exact members have their explicit arm",
         ),
         (

@@ -1550,6 +1550,11 @@ pub(in crate::check::checker) trait ProjectLocalUserDemandGateway {
         group: TypeGroupId,
     ) -> Result<ProjectLocalDemandSnapshot, &'static str>;
 
+    fn native_array_alias(
+        &self,
+        group: TypeGroupId,
+    ) -> Option<super::library_identities::NativeArrayAlias>;
+
     fn demand_value(
         &mut self,
         interner: &mut Interner,
