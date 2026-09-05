@@ -25,8 +25,9 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprint-2026-08-17-as-const.md`](sprints/sprint-2026-08-17-as-const.md) — bounded literal-model
-  and assignment-flow feasibility before approving a full migration; WU1 remains uncommitted.
+- [`sprint-2026-08-17-as-const.md`](sprints/sprint-2026-08-17-as-const.md) — autonomous completion
+  through immutable literal modes ([ADR-0031](decisions/0031-preserve-literal-widening-in-immutable-type-identity.md))
+  and source-owned assignment work ([ADR-0032](decisions/0032-own-semantic-assignment-work-by-source-and-query-environment.md)); implementation remains uncommitted.
 
 ## What's hot
 
@@ -47,8 +48,8 @@ decisions → reference → archive.
   product boundary. The archived
   [`satisfies sprint`](archive/sprint-2026-08-17-satisfies.md) implements source-preserving
   contextual checking and records the comparison with TypeScript PR #46827. The
-  [`as const` sprint](sprints/sprint-2026-08-17-as-const.md) now tests literal-model and flow
-  feasibility after three review rounds exposed provenance loss in the uncommitted WU1 port.
+  [`as const` sprint](sprints/sprint-2026-08-17-as-const.md) now migrates literal producers and
+  assignment flow after independent reviews exposed provenance loss in the uncommitted WU1 port.
 - **Library compiler decomposition shipped 2026-08-21** — the
   [`archived sprint`](archive/sprint-2026-08-15-library-compiler-decomposition.md) split the
   14,009-line root into a 176-line stable facade, thirteen bounded production owners, and one test

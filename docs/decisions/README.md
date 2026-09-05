@@ -46,3 +46,5 @@ a commit message suffices.
 - [`0028`](0028-rebaseline-the-production-owned-library-census.md) — rebaseline the production-owned library census — accepted (2026-08-28)
 - [`0029`](0029-gate-the-library-record-census-behind-an-opt-in-feature.md) — gate the library record census behind an opt-in feature — accepted (2026-08-28)
 - [`0030`](0030-treat-the-wu6-typokat-oracle-as-a-regression-ratchet.md) — treat the WU6 typokat oracle as a regression ratchet — accepted (2026-08-29)
+- [`0031`](0031-preserve-literal-widening-in-immutable-type-identity.md) — preserve literal widening in immutable type identity — accepted (2026-09-06)
+- [`0032`](0032-own-semantic-assignment-work-by-source-and-query-environment.md) — own semantic assignment work by source and query environment — accepted (2026-09-06)

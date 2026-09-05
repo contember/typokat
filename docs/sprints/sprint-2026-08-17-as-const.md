@@ -210,6 +210,12 @@ records significant choices in an ADR before production integration. No push, pu
   ten markers; the authenticated pre-change checker drops all four loop-copy errors. A bounded
   source-owned local initializer demand is the selected availability direction, subject to the
   independent architecture step review; it is not a general backlog-76 cutover.
+- M2 step review corrected two proposed contracts: the expression result retains actual contextual
+  typing, and loop discharge follows TypeScript's query-local incomplete-flow policy rather than a
+  simultaneous equation fixed point. New source witnesses pin both corrections. The adopted
+  literal-mode and source-product decisions are
+  [ADR-0031](../decisions/0031-preserve-literal-widening-in-immutable-type-identity.md) and
+  [ADR-0032](../decisions/0032-own-semantic-assignment-work-by-source-and-query-environment.md).
 
 ### Approved feasibility reset — 2026-09-05
 
