@@ -203,6 +203,13 @@ records significant choices in an ADR before production integration. No push, pu
   confirms these witnesses. A missing identifier enum key reports `TS7015`, not `TS2339`; keep it
   under the existing `expr-infer/element-access/implicit-any-index` owner rather than add an
   unrelated no-implicit-any diagnostic to this sprint.
+- 2026-09-06 — M2 acceptance now forces a smaller loop closure than the declared union, including
+  a later local initializer, an exact call, a cyclic RHS, and a failing call child whose effect
+  must appear once. Additional transfer controls cover fresh booleans, whole-source union coverage,
+  mutable declared union members, and nested assignment-result separation. Strict tsc matches all
+  ten markers; the authenticated pre-change checker drops all four loop-copy errors. A bounded
+  source-owned local initializer demand is the selected availability direction, subject to the
+  independent architecture step review; it is not a general backlog-76 cutover.
 
 ### Approved feasibility reset — 2026-09-05
 
