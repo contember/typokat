@@ -621,6 +621,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 .then(|| self.project_local_native_array_alias(group))
                 .flatten();
         if project_local_native_array_alias.is_some()
+            && !self.project_local_type_group_is_ready(group)
             && !self.demand_project_local_type_group(group)
         {
             return None;

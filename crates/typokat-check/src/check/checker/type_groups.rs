@@ -367,6 +367,18 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
         }
         None
     }
+    pub(in crate::check::checker) fn project_local_type_group_is_ready(
+        &self,
+        group: TypeGroupId,
+    ) -> bool {
+        matches!(
+            self.type_environment
+                .resolution_environment()
+                .groups
+                .get(group),
+            Some(PublishedTypeGroupTerminal::Ready(_))
+        )
+    }
 
     pub(in crate::check::checker) fn demand_project_local_type_group(
         &mut self,

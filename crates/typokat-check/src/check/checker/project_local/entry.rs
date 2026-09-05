@@ -740,10 +740,16 @@ where
     let product_value_publications = product_value_publications_by_storage
         .into_values()
         .collect::<Vec<_>>();
+    let mut product_primary_value_storages = std::collections::BTreeMap::new();
+    for (product_key, storage) in &product_value_publications {
+        product_primary_value_storages
+            .entry(*product_key)
+            .or_insert(*storage);
+    }
     let product_primary_value_storage = |product_key: usize| {
-        product_value_publications
-            .iter()
-            .find_map(|(key, storage)| (*key == product_key).then_some(*storage))
+        product_primary_value_storages
+            .get(&product_key)
+            .copied()
             .or_else(|| {
                 product
                     .group_key_at(product_key)
