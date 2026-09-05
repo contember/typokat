@@ -197,6 +197,13 @@ review causes root-cause classification and a new bounded remediation unit, not 
 repeated blind patches. The leader resolves new design boundaries under this authorization and
 records significant choices in an ADR before production integration. No push, publish, or deploy.
 
+- M3 spec extension: inferred default contextual callbacks, declaration-kind widening, null versus
+  undefined, and annotation authority; ready enum keys and child-effect cardinality; reversed class
+  order, reference mutability, scalar negative controls, and missing/private members. Strict tsc
+  confirms these witnesses. A missing identifier enum key reports `TS7015`, not `TS2339`; keep it
+  under the existing `expr-infer/element-access/implicit-any-index` owner rather than add an
+  unrelated no-implicit-any diagnostic to this sprint.
+
 ### Approved feasibility reset — 2026-09-05
 
 The user approved only spec expansion, bounded literal-model and assignment-flow feasibility,
