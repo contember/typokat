@@ -1,7 +1,7 @@
 ---
 id: 0021
 title: Use complete-source compilation for standalone CLI checks
-status: accepted
+status: partially superseded by 0023; parsing and report-order contracts retained
 date: 2026-08-05
 ---
 

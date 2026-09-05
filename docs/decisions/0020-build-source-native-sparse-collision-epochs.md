@@ -1,7 +1,7 @@
 ---
 id: 0020
 title: Build source-native sparse collision epochs over the frozen library base
-status: accepted
+status: superseded by 0023
 date: 2026-07-28
 ---
 

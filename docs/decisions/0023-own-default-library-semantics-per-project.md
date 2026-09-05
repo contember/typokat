@@ -1,7 +1,7 @@
 ---
 id: 0023
 title: Own default-library semantics per project
-status: proposed
+status: accepted
 date: 2026-08-22
 ---
 
@@ -9,8 +9,8 @@ date: 2026-08-22
 
 ## Context
 
-Production currently has three default-library semantic lifecycles: a frozen shared base for
-ordinary projects, a private sparse collision epoch for selected augmentations, and complete-source
+Production had three default-library semantic lifecycles: a frozen shared base for ordinary
+projects, a private sparse collision epoch for selected augmentations, and complete-source
 compilation for standalone checks and fallbacks. Their shared semantic prefix was built before the
 complete user declaration set existed.
 
@@ -22,10 +22,10 @@ under a consistent fix and found zero missing/changed DOM TK2344 rows under a co
 old-base/new-candidate symbol toggle. The historical count is therefore not an oracle. The durable
 finding is that multiple construction paths made it impossible to attribute the disagreement.
 
-Typokat still needs repeated-project performance. It may therefore share immutable declaration
-facts, but it must derive meaning only after each project's complete ambient/global declaration set
-is known. The proposal remains unaccepted until its semantic, ownership, and performance gates all
-pass and the old production lifecycle is deleted.
+Typokat still needs repeated-project performance. It therefore shares immutable declaration facts
+but derives meaning only after each project's complete ambient/global declaration set is known.
+WU7 accepted this decision after its semantic, ownership, and performance gates passed and deleted
+the old production lifecycle.
 
 ## Decision
 
@@ -38,13 +38,13 @@ universe-local ID, semantic terminal, global-object product, event, cache, repla
 fingerprint, or mutable cell. It is derived from the one canonical declaration inventory while the
 owning AST is alive; it does not introduce a second semantic AST walk or order authority.
 
-Each project will:
+Each project:
 
-1. parse every user source once;
-2. instantiate a fresh binder from the immutable library declaration product;
-3. bind all user scripts and module `declare global` fragments into that binder;
-4. finish canonical global groups, namespace/value attachments, and global-object contributors;
-5. allocate and publish semantic state only on project-local demand.
+1. parses every user source once;
+2. instantiates a fresh binder from the immutable library declaration product;
+3. binds all user scripts and module `declare global` fragments into that binder;
+4. finishes canonical global groups, namespace/value attachments, and global-object contributors;
+5. allocates and publishes semantic state only on project-local demand.
 
 All binder and semantic identities are project-local. Integer `TypeId` equality remains structural
 equality only inside one project-local universe.
@@ -55,38 +55,35 @@ complete dependency SCC before lowering any member. Terminal state is
 evaluator, projection, flow, diagnostic, or global-object cache. A `force_all` operation may exist
 only as a test oracle.
 
-Standalone and repeated checks will use one `CheckerSession` lifecycle. They may share the exact
-immutable declaration product and nothing mutable. Production will have no library collision
-classifier, sparse route, complete-source fallback, collision-free semantic route, or call-order
-switch.
+Standalone and repeated checks use one `CheckerSession` lifecycle. They share the exact immutable
+declaration product and nothing mutable. Production has no library collision classifier, sparse
+route, complete-source fallback, collision-free semantic route, or call-order switch.
 
-The old lifecycle may coexist before cutover only as a test-only shadow/control. No public flag,
-error fallback, name-based branch, or performance fallback may select between the architectures.
-Cutover accepts this ADR and deletes the old lifecycle in the same reviewed change. A failed
-candidate leaves this ADR proposed and the current production route intact; it does not authorize a
-hybrid.
+The old lifecycle coexisted before cutover only as a test-only shadow/control. No public flag,
+error fallback, name-based branch, or performance fallback selected between the architectures.
+WU7 accepted this ADR and deleted that lifecycle in one clean cutover; no hybrid remains.
 
 ## Acceptance and falsification
 
-Reject the candidate or leave this ADR proposed if any of these is true:
+Acceptance required all of the following. A future violation invalidates the implementation:
 
-- the shared product needs retained AST, universe-local state, a second declaration walk, or a
-  second semantic publisher;
-- project-local results differ from TypeScript 6.0.3 or the complete-source oracle on the frozen
-  symbol/Reflect, named library-census, augmentation, merge, order, global-object, recursion,
-  module, parse-failure, and isolation corpus;
-- `force_all` differs from ADR-0018's named census or complete-source semantic probes;
-- source or demand order changes normalized results, provisional state becomes observable, or any
-  mutable identity/cache/augmentation leaks between projects;
-- standalone and repeated routes differ semantically;
-- any production hybrid or collision-name branch remains.
+- the shared product retains no AST, universe-local state, second declaration walk, or second
+  semantic publisher;
+- project-local results match TypeScript 6.0.3 and the preserved WU7 cutover baselines for
+  symbol/Reflect, the named library census, augmentation, merge, order, global-object, recursion,
+  module, parse-failure, and isolation behavior;
+- `force_all` matches ADR-0018's named census and the preserved semantic probes;
+- source or demand order does not change normalized results, provisional state stays unobservable,
+  and no mutable identity, cache, or augmentation leaks between projects;
+- standalone and repeated routes agree semantically;
+- no production hybrid or collision-name branch remains.
 
 The performance gate uses authenticated comparable lifecycles. It covers cold `fast-clean`,
 `fast-errors`, `collision`, and `fanout`, plus a repeated isolated in-process 32-project comparator.
 The comparator must have typokat/tsgo median and p95 speedup, and a one-sided 95% bootstrap lower
 bound, strictly greater than `1.00`; typokat median peak RSS must be no greater than tsgo. A separate
-single-pass 687-frame candidate closure must satisfy the full semantic and lifecycle ratchet and beat
-the frozen current-provider wall time and peak RSS. Every typokat sample must remain below 512 MiB.
+single-pass 687-frame session closure had to satisfy the full semantic and lifecycle ratchet and beat
+the historical wall-time and peak-RSS gates. Every typokat sample must remain below 512 MiB.
 One, two, and 32 concurrent sessions must remain deterministic and isolated. The complete live panel
 collection must fail closed after ten minutes so it remains usable as a development gate.
 
@@ -96,19 +93,19 @@ startup is not an eligible comparison.
 
 ## Consequences
 
-- A library-name collision stops being a semantic lifecycle concept.
-- Project binding repeats work that the frozen base currently shares. Demand-driven semantic SCC
-  publication must recover that cost without weakening eager declaration assembly.
-- The symbolic declaration product becomes a new authenticated architecture boundary.
-- The complete-source route remains the simple semantic oracle until cutover.
-- A performance miss requires profiling and optimizing this ownership model, or a new ADR. It does
-  not permit frozen semantics or sparse replay to return through a fallback.
+- A library-name collision is no longer a semantic lifecycle concept.
+- Project binding repeats work that the frozen base shared. Demand-driven semantic SCC publication
+  recovers that cost without weakening eager declaration assembly.
+- The symbolic declaration product is an authenticated architecture boundary.
+- `force_all` is the test-only complete semantic oracle.
+- A future performance miss requires profiling and optimizing this ownership model, or a new ADR.
+  It does not permit frozen semantics or sparse replay to return through a fallback.
 
-At cutover this ADR will narrowly supersede ADR-0011's frozen semantic base, prefix/delta, singleton
-semantic provider, collision preflight, and private-rebuild boundaries; wholesale supersede
-ADR-0013, ADR-0014, and ADR-0020; narrowly supersede ADR-0017's eager complete semantic compilation
-into `FrozenLibraryBase`; and narrowly supersede ADR-0021's split semantic lifecycle. ADR-0017's
-exact source/profile authority and no-artifact rule, ADR-0018's named census, ADR-0022's one
+This ADR narrowly supersedes ADR-0011's frozen semantic base, prefix/delta, singleton semantic
+provider, collision preflight, and private-rebuild boundaries; wholesale supersedes ADR-0013,
+ADR-0014, and ADR-0020; narrowly supersedes ADR-0017's eager complete semantic compilation into
+`FrozenLibraryBase`; and narrowly supersedes ADR-0021's split semantic lifecycle. ADR-0017's exact
+source/profile authority and no-artifact rule, ADR-0018's named census, ADR-0022's one
 manifest/inventory authority, and the unaffected parsing/report-order contracts remain binding.
 
 ## Alternatives considered

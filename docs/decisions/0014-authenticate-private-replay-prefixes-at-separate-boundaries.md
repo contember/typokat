@@ -1,7 +1,7 @@
 ---
 id: 0014
 title: Authenticate private replay prefixes at separate boundaries
-status: accepted
+status: superseded by 0023
 date: 2026-07-23
 ---
 

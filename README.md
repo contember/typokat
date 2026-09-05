@@ -22,7 +22,7 @@ model** faithfully; when in doubt it *over-reports* (the safe direction). Full d
   <img alt="Clippy" src="https://img.shields.io/badge/clippy-clean-brightgreen">
 </p>
 
-The enabled conformance inventory contains **581 fixture projects / 697 source files**. The
+The enabled conformance inventory contains **583 fixture projects / 699 source files**. The
 inventory and ordering are frozen by
 `cargo test --test conformance conformance_inventory_matches_frozen_receipt -- --exact --nocapture`;
 the ordinary marker gate prints the same totals in its run receipt. `clippy -D warnings` is clean,
@@ -156,7 +156,8 @@ crates/
     src/check/test_support_prelude.ts           test-only bounded ambient unit
   typokat-library/
     src/typescript-6.0.3/                       pinned default-library sources and notices
-    src/{base,compiler,profile,provider}.rs      frozen library base and source compiler
+    src/{declaration_product,profile,provider}.rs        declaration product and profile provider
+    src/{records,project_binder_projection}.rs          library records and binder projection
   typokat-driver/src/driver.rs                  frontend/check orchestration and reports
 tests/
   conformance.rs        marker-driven harness (MILESTONE_DIRS enables m0..m33 + bug-fix corpora)
@@ -201,8 +202,10 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   deferred: optional **methods**/accessors (`go?(): T`), the dedicated *possibly-undefined*
   diagnostics (tsc `TS2532`/`TS18048`/`TS2722`), and narrowing an optional through a member-access
   guard (over-reports `T | undefined`, the safe direction). (Backlog `49`.)
-- **Default-library and module profile.** Production checks use the exact pinned TypeScript 6.0.3
-  ES2025 full-host library, compiled from its 82 vendored source files in each fresh process.
+- **Default-library and module profile.** Production checks use one `CheckerSession` lifecycle over
+  the exact pinned TypeScript 6.0.3 ES2025 full-host library. Each process authenticates its 82
+  vendored files into one immutable declaration product; each project owns the complete
+  library/user binder, semantic universe, caches, and diagnostics.
   The public `check --project-summary json <directory|tsconfig.json>` route accepts only the exact
   files-only strict/noEmit/ESNext/Bundler config and configured local `.ts` roots. It resolves local
   named and regular direct default imports, including extensionless and `.js`→`.ts` forms, through
@@ -253,21 +256,19 @@ cargo test --test conformance conformance -- --exact --nocapture
 cargo clippy --all-targets -- -D warnings
 ```
 
-The exact conformance command checks all 581 fixture projects / 697 source files through the
-ordinary shared route and prints receipt `581/697/581/0` (projects/sources/shared/cold). The latest
-closure run over this inventory took 64.41 s under `cpu-lease run -n 2 --`. The unchanged
-pull-request risk matrix is reproduced by
-`cpu-lease run -n 2 -- cargo test --test wu6_complete_source_cli` (15/15 in 265.84 s).
+The exact conformance command checks all 583 fixture projects / 699 source files once through the
+ordinary `CheckerSession` route and prints receipt `583/699/583/0`
+(projects/sources/repeated/standalone). The latest closure run took 69.77 s under
+`cpu-lease run -n 2 --`.
 
-Full shared/cold parity over the identical inventory is intentionally separate:
+Full repeated/standalone parity over the identical inventory is intentionally separate:
 
 ```sh
 cpu-lease run -n 2 -- cargo test --test conformance \
-  conformance_full_shared_cold_parity -- --ignored --exact --nocapture
+  conformance_full_repeated_standalone_parity -- --ignored --exact --nocapture
 ```
 
-It prints receipt `581/697/581/581`. The latest measured closure run predates the B121 addition and
-passed `580/696/580/580` in 1,164.50 s (1,165.11 s wall).
+It prints receipt `583/699/583/583`; the latest closure run took 138.30 s.
 `.github/workflows/full-parity.yml` runs this unsharded command weekly and on manual dispatch.
 
 ## Continuous integration
@@ -283,5 +284,5 @@ official-suite regression ratchet (`python3 tsofficial.py fetch`, then
 `differential.py repros --check`, and a time-capped self-consistency fuzz sweep). A
 weekly scheduled job re-verifies the differential harness's frozen `tsc 6.0.3` baselines
 and prints its truth-mode dashboard. The separate `.github/workflows/full-parity.yml` workflow
-runs the exact full shared/cold conformance command weekly or by manual dispatch. Formatting is
+runs the exact full repeated/standalone conformance command weekly or by manual dispatch. Formatting is
 enforced against the toolchain pinned in `rust-toolchain.toml`, so run `cargo fmt` before pushing.

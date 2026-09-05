@@ -1,7 +1,7 @@
 ---
 id: 0013
 title: Replay affected library owners in private collision universes
-status: accepted
+status: superseded by 0023
 date: 2026-07-23
 ---
 

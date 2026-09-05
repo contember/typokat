@@ -329,14 +329,12 @@ and validated the same way.
   and stays release-owned by backlog `18`.
   <!-- div: id=binder/duplicate-function-implementation-call dir=under scope=s-duplicate-declarations owner=../backlog/18-duplicate-identifier-detection.md witness=../../tests/cases/sr_deferred_ledger/b18_duplicate_function_implementations.ts -->
 
-### Frozen default-library prefix
+### Default-library declaration collisions
 
-On the `Library` base the library's binder tables are a sealed prefix a user delta may never
-mutate ([ADR-0011](../decisions/0011-freeze-pinned-default-library-base.md)). Every attempted write
-is visible to routing, and [ADR-0020](../decisions/0020-build-source-native-sparse-collision-epochs.md)
-rebuilds the affected closure in a private epoch. Fresh script-scope globals still publish through
-the ordinary delta. The remaining
-rows below are duplicate-declaration diagnostics typokat does not yet emit, pinned by the
+Library and user declarations now bind and publish inside one project-owned `CheckerSession`
+([ADR-0023](../decisions/0023-own-default-library-semantics-per-project.md)). There is no frozen
+semantic prefix or collision-specific route. The remaining rows below are duplicate-declaration
+diagnostics typokat does not yet emit. They remain pinned by the historically named
 `b102_frozen_prefix_writes/` corpus and cross-checked against
 `tsc 6.0.3 --strict --target es2025 --noEmit`.
 

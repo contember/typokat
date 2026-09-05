@@ -37,9 +37,11 @@ closed 2026-07-13), `43` (namespace/declaration-space completion,
 and `84` (canonical declaration owners and publication completeness,
 [`sprint-2026-08-18-canonical-declaration-inventory.md`](../archive/sprint-2026-08-18-canonical-declaration-inventory.md)). The earlier shipped items are in
 [`../archive/`](../archive/README.md), including the completed WU6 official-suite ratchet.
-The implementation for `102` (visible frozen-prefix writes) and `103` (source-native sparse
-collision epochs and routing) shipped through the archived backlog-`14` closure sprint; both shipped
-backlog files have been removed. The flat object-variable publication slice of `48` shipped through
+The historical implementations for `102` (visible frozen-prefix writes) and `103` (source-native
+sparse collision routing) shipped through the backlog-`14` closure, then were replaced by the
+archived [`project-local universe sprint`](../archive/sprint-2026-08-22-project-local-library-universe.md);
+their backlog files remain removed.
+The flat object-variable publication slice of `48` shipped through
 the archived [`object-binding sprint`](../archive/sprint-2026-08-09-object-binding-publication.md);
 the implicit-any family and excluded binding shapes remain open. Backlog `109` shipped through the
 archived [`optional-parameter sprint`](../archive/sprint-2026-08-11-optional-parameter-undefined-arguments.md).
@@ -181,8 +183,7 @@ Checker scaling (from the archived [`2026-07-25 sprint`](../archive/sprint-2026-
 - **S** · [`106`](106-contextual-memo-residual-key-surfaces.md) — two residual surfaces in the contextual-walk memo are argued rather than constructed: one-shot consumption, and a 64-bit type-param hash.
 - **M** · [`94`](94-flat-per-file-regression-since-july-9.md) — remeasure the current route and
   close the flat per-file gap left after the shipped merge and completion-storage reductions.
-- **M** · [`85`](85-owner-closure-representation.md) — replay owner closure is quadratic on an accumulating chain.
-- **M** · [`86`](86-free-param-summary-base-reset.md) — the free-param summary cache discards its sealed base on any mutation.
+- **M** · [`86`](86-free-param-summary-base-reset.md) — explicit layered-interner consumers discard free-param summary bases on mutation; production sessions no longer use that lifecycle.
 - **M** · [`89`](89-scaling-guards-for-project-state.md) — add a multi-file benchmark gate and
   require scaling notes for compilation-wide structures; local-layer probes already shipped.
 
@@ -216,23 +217,13 @@ Consumer surface (non-blocking — these gate consumers of the checker, not chec
 standing architecture and feedback cost. They do not change the checker 1.0 completeness manifest
 and must not weaken soundness or parity gates merely to improve layout or speed.
 
-- **XL** · [`113`](113-project-local-library-universe.md) — active research migration: replace the
-  frozen/sparse lifecycle with one immutable declaration product, project-local eager binding,
-  demand-driven semantics, and a strict `tsgo` superiority gate.
-- **L** · [`115`](115-prepared-project-single-parse.md) — parse provider inputs once into a
-  frontend-owned prepared product used for both routing and checking.
-- **L** · [`116`](116-library-session-lifecycle-boundary.md) — WU5 of the active project-local
-  migration: replace public low-level route/runtime states with one session boundary.
 - **M** · [`119`](119-class-publication-preparation.md) — extract owned class preparation while
   preserving one visible atomic publication facade.
+
 ## Recommended order
 
-1. **Execute the active project-local library universe sprint.** Item `113` now owns the direct
-   replacement of frozen semantics and sparse replay. WU1 has established the symbol/Reflect truth;
-   build the immutable declaration product next, consume `115` while building the project-local
-   binder, deliver `116` as the sole session boundary, prove fair cold and repeated superiority
-   over `tsgo`, then delete the old lifecycle vertically. Do not spend an intermediate sprint
-   repairing or benchmarking sparse replay as a candidate production architecture.
+1. **Finish the active `as const` sprint.** Resume the preserved `996eb5a` work now that the
+   project-local library lifecycle no longer owns its checker seams.
 2. **Close the remaining general blockers exposed by the immutable `placetext` screen.** The
    archived [`object-binding sprint`](../archive/sprint-2026-08-09-object-binding-publication.md)
    removed all 22 measured binding `TK2304` identities, and the archived

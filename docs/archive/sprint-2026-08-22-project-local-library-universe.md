@@ -1,10 +1,15 @@
-<!--
-On close, prepend an OUTCOME block here, then `git mv` this file to ../archive/:
-
-> **OUTCOME — shipped YYYY-MM-DD.** <one-paragraph result.> Commit map: WU0 → <sha>,
-> WU1 → <sha>, … Verification: <the gate command + numbers>. Backlog closed:
-> 113, 115, 116, and 121. Deferred: <honest notes>.
--->
+> **OUTCOME — shipped 2026-09-05.** One immutable, AST-free declaration product now feeds one
+> project-owned `CheckerSession` lifecycle across every production entry point. Library/user
+> declarations bind before demand-driven semantic publication; the frozen base, sparse collision
+> epoch, replay route, and complete-source fallback are deleted. Commit map: WU0 `7b32eac3`;
+> WU1 `ce5c3c77`; WU2 `5e223ae5`–`4d781b5a`; WU3 `d77ad97c`–`26955ba3`;
+> WU4 `e88abf4c`–`9c05afb4`; WU5 `f27f4b16`–`07ba6091`;
+> WU6 `9a2bca08`–`f029bffb`; WU7 `5ad3a836`–`f21e2189`.
+> Verification: ordinary conformance `583/699/583/0` in 69.77 s; full repeated/standalone parity
+> `583/699/583/583` in 138.30 s; the authenticated WU6 rerun at `f21e2189` returned `GO`.
+> The user explicitly waived WU7's independent adversarial review. Backlogs 113, 115, and 116
+> closed; replay-only backlog 85 became obsolete with its deleted implementation; backlog 121
+> shipped during WU1. Deferred: the active as-const sprint and the existing model/module backlog.
 
 # Sprint — project-local default-library universe (2026-08-22)
 
@@ -445,12 +450,11 @@ These conditions may not be relaxed after candidate results are visible.
   `fork_sparse_delta` implementations and sparse container support only where no other live consumer
   remains. Update architecture, invariants, public docs, route probes, package tests, and examples.
 - **Acceptance / witness.** Production contains one library/project semantic lifecycle and no
-  collision-name branch. `rg` finds no unexplained frozen/sparse/replay production residue. The
-  exact WU0 corpus, full unit/workspace suite, clippy, ordinary `581/697` conformance, complete
-  shared/cold parity replacement, official-suite ratchet, symbol/Reflect truth, named library
-  census, package verification, and WU6 benchmark evidence all pass at the same reviewed tree.
-  Backlogs 113, 115, and 116 are deleted; the sprint is archived with commit map and exact
-  measurements.
+  collision-name branch. Search finds no unexplained frozen/sparse/replay production residue. The
+  exact WU0 corpus, full unit/workspace suite, clippy, ordinary `583/699` conformance, complete
+  repeated/standalone parity, official-suite ratchet, symbol/Reflect truth, named library census,
+  package verification, and WU6 benchmark evidence all pass at the same cutover. Backlogs 113, 115,
+  and 116 are deleted; the sprint is archived with commit map and exact measurements.
 - **Touch points.** Library/checker/binder layered storage, provider/driver/CLI, all lifecycle specs,
   ADRs, `docs/reference/`, backlog/index files, and final archived evidence.
 
@@ -470,7 +474,7 @@ These conditions may not be relaxed after candidate results are visible.
   profile remains the product.
 - General checker completeness unrelated to a load-bearing full-profile declaration or semantic
   dependency. New unrelated gaps graduate to backlog rather than expanding this sprint.
-- The active [`as const` sprint](sprint-2026-08-17-as-const.md). Its WIP remains preserved and
+- The active [`as const` sprint](../sprints/sprint-2026-08-17-as-const.md). Its WIP remains preserved and
   paused while this lifecycle sprint owns overlapping checker seams.
 
 ## Decisions
@@ -929,3 +933,32 @@ numbers are invalid without `--no-smt`.
   `80,612` / `81,192` / `157,872 KiB`; the counting-allocator binary recorded exactly
   `36,102,528` allocation and reallocation calls. This single current-candidate attestation
   supersedes the preceding standalone-evidence `NO-GO`: formal WU6 verdict is `GO`.
+- **2026-09-04 — WU7 cutover and semantic closure.** Production entry points now construct the
+  same `CheckerSession`; the old frozen, sparse, collision-classifier, and complete-source
+  implementations and low-level semantic lifecycle types are deleted. Exact corpus work exposed and
+  fixed recursive inference/relation cutoffs plus alias, class, and function-group merge ordering.
+  Ordinary conformance passed `583/699/583/0` in 69.77 s; repeated/standalone parity passed
+  `583/699/583/583` in 138.30 s. The production-owned library census is 703 records:
+  318 diagnostics and 385 incompletes.
+- **2026-09-04 — first post-cutover benchmark returned `NO-GO`.** Clean `e69996d2` preserved the
+  32-project cross-tool wins—median `2.3209`, p95 `2.2984`, bootstrap lower bound `2.3089`, and
+  typokat median RSS `75,466 KiB` versus `171,778 KiB`—but the 687-frame route took
+  `71.717829036 s`. It materialized 2,064,725 library owners because each project eagerly demanded
+  every compilation-global value. This was a lifecycle implementation bug, not grounds to restore
+  the deleted architecture.
+- **2026-09-05 — demand-driven value closure returned `GO`.** RED `87c79cf1` bounded a narrow
+  Array frame below 100 owners; `2bebf82b` made global values lazy. Linkage then exposed two
+  production-only omissions: standalone namespace root storage and demand calls hidden behind the
+  benchmark/test feature. `302ad476`, `79fa8b5b`, and `f21e2189` fixed both while preserving the
+  B103 slot-matrix function-group invariant. The clean `f21e2189` unified collector retained
+  `target/wu6/session-wu6-f21e2189.json` (file SHA-256
+  `dfdda10a12b0ba978fdf5beb02a6458332a9857ed4365d379da7b97a8321fc91`, canonical evidence
+  SHA-256 `d51e864bc1b82abd564b78c0ebca04e408155beeabae746fc6f139fd76234b39`)
+  and returned `GO` with `LINKAGE-PASS`, `PANEL-PASS`, `CONCURRENCY-PASS`, and
+  `ALLOCATION-PASS`. The 32-project panel reported median speedup `9.419309`, p95 ratio
+  `8.826601`, bootstrap lower bound `9.085741`, typokat median/peak RSS
+  `75,434` / `75,468 KiB`, and TypeScript-Go median RSS `172,898 KiB`. The 687-frame route took
+  `12.295139599 s` with `75,804 KiB` peak RSS, below the `12.946437 s` /
+  `144,109,568-byte` historical gates. Concurrent 1/2/32-session peaks were
+  `80,368` / `80,708` / `163,248 KiB`; the counting allocator recorded `39,881,389` calls.
+  The user explicitly waived the independent WU7 adversarial review.

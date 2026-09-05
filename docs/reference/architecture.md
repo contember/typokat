@@ -238,25 +238,24 @@ so it doesn't get silently folded into either neighbor.
 The implementation keeps type construction and semantic queries separated because the interner
 requires `&mut Interner` while the relation engine borrows the store immutably:
 
-1. **Default-library base.** Persistent API and official-batch consumers acquire one process-wide
-   `LibraryBaseProvider`. Its first caller compiles the pinned 82-file TypeScript 6.0.3 profile
-   from source and freezes an AST-free type store plus immutable binder prefix; each project then
-   uses either the shared delta or the sparse private collision epoch. Ordinary standalone CLI
-   checks instead use ADR-0021's project-correct complete-source-once lifecycle behind the same
-   frontend, so the library and user project publish once while preserving imports and source
-   order. User value/type declarations retain ordinary slot-aware shadowing and merge rules on
-   both routes. The small `test_support_prelude.ts` universe exists only behind the checker crate's
-   test-support feature.
-2. **Canonical declaration inventory.** Each parsed `Program` produces one exhaustive,
+1. **Default-library declaration product.** `LibraryBaseProvider` authenticates the pinned 82-file
+   TypeScript 6.0.3 profile once and shares one immutable, AST-free
+   `LibraryDeclarationProduct`. Every `CheckerSession` lowers that product into a fresh binder and
+   semantic universe after all user sources are parsed. Library and user declarations therefore
+   share one project-local merge, publication, query, and diagnostic lifecycle. The product contains
+   symbolic declaration facts only: no `Binder`, `Store`, `Interner`, `TypeId`, semantic terminal,
+   event, cache, or replay state. The small `test_support_prelude.ts` universe exists only behind the
+   checker crate's test-support feature.
+2. **Canonical declaration inventory.** Each parsed user `Program` produces one exhaustive,
    source-ordered `SourceDeclarationManifest`. The binder consumes that manifest while assigning
    exact `DeclId`, scope, and `TypeGroupId` identities; the checker then joins the same manifest to
-   those binder records and owns the resulting `BoundTypeDeclarationInventory`. Declaration
-   owner reservation, type reservation/fill, publication, and class attachment consume that
-   authenticated inventory. Unsupported source-only placements are named and authenticated;
-   missing or inconsistent ordinary binder rows fail closed. Sparse replay validates the complete
-   selected inventory batch before semantic mutation and retains `TypeGroup::fragments` as the
-   only canonical fragment-order authority. No semantic consumer performs a second declaration
-   AST walk or reconstructs declarations by name.
+   those binder records and owns the resulting `BoundTypeDeclarationInventory`. The declaration
+   product provides the equivalent owned inventory for library sources without retaining AST
+   borrows. Declaration owner reservation, type reservation/fill, publication, and class attachment
+   consume those authenticated inventories. Unsupported source-only placements are named and
+   authenticated; missing or inconsistent ordinary binder rows fail closed.
+   `TypeGroup::fragments` remains the only canonical fragment-order authority. No semantic consumer
+   performs a second declaration AST walk or reconstructs declarations by name.
 3. **Reservation and class publication.** The checker reserves class, alias, and interface
    identities, persistent binders, raw syntax slots, and lexical event tickets compilation-wide
    before lowering a class surface. `ClassSurfaceLowerer` has only narrow construction
@@ -587,27 +586,21 @@ Stage the shared substrate so each step keeps as much parallelism as possible:
   imports, default bridges/re-exports, mixed forms, star/namespace re-exports,
   namespace-bearing source re-exports/defaults, and cycles are not admitted
   ([ADR-0007](../decisions/0007-bundler-resolution-via-oxc-resolver.md)).
-- **Stage 1 — shared *read-only* default-library base (shipped).**
-  `lib.d.ts` + intrinsics form a large, immutable, universally-needed base; re-seeding them into N
-  per-file interners is absurd. [ADR-0011](../decisions/0011-freeze-pinned-default-library-base.md)
-  accepts one AST-free frozen library `Store` **and immutable library binder prefix**, shared across
-  workers, with an identity-preserving private type/binder delta for each non-colliding run.
-  Conservative preflight selects either that shared delta or ADR-0020's source-native sparse
-  private epoch for library-global merges; the immutable base is never mutated. The implementation
-  and pinned profile live in `crates/typokat-library/src/`. Persistent consumers acquire that
-  provider directly; the standalone CLI uses ADR-0021's complete-source-once route. A shipped
-  semantic snapshot was built and then
-  retired by [ADR-0017](../decisions/0017-compile-the-default-library-from-source.md): the library is
-  compiled from its 82 vendored sources in every process. Production and the authoritative timing
-  gate are shipped. The archived
-  [cutover-closure sprint](../archive/sprint-2026-08-02-default-library-cutover-closure.md) records
-  final WU7 independent **PASS** with zero unresolved HIGH/MEDIUM findings and exact-`d1aa6d4`
-  remote CI.
-  The authoritative evidence measures commit `d1aa6d4` and is retained by `f70e587` at
-  `tooling/full-lib-bench/evidence/candidate-d1aa6d4.json`. It reports GO only for the four approved
-  rows — `fast-clean`, `fast-errors`, `collision`, and `fanout` — with median, p95 ratio, and
-  bootstrap lower bound above 1.25 in every recorded window. It does not establish general
-  multi-file, generic-heavy, flow-heavy, or whole-repository performance.
+- **Stage 1 — shared declarations, project-local semantics (shipped).**
+  The exact 82-file default library is authenticated into one immutable
+  `LibraryDeclarationProduct` per process. [ADR-0023](../decisions/0023-own-default-library-semantics-per-project.md)
+  accepts sharing those source-derived declaration recipes while every project owns its binder,
+  `Store`, `Interner`, semantic terminals, events, queries, global-object product, and diagnostics.
+  `CheckerSession` is the sole production lifecycle for standalone, repeated, parallel-file, and
+  project checks. Library/user name collisions are ordinary declaration merges inside that one
+  universe; production has no collision classifier, sparse epoch, replay route, or complete-source
+  fallback. [ADR-0017](../decisions/0017-compile-the-default-library-from-source.md) remains the
+  source/profile authority, [ADR-0022](../decisions/0022-use-one-binder-authenticated-declaration-inventory.md)
+  remains the declaration-inventory authority, and ADR-0023 supersedes the old semantic lifecycle.
+  The archived
+  [project-local-library-universe sprint](../archive/sprint-2026-08-22-project-local-library-universe.md)
+  records the cutover evidence. Its performance result applies to the authenticated benchmark
+  workloads and is not a general multi-file, generic-heavy, flow-heavy, or whole-repository claim.
 - **Stage 2 — cross-file *mutable* exports.** `export interface Foo` in A consumed by
   B: A must emit its **public type surface** (`export name → type`), and B must give
   those types identity in *its* world. A run-local `TypeId` (§3.2) is meaningless
@@ -620,16 +613,14 @@ Stage the shared substrate so each step keeps as much parallelism as possible:
 
 ### 8.3 Invariant across all stages
 
-User parse + mutable binding remains per-file/project owned and interner-free: user ASTs, allocators,
-mutable binder rows, and private deltas are never shared across runs. Stage 1's accepted narrow
-exception is the already-consumed, AST-free immutable library binder prefix frozen with its type
-base. Persistent consumers route collisions through a sparse private epoch; a standalone CLI
-project uses one complete-source publication. Only immutable library products cross threads.
-Stage 2 still owns mutable cross-file
-export identity; the reserved `stable_hash` column in the type store (§3.2) exists precisely for
-that later stage and incrementality (Phase 5). See
-[ADR-0011](../decisions/0011-freeze-pinned-default-library-base.md) for the boundary and failure
-path.
+User parse, mutable binding, and semantic state remain per-file/project owned: user ASTs,
+allocators, binder rows, `TypeId`s, terminals, and caches are never shared across runs. Stage 1
+shares only the authenticated immutable declaration product. Every production entry point creates a
+`CheckerSession`, builds one complete library/user declaration universe, and publishes through the
+same checker path. Stage 2 still owns mutable cross-file export identity; the reserved
+`stable_hash` column in the type store (§3.2) exists precisely for that later stage and incrementality
+(Phase 5). See
+[ADR-0023](../decisions/0023-own-default-library-semantics-per-project.md) for the ownership boundary.
 
 ---
 
@@ -669,11 +660,11 @@ Performance claims are workload contracts, not architectural extrapolations. Exi
 benchmarks cannot be projected onto typokat: they often omit subtyping, narrowing, or `lib.d.ts`,
 use warm caches, and compare against old JavaScript `tsc` rather than native TypeScript.
 
-The current authoritative evidence measures commit `d1aa6d4` and is retained by `f70e587` at
-`tooling/full-lib-bench/evidence/candidate-d1aa6d4.json`. Against pinned native TypeScript 7.0.2,
-typokat cleared the 1.25 engineering target for median, p95 ratio, and bootstrap lower bound in
-every recorded window on exactly four approved full-library rows: `fast-clean`, `fast-errors`,
-`collision`, and `fanout`.
+The current authoritative evidence is the clean `f21e2189` WU7 rerun recorded in the archived
+[project-local universe sprint](../archive/sprint-2026-08-22-project-local-library-universe.md).
+Its unified collector returned `GO`: against pinned native TypeScript 7.0.2, the 32-project panel
+reported median speedup `9.419309`, p95 ratio `8.826601`, and bootstrap lower bound `9.085741`;
+the 687-project route completed in `12.295139599 s` below the `12.946437 s` historical gate.
 
 That result proves the production default-library cutover contract only. It does not prove a
 speedup for arbitrary repositories, generic-heavy code, flow-heavy code, broad module graphs, or

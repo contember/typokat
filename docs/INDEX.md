@@ -25,25 +25,19 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprint-2026-08-22-project-local-library-universe.md`](sprints/sprint-2026-08-22-project-local-library-universe.md)
-  — current primary research sprint; one shared immutable declaration product, project-local eager
-  binding and lazy semantics, one session lifecycle, strict cold/repeated superiority over `tsgo`,
-  then vertical deletion of frozen/sparse routing.
-
-- [`sprint-2026-08-17-as-const.md`](sprints/sprint-2026-08-17-as-const.md) — paused while the
-  lifecycle sprint owns overlapping checker seams; WIP remains preserved at `996eb5a`.
+- [`sprint-2026-08-17-as-const.md`](sprints/sprint-2026-08-17-as-const.md) — resumed after the
+  project-local library lifecycle cutover; WIP remains preserved at `996eb5a`.
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **Project-local library universe is the active research direction** — the active
-  [`sprint`](sprints/sprint-2026-08-22-project-local-library-universe.md) replaces the frozen
-  semantic base, collision preflight, and sparse replay with one shared immutable declaration
-  product plus project-owned eager binding and lazy semantic publication. WU1 established the
-  canonical symbol/Reflect truth and rejected the unpreserved historical 44-owner count; the next
-  unit builds the immutable full-profile declaration product. The cutover still requires
-  authenticated cold and repeated wins over `tsgo` before deleting the old lifecycle.
+- **Project-local library semantics shipped** — the archived
+  [`project-local universe sprint`](archive/sprint-2026-08-22-project-local-library-universe.md)
+  cut every production entry point over to one `CheckerSession`. Processes share only one immutable,
+  AST-free declaration product; each project owns complete library/user binding, semantic
+  publication, caches, diagnostics, and identity. [`ADR-0023`](decisions/0023-own-default-library-semantics-per-project.md)
+  records the accepted boundary and deletes the frozen/sparse/complete-source routing split.
 - **Declaration inventory shipped; B44 unblocked** — the archived
   [`declaration-inventory sprint`](archive/sprint-2026-08-18-canonical-declaration-inventory.md)
   cut declaration reservation, publication, and class attachment over to the authenticated
@@ -52,9 +46,9 @@ decisions → reference → archive.
   freezes the one-pass manifest, exact binder join, module-local dense map, and AST-free frozen
   product boundary. The archived
   [`satisfies sprint`](archive/sprint-2026-08-17-satisfies.md) implements source-preserving
-  contextual checking and records the comparison with TypeScript PR #46827. The active
-  [`as const` sprint](sprints/sprint-2026-08-17-as-const.md) is unblocked but paused with its WIP
-  preserved at `996eb5a` while the library lifecycle sprint owns overlapping checker seams.
+  contextual checking and records the comparison with TypeScript PR #46827. The
+  [`as const` sprint](sprints/sprint-2026-08-17-as-const.md) has resumed from its preserved
+  `996eb5a` WIP now that the library lifecycle cutover has closed.
 - **Library compiler decomposition shipped 2026-08-21** — the
   [`archived sprint`](archive/sprint-2026-08-15-library-compiler-decomposition.md) split the
   14,009-line root into a 176-line stable facade, thirteen bounded production owners, and one test
@@ -98,46 +92,18 @@ decisions → reference → archive.
   [`107`](backlog/107-apparent-built-in-surfaces.md), and generic arrow descriptors by
   [`108`](backlog/108-generic-arrow-signature-descriptors.md). None is a default-library routing
   condition.
-- **Full default-library production cutover shipped 2026-08-07** —
-  [`ADR-0011`](decisions/0011-freeze-pinned-default-library-base.md) accepts an exact embedded
-  TypeScript 6.0.3 ES2025 full-host profile, one AST-free frozen library base with private deltas,
-  and a same-pipeline private universe for global collisions;
-  [`ADR-0013`](decisions/0013-replay-private-library-collision-closures.md) seeds that universe in a
-  fresh private run and replays the affected-owner closure, and
-  [`ADR-0014`](decisions/0014-authenticate-private-replay-prefixes-at-separate-boundaries.md)
-  reaches a library-only continuable binder checkpoint before any user row exists.
-  [`ADR-0017`](decisions/0017-compile-the-default-library-from-source.md) **retires the shipped
-  snapshot**: the library is compiled from its 82 vendored sources in every process, which
-  supersedes `ADR-0012` and `ADR-0015` wholesale and narrowly supersedes 0013's decode-seeding and
-  0014's digest authentication. The earlier
-  [`archived feasibility sprint`](archive/sprint-2026-07-16-full-lib-loading.md) removed the
-  first substitution and rendering barriers.
-  [`ADR-0020`](decisions/0020-build-source-native-sparse-collision-epochs.md) resolves the remaining
-  collision-path conflict: a private epoch may share proven-unaffected immutable rows from that
-  source-compiled base, while every affected meaning, identity, event, cache, and suffix stays
-  private and republishes through the ordinary checker.
-  [`ADR-0021`](decisions/0021-use-complete-source-compilation-for-standalone-cli-checks.md) gives
-  one-project standalone CLI checks a separate complete-source lifecycle with one semantic
-  publication, while persistent batch and repeated API consumers retain the shared base.
-  [`ADR-0018`](decisions/0018-pin-library-owned-records-as-a-named-census.md) settles what happens
-  to the 875 records the library reports against itself: no process retains one, and the suite pins
-  the complete set as a named `(code, site)` multiset
-  (`tests/fixtures/library-owned-records.txt`), which narrows ADR-0011's "preserved exactly" to the
-  pinned suite rather than the published base. The
-  active project-local-universe sprint is required to supersede the frozen/replay lifecycle while
-  preserving the exact source profile. The
-  [`archived closure sprint`](archive/sprint-2026-08-02-default-library-cutover-closure.md) records
-  final WU7 independent **PASS** with zero unresolved HIGH/MEDIUM findings and exact-`d1aa6d4`
-  remote CI. The production Stage-1 cutover is shipped: the public
-  driver and CLI use the source-compiled full library, conformance has no
-  alternate base, and the old production prelude asset is gone. The authoritative fresh-process
-  evidence measures commit `d1aa6d4` and is retained by `f70e587` at
-  `tooling/full-lib-bench/evidence/candidate-d1aa6d4.json`. It reports GO only for the four approved
-  rows — `fast-clean`, `fast-errors`, `collision`, and `fanout` — with median, p95 ratio, and
-  bootstrap lower bound above the 1.25 engineering target in every recorded window. It is not a
-  general checker-performance claim. The
-  [`superseded 2026-07-21 sprint`](archive/sprint-2026-07-21-full-lib-performance-cutover.md)
-  remains the incomplete run and measurement record.
+- **Default-library lifecycle history is closed** —
+  [`ADR-0017`](decisions/0017-compile-the-default-library-from-source.md) and
+  [`ADR-0022`](decisions/0022-use-one-binder-authenticated-declaration-inventory.md) remain the
+  exact source/profile and declaration-inventory authorities.
+  [`ADR-0023`](decisions/0023-own-default-library-semantics-per-project.md) supersedes the old
+  frozen semantic base, sparse collision epochs, private replay, and split standalone lifecycle.
+  [`ADR-0018`](decisions/0018-pin-library-owned-records-as-a-named-census.md) still pins the
+  production-owned library outcome census; the accepted WU7 baseline contains 703 named records
+  (318 diagnostics and 385 incompletes). The earlier
+  [`Stage-1 closure`](archive/sprint-2026-08-02-default-library-cutover-closure.md) and
+  [`performance cutover record`](archive/sprint-2026-07-21-full-lib-performance-cutover.md)
+  remain historical evidence, not current architecture.
 - **Namespaces/declaration merging shipped 2026-07-16** (archived:
   [`archive/sprint-2026-07-15-namespaces-declaration-merging.md`](archive/sprint-2026-07-15-namespaces-declaration-merging.md)) —
   ordered groups, qualified types, keep-pairs, legal global type publication, and immutable

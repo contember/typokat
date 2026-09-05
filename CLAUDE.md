@@ -25,25 +25,22 @@ cargo test <name>                           # a single unit test by name
 cargo clippy --all-targets -- -D warnings   # must stay clean
 ```
 
-The ordinary conformance command discovers 581 fixture projects / 697 source files from the
-registrations in `tests/conformance.rs`, checks each once through the shared route, and prints
-receipt `581/697/581/0`. `conformance_inventory_matches_frozen_receipt` is the count and ordering
-authority. The latest closure run over this inventory took 64.41 s under
-`cpu-lease run -n 2 --`.
+The ordinary conformance command discovers 583 fixture projects / 699 source files from the
+registrations in `tests/conformance.rs`, checks each once through the repeated `CheckerSession`
+route, and prints receipt `583/699/583/0` (projects/sources/repeated/standalone).
+`conformance_inventory_matches_frozen_receipt` is the count and ordering authority. The latest
+closure run over this inventory took 69.77 s under `cpu-lease run -n 2 --`.
 
-The pull-request ADR-0021 risk matrix remains
-`cpu-lease run -n 2 -- cargo test --test wu6_complete_source_cli` (15/15 in 265.84 s). Run complete
-shared/cold parity with:
+Run complete repeated/standalone parity with:
 
 ```sh
 cpu-lease run -n 2 -- cargo test --test conformance \
-  conformance_full_shared_cold_parity -- --ignored --exact --nocapture
+  conformance_full_repeated_standalone_parity -- --ignored --exact --nocapture
 ```
 
-That exact command covers the same inventory and prints receipt `581/697/581/581`. The latest
-measured closure run predates the B121 addition and passed `580/696/580/580` in 1,164.50 s
-(1,165.11 s wall).
-`.github/workflows/full-parity.yml` runs it weekly and on manual dispatch.
+That exact command covers the same inventory and prints receipt `583/699/583/583`; the latest
+closure run took 138.30 s. `.github/workflows/full-parity.yml` runs it weekly and on manual
+dispatch.
 
 Rough incremental costs after one edit in `check/` (median of 3, quiet machine),
 cheapest first — reach for the narrowest one that answers your question:
@@ -83,7 +80,7 @@ diagnostics; parsing and project dependency ordering belong to
   generic **inference engine** (`infer`, a separate machine from the relation engine).
   Split into `checker/` submodules.
 - **Default library** (`crates/typokat-library/src/`) — the pinned TypeScript profile,
-  source-backed compiler, frozen shared base, and package-verification assets.
+  immutable declaration product, `CheckerSession` integration, and package-verification assets.
 
 The public project route accepts a directory or `tsconfig.json` with exactly `files`,
 `strict: true`, `noEmit: true`, `module: "ESNext"`, and `moduleResolution: "Bundler"`. Configured
@@ -114,11 +111,10 @@ against real `tsc --strict`). Implementation goes through subagents; the leader 
 commits. The soundness/architecture **invariants you must not break** are in
 [docs/reference/invariants.md](docs/reference/invariants.md); the roadmap **is** the
 [docs/backlog/](docs/backlog/README.md) (its README carries the definition of done and the
-recommended order — next: execute the active project-local default-library universe sprint and
-prove its session lifecycle superior to `tsgo`; then close the remaining general blockers exposed
-by the immutable `placetext` screen and re-screen for backlog `72`; continue Bundler module breadth
-and the remaining model-completeness track, then
-parallel cross-file identity and incrementality; the bytecode VM stays a deferred,
+recommended order — next: resume the active as-const sprint, then close the remaining general
+blockers exposed by the immutable `placetext` screen and re-screen for backlog `72`; continue
+Bundler module breadth and the remaining model-completeness track, then parallel cross-file
+identity and incrementality; the bytecode VM stays a deferred,
 profiling-gated refactor, ADR-0001).
 
 ## Testing

@@ -70,33 +70,33 @@ spec, review, differential, or final gate above.
 6. Run the ordinary exact conformance gate when the cluster closes, not after every edit, unless no
    narrower gate can observe the bug. Use
    `cpu-lease run -n 2 -- cargo test --test conformance conformance -- --exact --nocapture`. It
-   covers the frozen 581-project / 697-source inventory once through the shared route and prints
-   receipt `581/697/581/0`. Freeze the resulting small diff and hand that exact diff to the
-   independent adversarial reviewer. Start no new RED cluster until the reviewed cluster lands.
+   covers the frozen 583-project / 699-source inventory once through the repeated
+   `CheckerSession` route and prints receipt `583/699/583/0`. Freeze the resulting small diff and
+   hand that exact diff to the independent adversarial reviewer. Start no new RED cluster until the
+   reviewed cluster lands.
 7. Check progress every 20 minutes. Progress means an edit, a test result, or concrete root-cause
    evidence. If there is none, transfer ownership and context to another implementation agent.
 8. Share a warm Cargo target directory when isolation is safe. Serialize every Cargo invocation
    through one owner/queue and run it under an appropriate `cpu-lease`; never overlap Cargo jobs.
 9. At milestone closure, still run every required full gate: the ordinary exact conformance command
    above, `cargo test`, clippy, fixture spot-runs, the independent `tsc --strict` adversarial review,
-   and the randomized differential gate when the change touches its scope. The unchanged ADR-0021
-   pull-request matrix is
-   `cpu-lease run -n 2 -- cargo test --test wu6_complete_source_cli`; its measured result is 15/15
-   in 265.84 s. The leader runs and verifies these gates.
-10. Run exact shared/cold parity at sprint closure when route or library lifecycle behavior is in
-    scope:
+   and the randomized differential gate when the change touches its scope. The sole-session
+   production boundary is covered by `checker_session_cli`, `wu7_production_cutover`,
+   `wu7_public_api_contract`, `wu7_parse_routing`, and `wu7_official_batch`; the workspace suite
+   runs all five.
+10. Run exact repeated/standalone parity at sprint closure when route or library lifecycle behavior
+    is in scope:
 
     ```sh
     cpu-lease run -n 2 -- cargo test --test conformance \
-      conformance_full_shared_cold_parity -- --ignored --exact --nocapture
+      conformance_full_repeated_standalone_parity -- --ignored --exact --nocapture
     ```
 
-    It uses the same frozen inventory and prints receipt `581/697/581/581`. The latest measured
-    closure run predates the B121 addition and passed `580/696/580/580` in 1,164.50 s
-    (1,165.11 s wall).
-    `.github/workflows/full-parity.yml` also runs this unsharded gate weekly and on manual dispatch.
+    It uses the same frozen inventory and prints receipt `583/699/583/583`; the latest closure run
+    took 138.30 s. `.github/workflows/full-parity.yml` also runs this unsharded gate weekly and on
+    manual dispatch.
 
-The expanded ordinary exact gate took 64.41 s in its latest two-vCPU closure run.
+The expanded ordinary exact gate took 69.77 s in the latest two-vCPU closure run.
 `conformance_inventory_matches_frozen_receipt` is the count and ordering authority; the printed
 receipt repeats aggregate totals. Do not maintain a second hand-counted inventory.
 

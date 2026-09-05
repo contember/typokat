@@ -312,12 +312,11 @@ silently dropping dependencies.
 - The general lazy source-value/type resolver in backlog
   [`76`](../backlog/76-lazy-value-type-resolution.md); this sprint owns library declaration-group
   materialization only.
-- The production parse-once integration in backlog
-  [`115`](../backlog/115-prepared-project-single-parse.md). The prototype may consume a bounded
-  prepared test product but may not broaden frontend architecture.
-- Public session/API cleanup in backlog
-  [`116`](../backlog/116-library-session-lifecycle-boundary.md), parallel type universes (`16`),
-  incrementality (`17`), snapshots, persistent disk caches, packages, or alternate library profiles.
+- Production parse-once integration and public session/API cleanup. Both later shipped through the
+  [`project-local library universe sprint`](sprint-2026-08-22-project-local-library-universe.md);
+  they remained out of scope for this feasibility experiment. Parallel type universes (`16`),
+  incrementality (`17`), snapshots, persistent disk caches, packages, and alternate library
+  profiles also remained out of scope.
 
 ## Decisions
 

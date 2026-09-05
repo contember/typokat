@@ -1,7 +1,7 @@
 ---
 id: 0017
 title: Compile the default library from source; retire the shipped snapshot
-status: accepted
+status: partially superseded by 0023; source, profile, and no-artifact contracts retained
 date: 2026-07-26
 ---
 

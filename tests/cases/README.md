@@ -11,9 +11,10 @@ The ordinary gate is:
 cpu-lease run -n 2 -- cargo test --test conformance conformance -- --exact --nocapture
 ```
 
-It discovers 581 fixture projects / 697 source files, checks each project once through the shared
-route, and prints receipt `581/697/581/0` (projects/sources/shared/cold). The latest closure run over
-this inventory took 64.41 s under `cpu-lease run -n 2 --`. The inventory and ordering authority is
+It discovers 583 fixture projects / 699 source files, checks each project once through the repeated
+`CheckerSession` route, and prints receipt `583/699/583/0`
+(projects/sources/repeated/standalone). The latest closure run took 69.77 s under
+`cpu-lease run -n 2 --`. The inventory and ordering authority is
 `cargo test --test conformance conformance_inventory_matches_frozen_receipt -- --exact --nocapture`;
 the ordinary command's printed receipt repeats the aggregate totals.
 
@@ -30,20 +31,18 @@ A project-shaped case uses its project id, for example
 `TYPOKAT_CONFORMANCE_CASE=m29_modules/basic_named`; all source files in that project stay grouped.
 To run one whole enabled corpus, replace the case variable with
 `TYPOKAT_CONFORMANCE_CORPUS=m0_assign_primitives`. Set exactly one selector. Disabled, mixed, and
-unknown selections fail before checking. The focused route uses the ordinary shared marker path
-but prints `closure=false`; it is not closure evidence and does not replace the ordinary gate.
+unknown selections fail before checking. The focused route uses the ordinary repeated-session
+marker path but prints `closure=false`; it is not closure evidence and does not replace the ordinary
+gate.
 
-The unchanged pull-request route matrix is
-`cpu-lease run -n 2 -- cargo test --test wu6_complete_source_cli` (15/15 in 265.84 s). Exact
-shared/cold parity uses the same inventory:
+Exact repeated/standalone parity uses the same inventory:
 
 ```sh
 cpu-lease run -n 2 -- cargo test --test conformance \
-  conformance_full_shared_cold_parity -- --ignored --exact --nocapture
+  conformance_full_repeated_standalone_parity -- --ignored --exact --nocapture
 ```
 
-It prints receipt `581/697/581/581`. The latest measured closure run predates the B121 addition and
-passed `580/696/580/580` in 1,164.50 s (1,165.11 s wall). The separate
+It prints receipt `583/699/583/583`; the latest closure run took 138.30 s. The separate
 `.github/workflows/full-parity.yml` runs it weekly and on manual dispatch.
 
 This file is **test tooling**: how to write and read these fixtures. The substantive record of
@@ -457,17 +456,17 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b78_generic_class_value_aliases/` | backlog `78` (disabled) | one-step const aliases of generic classes retain substitution and abstract/private/protected construction facts |
 | `b92_contextual_duplicate_diagnostics/` | shipped backlog `92` | one error nested inside contextually typed arguments is reported once, not `2^depth` times; the raw argument walk still reports wherever no committed contextual walk supersedes it |
 | `b43_namespaces_declaration_merging/` | shipped namespace sprint (65 flat fixtures + 6 projects enabled) | namespace type/value containers, repeated interfaces, qualified names, legal cross-space merges, ambient/global boundaries, and explicitly owned UMD plus nested-owner payload tails |
-| `b14_full_lib_loading/` | shipped backlog `14` production corpus; archived after final WU7 PASS and exact-`d1aa6d4` remote CI | TypeScript 6.0.3 default-library globals, native-type bridges, intrinsic roles, identity-safe shadowing, and explicit unsupported outcomes |
-| `b14_full_lib_loading_project/` | shipped backlog `14` production corpus; archived after final WU7 PASS and exact-`d1aa6d4` remote CI | fast external-module routing, collision/private-epoch order, global-object contributions, global augmentation/UMD forms, and unavailable-merge withholding |
-| `b102_frozen_prefix_writes/` | shipped backlogs `102`/`103` regression net | fresh script globals reach a writable delta scope; library collisions route through private replay without mutating the shared base |
+| `b14_full_lib_loading/` | shipped backlog `14` production corpus | TypeScript 6.0.3 default-library globals, native-type bridges, intrinsic roles, identity-safe shadowing, and explicit unsupported outcomes |
+| `b14_full_lib_loading_project/` | shipped backlog `14` production corpus | fast external-module routing, project-local library collisions, global-object contributions, global augmentation/UMD forms, and unavailable-merge withholding |
+| `b102_frozen_prefix_writes/` | shipped backlogs `102`/`103` regression net | fresh script globals publish in the project-local binder; legal library collisions merge without changing unrelated library declarations |
 | `b102_frozen_prefix_writes_project/` | shipped backlog `102` project regression net | cross-file script globals in both input orders; module-scope declarations keep shadowing instead of publishing |
-| `b103_library_merge_correctness/` | shipped backlog `103` correctness tier | successful library interface/namespace/function/cross-slot merges, illegal-collision controls, and unchanged shared-route behavior |
-| `b103_library_merge_correctness_project/` | shipped backlog `103` project correctness tier | both input orders, whole-body `declare global` lexical scope, `globalThis`, UMD, destructuring, slot matrix, benchmark collision, classifier mutation input, controls, and cross-project isolation |
+| `b103_library_merge_correctness/` | shipped backlog `103` correctness tier | successful project-local library interface/namespace/function/cross-slot merges and illegal-collision controls |
+| `b103_library_merge_correctness_project/` | shipped backlog `103` project correctness tier | both input orders, whole-body `declare global` lexical scope, `globalThis`, UMD, destructuring, slot matrix, benchmark collision, controls, and cross-project isolation |
 | `b48_object_binding_publication/` | shipped flat-variable slice of backlog `48` | flat object variable binding leaves: independent types and storage, defaults, static keys, scope/order, source projection, missing-property accounting, plus explicit excluded-shape guards |
 | `sr_semantic_duplication/` | shipped semantic-duplication/class-application cutover | class callable surfaces are lowered once; immutable recursive class applications publish complete SCC projections before demand, preserving diagnostics, overloads, parameter properties, structural relation, and nominal origin |
 | `sr_semantic_duplication_project/` | shipped project-mode semantic-duplication gate | dependency-first class publication and heritage poison remain deterministic across module/input order |
 | `b121_symbol_namespace_surface/` | shipped backlog `121` | callable namespace surfaces lower the ordinary `symbol` keyword used by `Reflect.ownKeys` through the canonical well-known identity |
-| `sr_project_local_library_candidate/` | project-local library universe WU0 (disabled) | candidate-only `tsc` truth, global-merge/order/isolation witnesses, and the immutable declaration-product ownership contract; it does not enter the frozen conformance receipt until the new session exists |
+| `sr_project_local_library_candidate/` | shipped project-local library universe contract (disabled) | focused `tsc` truth, global-merge/order/isolation witnesses, and immutable declaration-product ownership; integration tests load it explicitly outside the frozen conformance receipt |
 | `sr_recursive_alias_applications/` | project-local library universe WU4 / ADR-0024 (disabled) | productive array, tuple, function, mutual, and generic recursive aliases remain transparent structural applications; direct cycles still report `TK2456` |
 
 A few corpora need **construction** notes so they stay editable (the *why* of their marker choices):
@@ -485,40 +484,35 @@ to inference. Deliberately unpinned: a mixed-element literal against `[T, T]` (`
 — tsc reports a per-element contextual error whose code/position rides on subtle
 inference-priority choices.
 
-`b102_frozen_prefix_writes/` and `b102_frozen_prefix_writes_project/` are the shipped backlog-`102`
-corpora. The **publication** half is project-shaped: an ordinary `globals.d.ts`-shaped script file
-declaring an interface, `declare var`, `declare function`, `declare namespace`, `class`, and a
-`type` alias, consumed from a second file — once in declaration order and once with the consumer
-fed first, because the hoist reservations are per-form and a value slot filled only at its own
-module's execution would let the wrong-type witness vanish rather than error. Every consumption is
-a clean read plus a wrong-type witness, so an `any`/error-type recovery cannot pass the corpus. Its
-controls are the shapes that must NOT publish: an external module's `interface Array<T>` and
-module-local `Date`/`class` shadow inside their own file and stay invisible to a sibling script
-file, whose `Array`/`Date` surfaces must remain the library ones.
+`b102_frozen_prefix_writes/` and `b102_frozen_prefix_writes_project/` retain their historical
+directory names but now exercise the sole project-local library lifecycle. The **publication** half
+is project-shaped: an ordinary `globals.d.ts`-shaped script file declares an interface,
+`declare var`, `declare function`, `declare namespace`, class, and type alias for a second file to
+consume. It runs in declaration order and consumer-first order because every declaration form must
+be available independently of input order. Every consumption is a clean read plus a wrong-type
+witness, so an `any` or error-type recovery cannot pass the corpus. External-module controls prove
+that module-local `Array` and `Date` declarations do not publish into a sibling script.
 
-The flat library-collision fixtures route through the sparse private epoch shipped by backlog `103`. Legal
-merges and overloads expose the user fragment alongside the library surface; illegal `var`,
-lexical, type-alias, and class collisions preserve the library winner and the remaining missing
+The flat library-collision fixtures use the same `CheckerSession` as every other project. Legal
+merges and overloads expose user and library fragments together; illegal variable, lexical,
+type-alias, and class collisions preserve the library winner. The remaining missing
 duplicate-declaration diagnostics stay ledgered in
-[`divergences.md`](../../docs/reference/divergences.md). The binder's frozen-write ledger remains
-an internal mutation witness, not a user-facing incomplete channel.
+[`divergences.md`](../../docs/reference/divergences.md).
 
 `b103_library_merge_correctness/` and its project sibling are the production acceptance contract.
-They require the user fragment to be visible alongside the
-unchanged library surface. Every positive read has a wrong-type or missing-member sibling, so an
-error-type recovery cannot satisfy the fixture. The illegal `type Partial` and `class Date`
-collisions deliberately keep the library declaration as the observable winner; typokat's missing
-duplicate-identifier diagnostics remain owned by backlog `18`.
+Every positive read has a wrong-type or missing-member sibling, so an error-type recovery cannot
+satisfy the fixture. The illegal `type Partial` and `class Date` collisions deliberately keep the
+library declaration as the observable winner; typokat's missing duplicate-identifier diagnostics
+remain owned by backlog `18`.
 
 The project half pins Array and `declare global` merges in both file orders, legal
 global-object/`globalThis` contributors, a UMD `export as namespace` route whose existing
 backlog-15 incompletes remain visible, value/type/namespace slot coexistence, and a nested
-destructuring leaf whose bound name—not its property keys—collides with `RegExp`. The
-`classifier_false_negative_candidate` project is consumed by a direct mutation test; marker
-semantics alone cannot prove that a deliberately omitted candidate fails closed before mutation.
-`zz_private_shared_isolation` runs after the augmenting projects and proves that the process-wide
-base did not acquire their members. Direct epoch receipts additionally own immutable-prefix
-sharing, private graph/semantic identity, cache/event isolation, and zero full-source fallback.
+destructuring leaf whose bound name—not its property keys—collides with `RegExp`.
+`classifier_false_negative_candidate` retains its historical name; it now proves that an ordinary
+legal library augmentation is visible without any classifier.
+`zz_private_shared_isolation` likewise retains a historical name while proving that one project
+cannot acquire another project's augmentation.
 
 `b58_project_scopes/` uses **project fixture subdirectories** (the m29 convention): every
 `.ts` file in a subdirectory is one project checked via `check_project`. Each project's

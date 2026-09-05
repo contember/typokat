@@ -6,11 +6,10 @@ blocked-by: []
 
 # 86 — Free-param summary cache discards its sealed base on any mutation
 
-**Summary.** `FreeParamSummaryCache::align_with` resets its **base** map, not just its local delta, so the
-first user `<T extends …>` can discard free-param summaries retained in a frozen library base. The
-source-backed production cutover has shipped. Route impact now requires fresh-HEAD verification
-because standalone complete-source and persistent shared-provider routes have different lifecycles.
-The reset itself remains live. Effort S.
+**Summary.** `FreeParamSummaryCache::align_with` resets its **base** map, not just its local delta.
+The sole project-local `CheckerSession` does not freeze or fork a semantic interner, so this no
+longer affects production default-library checks. The reset remains relevant to explicit layered
+interner consumers and tests. Re-verify that boundary before changing it. Effort S.
 
 ## Problem
 
@@ -25,11 +24,10 @@ once per constrained generic binder — and `fill_reserved_type_batch`
 (`crates/typokat-types/src/types/intern/mod.rs:682`) —
 once per interface SCC.
 
-**Current route question.** The 2026-07-25 finding predated the source-backed production cutover.
-The standalone CLI now uses complete-source compilation, while persistent consumers may acquire the
-shared provider base. Re-verify at fresh HEAD whether each route presents a non-empty summary base
-when the mutation occurs and measure any resulting `compute_application_summaries` re-walk. Do not
-infer current route cost from the retired prelude or snapshot lifecycle.
+**Current route boundary.** The 2026-07-25 finding depended on the retired shared semantic base.
+Production now builds one project-local interner and never calls `Interner::freeze_as_base` or
+`fork_delta`. Any fix must therefore justify itself against a remaining explicit layered-interner
+consumer rather than default-library route cost.
 
 ## Approach / acceptance
 
@@ -45,8 +43,8 @@ one.
 
 ## Touch points
 
-`crates/typokat-types/src/types/intern/mod.rs` (`FreeParamSummaryCache::align_with`, `DerivedGraphCache::align_with`),
-`crates/typokat-types/src/types/substitute/mod.rs` (`compute_application_summaries`), standalone
-complete-source and persistent shared-provider routes.
+`crates/typokat-types/src/types/intern/mod.rs` (`FreeParamSummaryCache::align_with`,
+`DerivedGraphCache::align_with`) and
+`crates/typokat-types/src/types/substitute/mod.rs` (`compute_application_summaries`).
 
 <!-- Origin: type-store complexity hunt, 2026-07-25 (finding 3). -->

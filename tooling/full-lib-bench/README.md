@@ -286,17 +286,19 @@ incompletes. The official scoreboard authenticates only the outcome class for it
 and four unresolved eligible rows. Those rows therefore use the stable class tokens `parse-error`
 and `unresolved`; the runners do not publish unauthenticated parser/resolver message text.
 
-The session panel remains RED until `session_batch_bench.py`, the authenticated TypeScript-Go
-runner, and the feature-scoped typokat candidate runner implement this contract. No session timing
-is eligible before their source, binaries, profile, official-frame inventory, semantic controls,
-CPU lease, no-SMT affinity, environment, and address-space limit have been attested.
+`session_batch_bench.py`, the authenticated TypeScript-Go runner, and the feature-scoped typokat
+runner implement this contract. The pure progressive-panel helper reports only `PANEL-PASS` or
+`PANEL-FAIL`; only `session_batch_collect.collect_live_wu6` may issue `GO`. That live orchestrator
+starts both authenticated binaries, captures execution conditions, and links cold, single-project,
+batch-panel, control, concurrency, and allocation identities into one current-candidate
+attestation. Every batch request carries the exact authenticated official-suite source bytes; a
+case id plus precomputed semantic output is insufficient.
 
-The pure progressive-panel helper can report only `PANEL-PASS` or `PANEL-FAIL`. It cannot issue the
-WU6 `GO` verdict because supplied evidence cannot prove that a live measurement happened. Only the
-future live `run` orchestrator may issue `GO`, after it starts both authenticated binaries itself,
-captures execution conditions, and links runner, warmup, sample, control, concurrency, and
-allocation-probe identities. Every batch request must carry the exact authenticated official-suite
-source bytes; a case id plus precomputed semantic output is insufficient.
+The accepted WU7 rerun at `f21e2189` returned `GO`: all four stage verdicts passed, the 32-project
+panel reported median speedup `9.419309`, p95 ratio `8.826601`, and bootstrap lower bound
+`9.085741`, and the 687-project route took `12.295139599 s` below the
+`12.946437 s` historical gate. The archived project-local-library-universe sprint records the
+artifact identities, RSS, concurrency, and allocation receipts.
 
 ## Self-tests
 
