@@ -20,5 +20,5 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
-- [`sprint-2026-08-17-as-const.md`](sprint-2026-08-17-as-const.md) — resumed after the
-  project-local library lifecycle cutover; WIP remains preserved at `996eb5a`.
+- [`sprint-2026-08-17-as-const.md`](sprint-2026-08-17-as-const.md) — bounded literal-model and
+  assignment-flow feasibility; the reviewed WU1 WIP is preserved, and full migration awaits approval.

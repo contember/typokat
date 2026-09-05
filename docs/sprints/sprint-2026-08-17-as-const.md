@@ -168,6 +168,70 @@ outcome must state the difference instead of presenting an apples-to-apples feat
 
 ## Run log
 
+### Approved feasibility reset — 2026-09-05
+
+The user approved only spec expansion, bounded literal-model and assignment-flow feasibility,
+and an independent GO/STOP decision. Full checker migration and backlog closure require a later
+approval. The existing uncommitted WU1 implementation remains preserved in the primary worktree;
+experiments use a detached scratch worktree with an authenticated copy of that diff.
+
+**Frozen input.** HEAD `0717d579`; WU1 diff SHA-256
+`177d58ca77073296f8ce80bbea0946c66c6503a3ff777766566ee6aec3178b03`.
+The leader reran full tests, exact conformance `599/715/599/0`, clippy, formatting, and differential
+seeds 1/2/3 × 400. These passed, but third independent review remained FAIL with two soundness and
+four fidelity/publication findings. The official-suite gate independently found two surplus
+`TK2322` identities in `literalTypesAndTypeAssertions.ts`; the same gate passed with the clean
+`10c16781` reference binary. The binding-default regression is pinned by spec commit `0717d579`.
+
+**Re-verified constraints.** Literal interning currently keys only on the value
+(`crates/typokat-types/src/types/intern/mod.rs:1218`); inference arguments and extracted candidates
+retain bare `TypeId`s (`crates/typokat-check/src/check/infer/mod.rs:105`). A whole-result boolean
+cannot retain mixed literal contributions. CFG assignment resolution consumes syntax-derived facts
+(`crates/typokat-check/src/check/checker/flowgraph/nodes.rs:175`), while assignment checking schedules
+the actual relation later (`crates/typokat-check/src/check/checker/assignment.rs:327`). Class
+construction must still obey ADR-0008's no-general-query capability boundary.
+
+The pinned TypeScript 6.0.3 implementation distinguishes fresh/regular literal types, widens union
+members individually, and derives assignment flow by reducing the declared target. Its functions
+`getFreshTypeOfLiteralType`, `getWidenedLiteralType`, `getTypeAtFlowAssignment`, and
+`getAssignmentReducedType` are the comparison authority, not a new local syntax whitelist.
+The proposed target-flow contract qualifies the existing assigned-value shorthand in the binding
+invariants; this experimental contract is not a silent production-invariant amendment.
+
+| Unit | Territory | Acceptance | Dependency |
+|---|---|---|---|
+| F0 — independent spec | B44 corpus and this plan | Strict-tsc line/code oracle; current WIP RED; separate spec commit | none |
+| F1 — literal-model feasibility | Scratch type-store, relation/query boundary, inference, and the smallest selected checker path | Immutable mode-bearing literals survive real union/member/substitution/inference paths; enum canonical ownership remains unique; rendering and assignability agree; no call-side override repair | F0 |
+| F2 — assignment-flow feasibility | Scratch CFG, semantic assignment query, candidate/memo integration | Separate expression/target/recovery results; valid and invalid writes, mutable target, back-edge, and speculative rollback witnesses; no provisional durable answer or duplicate body effects | F1 GO |
+| F3 — independent verdict | Read-only review and retained receipts | Explicit GO/STOP per foundation, unresolved owners, migration size, and required next approval | F1/F2 |
+
+**F1 contract.** Prefer immutable widening/non-widening literal identity over a parallel semantic
+provenance graph. Decide same-value mixed-mode union normalization and enum member ownership before
+editing the model. Existing object-literal excess-check freshness remains a separate concept. Use
+real interning, substitution, and inference consumers rather than a standalone toy model. The
+prototype may enable only a selected vertical path, but its report must identify every remaining
+consumer and must not call a partially migrated checker complete.
+
+**F2 contract.** Keep structural CFG construction. Semantic assigned-expression facts must retain
+their occurrence, candidate environment, dependencies, and transitive provisional state. Reads of
+unfinished back-edge facts must have an explicit query/cycle policy; clearing a memo after a
+diagnostic or inferred type was published is not a solution. Relations stay coordinator-owned and
+diagnostics stay single-owner. If this requires the general lazy declaration query from backlog
+`76`, stop and request a separate architecture decision.
+
+**Independent remaining obligations.** Inferred binding defaults combine source/default types;
+explicitly annotated defaults retain contextual checking. Direct enum authentication remains
+distinct from ordinary enum widening. Class member/tuple references must use complete,
+publication-safe surfaces without admitting a general projection planner during construction.
+These obligations stay in the corpus even if a feasibility unit cannot yet implement them.
+
+**Execution boundary.** One implementation agent and one independent reviewer, sequential units,
+serialized CPU-leased Cargo. At most one remediation round per feasibility unit; a second failed
+review means STOP, not another unbounded patch cycle. No production cutover, scoreboard changes,
+new resolver/declaration capabilities, type erasure, diagnostic suppression, or weakened acceptance.
+Preserve the primary WIP and record experimental diffs and receipts before requesting migration
+approval. Passing feasibility is not evidence that backlog `44` is complete.
+
 <!-- Append as work proceeds. Graduate durable decisions/findings to ADR/backlog and trim this log
      to pointers. -->
 

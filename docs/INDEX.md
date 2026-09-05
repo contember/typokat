@@ -25,8 +25,8 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprint-2026-08-17-as-const.md`](sprints/sprint-2026-08-17-as-const.md) — resumed after the
-  project-local library lifecycle cutover; WIP remains preserved at `996eb5a`.
+- [`sprint-2026-08-17-as-const.md`](sprints/sprint-2026-08-17-as-const.md) — bounded literal-model
+  and assignment-flow feasibility before approving a full migration; WU1 remains uncommitted.
 
 ## What's hot
 
@@ -47,8 +47,8 @@ decisions → reference → archive.
   product boundary. The archived
   [`satisfies sprint`](archive/sprint-2026-08-17-satisfies.md) implements source-preserving
   contextual checking and records the comparison with TypeScript PR #46827. The
-  [`as const` sprint](sprints/sprint-2026-08-17-as-const.md) has resumed from its preserved
-  `996eb5a` WIP now that the library lifecycle cutover has closed.
+  [`as const` sprint](sprints/sprint-2026-08-17-as-const.md) now tests literal-model and flow
+  feasibility after three review rounds exposed provenance loss in the uncommitted WU1 port.
 - **Library compiler decomposition shipped 2026-08-21** — the
   [`archived sprint`](archive/sprint-2026-08-15-library-compiler-decomposition.md) split the
   14,009-line root into a 176-line stable facade, thirteen bounded production owners, and one test
