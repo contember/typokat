@@ -30,6 +30,7 @@ INTERNAL_PACKAGES = (
     "typokat-core",
     "typokat-diagnostics",
     "typokat-frontend",
+    "typokat-library-product",
     "typokat-relate",
     "typokat-types",
 )
