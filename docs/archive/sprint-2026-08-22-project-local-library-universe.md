@@ -4,9 +4,9 @@
 > epoch, replay route, and complete-source fallback are deleted. Commit map: WU0 `7b32eac3`;
 > WU1 `ce5c3c77`; WU2 `5e223ae5`–`4d781b5a`; WU3 `d77ad97c`–`26955ba3`;
 > WU4 `e88abf4c`–`9c05afb4`; WU5 `f27f4b16`–`07ba6091`;
-> WU6 `9a2bca08`–`f029bffb`; WU7 `5ad3a836`–`f21e2189`.
-> Verification: ordinary conformance `583/699/583/0` in 69.77 s; full repeated/standalone parity
-> `583/699/583/583` in 138.30 s; the authenticated WU6 rerun at `f21e2189` returned `GO`.
+> WU6 `9a2bca08`–`f029bffb`; WU7 `5ad3a836`–`0be0b20e`.
+> Verification: ordinary conformance `583/699/583/0`; full repeated/standalone parity
+> `583/699/583/583`; the authenticated final WU7 rerun at `0be0b20e` returned `GO`.
 > The user explicitly waived WU7's independent adversarial review. Backlogs 113, 115, and 116
 > closed; replay-only backlog 85 became obsolete with its deleted implementation; backlog 121
 > shipped during WU1. Deferred: the active as-const sprint and the existing model/module backlog.
@@ -946,19 +946,20 @@ numbers are invalid without `--no-smt`.
   `71.717829036 s`. It materialized 2,064,725 library owners because each project eagerly demanded
   every compilation-global value. This was a lifecycle implementation bug, not grounds to restore
   the deleted architecture.
-- **2026-09-05 — demand-driven value closure returned `GO`.** RED `87c79cf1` bounded a narrow
-  Array frame below 100 owners; `2bebf82b` made global values lazy. Linkage then exposed two
-  production-only omissions: standalone namespace root storage and demand calls hidden behind the
-  benchmark/test feature. `302ad476`, `79fa8b5b`, and `f21e2189` fixed both while preserving the
-  B103 slot-matrix function-group invariant. The clean `f21e2189` unified collector retained
-  `target/wu6/session-wu6-f21e2189.json` (file SHA-256
-  `dfdda10a12b0ba978fdf5beb02a6458332a9857ed4365d379da7b97a8321fc91`, canonical evidence
-  SHA-256 `d51e864bc1b82abd564b78c0ebca04e408155beeabae746fc6f139fd76234b39`)
+- **2026-09-05 — final demand-driven value closure returned `GO`.** RED `87c79cf1` bounded a
+  narrow Array frame below 100 owners; `2bebf82b` made global values lazy. Linkage then exposed
+  standalone namespace storage and production demand omissions, fixed through `f21e2189`.
+  Post-closure semantic checks exposed repeated settled Array demand and repeated collision
+  selection in the user hot path; `f613afca` and `0be0b20e` cache those decisions without changing
+  the B103 slot-matrix function-group invariant. The clean `0be0b20e` unified collector retained
+  `target/wu6/session-wu6-0be0b20e.json` (file SHA-256
+  `841196eaf243cd5844551dfa1923afdec494fad8c0978f9edec37f912d47a191`, canonical evidence
+  SHA-256 `b7e3990417aa58818c0def2eb2099333998bec7a527fb85696e7eddeea11309b`)
   and returned `GO` with `LINKAGE-PASS`, `PANEL-PASS`, `CONCURRENCY-PASS`, and
-  `ALLOCATION-PASS`. The 32-project panel reported median speedup `9.419309`, p95 ratio
-  `8.826601`, bootstrap lower bound `9.085741`, typokat median/peak RSS
-  `75,434` / `75,468 KiB`, and TypeScript-Go median RSS `172,898 KiB`. The 687-frame route took
-  `12.295139599 s` with `75,804 KiB` peak RSS, below the `12.946437 s` /
+  `ALLOCATION-PASS`. The 32-project panel reported median speedup `8.986284`, p95 ratio
+  `8.504998`, bootstrap lower bound `8.542837`, typokat median/peak RSS
+  `75,482` / `75,496 KiB`, and TypeScript-Go median RSS `170,950 KiB`. The 687-frame route took
+  `12.667101560 s` with `75,732 KiB` peak RSS, below the `12.946437 s` /
   `144,109,568-byte` historical gates. Concurrent 1/2/32-session peaks were
-  `80,368` / `80,708` / `163,248 KiB`; the counting allocator recorded `39,881,389` calls.
+  `80,668` / `80,796` / `173,676 KiB`; the counting allocator recorded `40,016,538` calls.
   The user explicitly waived the independent WU7 adversarial review.

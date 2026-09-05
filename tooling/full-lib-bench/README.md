@@ -294,11 +294,11 @@ batch-panel, control, concurrency, and allocation identities into one current-ca
 attestation. Every batch request carries the exact authenticated official-suite source bytes; a
 case id plus precomputed semantic output is insufficient.
 
-The accepted WU7 rerun at `f21e2189` returned `GO`: all four stage verdicts passed, the 32-project
-panel reported median speedup `9.419309`, p95 ratio `8.826601`, and bootstrap lower bound
-`9.085741`, and the 687-project route took `12.295139599 s` below the
-`12.946437 s` historical gate. The archived project-local-library-universe sprint records the
-artifact identities, RSS, concurrency, and allocation receipts.
+The accepted final WU7 rerun at `0be0b20e` returned `GO`: all four stage verdicts passed, the
+32-project panel reported median speedup `8.986284`, p95 ratio `8.504998`, and bootstrap lower
+bound `8.542837`, and the 687-project route took `12.667101560 s` below the `12.946437 s`
+historical gate. The archived project-local-library-universe sprint records the artifact
+identities, RSS, concurrency, and allocation receipts.
 
 ## Self-tests
 

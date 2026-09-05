@@ -660,11 +660,11 @@ Performance claims are workload contracts, not architectural extrapolations. Exi
 benchmarks cannot be projected onto typokat: they often omit subtyping, narrowing, or `lib.d.ts`,
 use warm caches, and compare against old JavaScript `tsc` rather than native TypeScript.
 
-The current authoritative evidence is the clean `f21e2189` WU7 rerun recorded in the archived
+The current authoritative evidence is the clean `0be0b20e` WU7 rerun recorded in the archived
 [project-local universe sprint](../archive/sprint-2026-08-22-project-local-library-universe.md).
 Its unified collector returned `GO`: against pinned native TypeScript 7.0.2, the 32-project panel
-reported median speedup `9.419309`, p95 ratio `8.826601`, and bootstrap lower bound `9.085741`;
-the 687-project route completed in `12.295139599 s` below the `12.946437 s` historical gate.
+reported median speedup `8.986284`, p95 ratio `8.504998`, and bootstrap lower bound `8.542837`;
+the 687-project route completed in `12.667101560 s` below the `12.946437 s` historical gate.
 
 That result proves the production default-library cutover contract only. It does not prove a
 speedup for arbitrary repositories, generic-heavy code, flow-heavy code, broad module graphs, or
