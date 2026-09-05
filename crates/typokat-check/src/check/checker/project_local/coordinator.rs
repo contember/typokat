@@ -342,23 +342,8 @@ where
         self.demand(interner, &product_groups)
     }
 
-    fn native_array_alias(
-        &self,
-        group: TypeGroupId,
-    ) -> Option<crate::check::checker::library_identities::NativeArrayAlias> {
-        if !self.enable_native_array_alias {
-            return None;
-        }
-        let product_group = self.type_products.get(&group).copied()?;
-        if self.native_array_groups[0] == Some(product_group) {
-            return Some(crate::check::checker::library_identities::NativeArrayAlias::Array);
-        }
-        if self.native_array_groups[1] == Some(product_group) {
-            return Some(
-                crate::check::checker::library_identities::NativeArrayAlias::ReadonlyArray,
-            );
-        }
-        None
+    fn native_array_aliases_enabled(&self) -> bool {
+        self.enable_native_array_alias
     }
 
     fn demand_value(

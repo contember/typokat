@@ -1550,10 +1550,7 @@ pub(in crate::check::checker) trait ProjectLocalUserDemandGateway {
         group: TypeGroupId,
     ) -> Result<ProjectLocalDemandSnapshot, &'static str>;
 
-    fn native_array_alias(
-        &self,
-        group: TypeGroupId,
-    ) -> Option<super::library_identities::NativeArrayAlias>;
+    fn native_array_aliases_enabled(&self) -> bool;
 
     fn demand_value(
         &mut self,
@@ -1575,6 +1572,7 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     pub(in crate::check::checker) project_local_demand_gateway:
         Option<&'a mut dyn ProjectLocalUserDemandGateway>,
     pub(in crate::check::checker) project_local_demand_error: Option<&'static str>,
+    pub(in crate::check::checker) project_local_native_array_aliases_enabled: bool,
     pub(in crate::check::checker) project_local_library_identity_groups:
         Option<[Option<TypeGroupId>; 8]>,
     pub(in crate::check::checker) project_local_user_modules: Option<FxHashSet<ScopeId>>,
@@ -1649,6 +1647,9 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
         Vec<(String, ValueStorageId)>,
     /// Immutable-product value declarations already published before user source checking.
     pub(in crate::check::checker) project_local_library_value_storages: FxHashSet<ValueStorageId>,
+    /// Rejected user value collisions whose visible winner remains a library function.
+    pub(in crate::check::checker) project_local_library_value_overrides:
+        FxHashMap<SymbolId, ValueStorageId>,
     /// Exact library-root array roles available before type-group publication.
     pub(in crate::check::checker) early_native_array_groups: Option<NativeArrayGroups>,
     /// Outermost type-declaration source that authorizes construction-only array roles.

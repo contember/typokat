@@ -355,9 +355,17 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
         &self,
         group: TypeGroupId,
     ) -> Option<super::library_identities::NativeArrayAlias> {
-        self.project_local_demand_gateway
-            .as_deref()
-            .and_then(|gateway| gateway.native_array_alias(group))
+        if !self.project_local_native_array_aliases_enabled {
+            return None;
+        }
+        let groups = self.project_local_library_identity_groups?;
+        if groups[0] == Some(group) {
+            return Some(super::library_identities::NativeArrayAlias::Array);
+        }
+        if groups[1] == Some(group) {
+            return Some(super::library_identities::NativeArrayAlias::ReadonlyArray);
+        }
+        None
     }
 
     pub(in crate::check::checker) fn demand_project_local_type_group(

@@ -2861,7 +2861,7 @@ pub(in crate::check::checker) fn check_bound_project_local_programs<'a, 'ast>(
     enqueue_ambient_context_diagnostics(&binder, &lexical_events, &mut external_effects)?;
 
     let error = interner.well_known().error;
-    let project_local_library_value_storages = binder
+    let project_local_library_value_storages: FxHashSet<ValueStorageId> = binder
         .declarations
         .iter()
         .filter(|declaration| {
@@ -2871,6 +2871,28 @@ pub(in crate::check::checker) fn check_bound_project_local_programs<'a, 'ast>(
                 .is_some_and(|origin| matches!(origin, CompilationOrigin::Library(_)))
         })
         .filter_map(|declaration| declaration.value_storage)
+        .collect();
+    let project_local_library_value_overrides = binder
+        .symbols
+        .iter()
+        .filter_map(|(symbol, binding)| {
+            let rejected = binding.declarations.iter().any(|declaration| {
+                binder
+                    .namespaces
+                    .merge_disposition_for_declaration(*declaration)
+                    .is_some_and(|disposition| {
+                        disposition != crate::binder::namespace::MergeDisposition::Admitted
+                    })
+            });
+            rejected.then(|| {
+                binding
+                    .function_values
+                    .iter()
+                    .find(|storage| project_local_library_value_storages.contains(storage))
+                    .copied()
+                    .map(|storage| (symbol, storage))
+            })?
+        })
         .collect();
     let mut decl_types = DeclTypes::new(binder.decl_count);
     for (storage, ty) in product_value_types {
@@ -2933,11 +2955,13 @@ pub(in crate::check::checker) fn check_bound_project_local_programs<'a, 'ast>(
             ticket_key: project_local_effect_ticket_key,
         },
     );
+    pass.project_local_native_array_aliases_enabled = demand_gateway.native_array_aliases_enabled();
     pass.project_local_demand_gateway = Some(demand_gateway);
     pass.project_local_library_identity_groups = Some(library_identity_groups);
     pass.project_local_library_global_names = project_local_library_global_names;
     pass.project_local_library_global_values = product_global_values;
     pass.project_local_library_value_storages = project_local_library_value_storages;
+    pass.project_local_library_value_overrides = project_local_library_value_overrides;
     pass.semantic_queries
         .set_native_identity_availability(library_identity_groups.map(|group| group.is_some()));
     pass.certified_library_values = certified_library_values;
@@ -4775,20 +4799,8 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
     ) -> Option<ValueStorageId> {
         let binding = self.binder.symbols.get(symbol)?;
         let value = binding.value?;
-        let rejected = binding.declarations.iter().any(|declaration| {
-            self.binder
-                .namespaces
-                .merge_disposition_for_declaration(*declaration)
-                .is_some_and(|disposition| {
-                    disposition != crate::binder::namespace::MergeDisposition::Admitted
-                })
-        });
-        if matches!(self.current_source, crate::source::SourceUnit::User { .. }) && rejected {
-            if let Some(storage) = binding
-                .function_values
-                .iter()
-                .find(|storage| self.project_local_library_value_storages.contains(storage))
-            {
+        if matches!(self.current_source, crate::source::SourceUnit::User { .. }) {
+            if let Some(storage) = self.project_local_library_value_overrides.get(&symbol) {
                 return Some(*storage);
             }
         }
@@ -5667,6 +5679,7 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
         project_local_demand_gateway: None,
         project_local_demand_error: None,
         project_local_library_identity_groups: None,
+        project_local_native_array_aliases_enabled: false,
         project_local_user_modules: None,
         project_local_user_interface_own: FxHashMap::default(),
         eager_application_cache: FxHashMap::default(),
@@ -5711,6 +5724,7 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
         project_local_library_global_names: FxHashSet::default(),
         project_local_library_global_values: Vec::new(),
         project_local_library_value_storages: FxHashSet::default(),
+        project_local_library_value_overrides: FxHashMap::default(),
         early_native_array_groups: None,
         early_native_array_root_source: None,
         certified_library_values: context::CertifiedLibraryValues::default(),
