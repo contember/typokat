@@ -232,6 +232,65 @@ new resolver/declaration capabilities, type erasure, diagnostic suppression, or 
 Preserve the primary WIP and record experimental diffs and receipts before requesting migration
 approval. Passing feasibility is not evidence that backlog `44` is complete.
 
+### Approved F1 continuation — 2026-09-05
+
+F1's first independent review returned STOP: four model tests plus twelve other enum tests
+passed independently, but the checker failed to compile at eleven matches in nine files. The
+partial experiment proved identity, selected union/enum rules, and substitution transport only.
+It did not prove source transport, inference, relation, display, or cache behavior. The user
+approved one bounded continuation and another independent review, not F2 or full migration.
+
+**Local semantic contract (experimental only):**
+
+- Storage, substitution, member/element projection, semantic demand, and inference candidate
+  collection preserve complete mode-bearing IDs. A shared evaluation overlay must not erase mode.
+- Relations compare regular literal identities only after coordinator publication/poison checks
+  and overlay/frontier handling, before relation identity/cache/cycle success. Local equality and
+  narrowing predicates compare the underlying value or canonical enum identity, but retain the
+  original mode-bearing result. Class construction gains no new query capability.
+- Actual widening broadens widening literals contribution-by-contribution; regular literals stay
+  exact. Same-value regular/widening unions select the regular literal in either order. Enum
+  wrappers retain the existing unique canonical owner. Display does not expose the mode.
+- Source producers on the selected path must distinguish ordinary literals from annotated and
+  const-context literals before shared inference. Candidate fixing applies its widening policy
+  before final dependent-constraint validation. No call-side post-fix repair supplies the answer.
+- Existing regular IDs cannot silently be reinterpreted as ordinary widening literals. Before
+  changing shared widening, inventory its producers/consumers and prove compatibility of ordinary
+  controls. No transitional boolean, fixture dispatch, mutable metadata, or alternate inference
+  pipeline may hide an incomplete migration. If compatibility requires broader producer migration
+  than the selected path, STOP with the concrete boundary.
+
+**Expanded territory.** In the scratch worktree only, add these paths under
+`crates/typokat-check/src/check/` to the existing F1 grant:
+
+- `checker/classes/construction.rs`, `checker/decls/mod.rs`,
+  `checker/eval/instantiation.rs`, `checker/eval/keyof.rs`, `checker/eval/mapped.rs`, and
+  `checker/eval/mod.rs`: justified closed-leaf/identity handling for the representation.
+- `flow.rs`: mode-insensitive primitive/enum comparison predicates and adjacent identity
+  comparisons only; no assignment facts, target reduction, loop resolution, or memo redesign.
+- `query/mod.rs`: representation admission and coordinator-owned relation preflight; no new
+  general declaration demand. Existing `checker/calls.rs` classification remains within F1.
+
+Model tests stay in type-store modules; inference tests stay in inference modules. Checker
+integration witnesses may be added to `checker/tests/assertions.rs`, and coordinator witnesses
+to existing `query/` test modules. These are explicit test ownership, not additional production
+capabilities. A newly required production owner remains a stop-and-ask boundary.
+
+**Acceptance before another verdict.** Retain the committed B44 source matrix unchanged. Prove
+one real primitive declaration/member/tuple/substitution-to-generic path, both mixed/equal-value
+union orders, ordinary widening controls, and the negative dependent-constraint case. Add model
+witnesses for enum value collisions/families, open numeric enums, intersections, frozen-store
+fork/dedup/reference census, and equal display. Add coordinator witnesses for both relation
+directions, nested operands, poisoned/unavailable enclosing surfaces, exhaustion, overlay order,
+and no tainted cache promotion. Once a runnable candidate exists, authenticate it and run the
+required inference differential seeds 1/2/3 × 400 and committed repro gate; classify every change
+without rebaselining. Remaining B44 flow/class/default failures stay separately attributed.
+
+The first F1-only patch is retained with SHA-256
+`596cf551ef1de20ef2b4304675153936ae7723956dfe5d0a5963b3b95d0e977b`.
+This continuation consumes F1's single remediation round. Another failed independent review
+means STOP. No experiment is integrated or committed as production implementation here.
+
 <!-- Append as work proceeds. Graduate durable decisions/findings to ADR/backlog and trim this log
      to pointers. -->
 
