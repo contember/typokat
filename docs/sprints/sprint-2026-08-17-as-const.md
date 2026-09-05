@@ -168,6 +168,35 @@ outcome must state the difference instead of presenting an apples-to-apples feat
 
 ## Run log
 
+### Autonomous completion authorization — 2026-09-05
+
+The user authorized the leader to make further sprint decisions without asking and finish the
+whole sprint. This supersedes the feasibility-only approval gates and file fences below; those
+entries remain historical evidence, not current execution limits. Soundness, immutable publication,
+single-owner effects, independent review, and all closure gates remain mandatory. The frozen
+feature exclusions still apply: this does not silently absorb general lazy declaration resolution,
+module breadth, or unsupported const operands.
+
+The second F1 review confirmed that the wrapper representation was not disproved. Its producer
+boundary was too narrow: namespace and readonly class producers publish ordinary and annotated
+exact literals with the same ID, while shared declaration and inference widening broadens both.
+The leader therefore chooses a coherent producer/consumer migration, not a compatibility shim or
+another literal-origin boolean. The committed producer witness extends the existing B44 matrix.
+
+| Sequential unit | Territory | Contract and gate |
+|---|---|---|
+| M1 — complete immutable literal modes | Experimental type-store, query/relation, checker producers, inference, display, and their tests | Migrate ordinary producers including namespace/readonly class fields; preserve exact annotation/const types; remove post-fix inference repairs; independently verify model, coordinator, ordinary controls, and B44 literal transport |
+| M2 — semantic assignment flow | Checker CFG, assignment facts, declaration/contextual memo boundaries, and tests | Separate assignment result from declared-target reduction and invalid-write recovery; prove back-edge/candidate-local answers cannot become durable |
+| M3 — remaining B44 fidelity | Binding defaults, enum authentication, safe published class reference projection, and tests | Close the retained default/enum/class regressions without new general declaration or construction-query capabilities |
+| M4 — integration and closure | Leader-owned registration, official harness, docs, manifest, and scoreboard | Full-diff adversarial review; unchanged-tree workspace/conformance/lint/format, differential and official gates; audit each transition before lifecycle closure |
+
+One implementation owner works in the existing detached experiment, with sequential Cargo under
+CPU lease. The primary WU1 diff remains preserved until verified integration. Read-only reviews and
+later-unit design may run separately, but cannot mutate the implementation territory. A failed
+review causes root-cause classification and a new bounded remediation unit, not scope cuts or
+repeated blind patches. The leader resolves new design boundaries under this authorization and
+records significant choices in an ADR before production integration. No push, publish, or deploy.
+
 ### Approved feasibility reset — 2026-09-05
 
 The user approved only spec expansion, bounded literal-model and assignment-flow feasibility,
