@@ -373,6 +373,13 @@ the new test; preserve its exact `[4]`, repeated-attempt, and five-cache rollbac
 This corrects a test premise, not production behavior. T1 still requires independent review, and
 the separate T2 publisher regression remains unfixed.
 
+T1 closure: independent production review found no new defects and gave narrow GO. The authorized
+four-line Object-context amendment preserves every original assertion. Leader verification matched
+all 1,997 final file hashes and passed the exact native control, 167 query tests, 156 type tests,
+and 83 inference tests (existing measurement tests remain ignored). T1 is accepted only as the
+bounded traversal remediation in the isolated candidate. Advance to the already specified T2
+admission repair; no whole-tracer acceptance, production integration, or union-gate clearance follows.
+
 T2 admission decision: select only whole, finite product intersection trees whose leaves are
 resolved parameters owned by the immediate generic signature or existing modeled ground
 intrinsic/literal terminals. Parentheses are already transparent in the product; nested intersection
