@@ -364,6 +364,15 @@ preserve the real source-product witness and all valid open object/array/tuple/f
 without introducing a fixture hook, permissive recovery, or claiming broader form coverage. Both
 clusters need review before any tracer acceptance; neither changes the union-producer STOP.
 
+T1's three original traversal repros now pass in the isolated candidate. A new native-handoff
+control remained RED because its setup offered Boolean identity but neither ready nor demandable
+Object identity. Independent paired direct/retained probes agree: that setup returns structural
+`No`; making both identities demandable requests `[6, 4]`; supplying ready Object requests `[4]`.
+The decisive handoff code is unchanged from pre-T1. Approve only adding ready Object context to
+the new test; preserve its exact `[4]`, repeated-attempt, and five-cache rollback assertions.
+This corrects a test premise, not production behavior. T1 still requires independent review, and
+the separate T2 publisher regression remains unfixed.
+
 T2 admission decision: select only whole, finite product intersection trees whose leaves are
 resolved parameters owned by the immediate generic signature or existing modeled ground
 intrinsic/literal terminals. Parentheses are already transparent in the product; nested intersection
