@@ -2,6 +2,7 @@
 
 use crate::binder::namespace::{ModuleBindingContext, NamespaceId, SourceUnitKey};
 use crate::binder::scope::ScopeId;
+use crate::binder::source_references::{SourceReferenceBuilder, SourceReferenceManifest};
 use crate::span::Span;
 use crate::types::layered::{LayeredMap, LayeredVec};
 use oxc_ast::ast::{
@@ -201,6 +202,7 @@ pub struct SourceDeclarationManifest<'ast> {
     declarations: Box<[SourceDeclarationOccurrence<'ast>]>,
     type_fragments: Box<[SourceTypeFragmentOccurrence<'ast>]>,
     interface_occurrences: Box<[SourceInterfaceOccurrence]>,
+    source_references: SourceReferenceManifest,
 }
 
 impl<'ast> SourceDeclarationManifest<'ast> {
@@ -210,6 +212,7 @@ impl<'ast> SourceDeclarationManifest<'ast> {
             declarations: Box::new([]),
             type_fragments: Box::new([]),
             interface_occurrences: Box::new([]),
+            source_references: SourceReferenceManifest::unavailable(),
         }
     }
 
@@ -233,11 +236,39 @@ impl<'ast> SourceDeclarationManifest<'ast> {
                 .expect("type-fragment projection is enabled")
                 .into_boxed_slice(),
             interface_occurrences: visitor.interface_occurrences.into_boxed_slice(),
+            source_references: visitor
+                .source_references
+                .expect("reference projection is enabled")
+                .finish(),
         }
     }
 
     pub fn declarations(&self) -> &[SourceDeclarationOccurrence<'ast>] {
         &self.declarations
+    }
+
+    pub fn source_references(&self) -> &SourceReferenceManifest {
+        &self.source_references
+    }
+
+    #[cfg(test)]
+    pub(super) fn references_with_global_census_for_test(
+        program: &'ast Program<'ast>,
+        context: ModuleBindingContext,
+    ) -> (SourceReferenceManifest, SourceGlobalBindingCensus) {
+        let mut visitor = SourceDeclarationVisitor::with_global_census(context);
+        visitor.source_references = Some(SourceReferenceBuilder::default());
+        visitor.visit_program(program);
+        (
+            visitor
+                .source_references
+                .expect("reference projection enabled")
+                .finish(),
+            visitor
+                .global_census
+                .expect("global projection enabled")
+                .result,
+        )
     }
 
     pub fn type_fragments(&self) -> &[SourceTypeFragmentOccurrence<'ast>] {
@@ -362,6 +393,7 @@ pub struct SourceGlobalContributorSite {
 }
 
 struct SourceDeclarationVisitor<'ast> {
+    source_references: Option<SourceReferenceBuilder<'ast>>,
     occurrences: Option<Vec<SourceDeclarationOccurrence<'ast>>>,
     type_fragments: Option<Vec<SourceTypeFragmentOccurrence<'ast>>>,
     interface_occurrences: Vec<SourceInterfaceOccurrence>,
@@ -397,6 +429,7 @@ enum GlobalBoundaryDisposition {
 impl<'ast> SourceDeclarationVisitor<'ast> {
     fn manifest() -> Self {
         Self {
+            source_references: Some(SourceReferenceBuilder::default()),
             occurrences: Some(Vec::new()),
             type_fragments: Some(Vec::new()),
             interface_occurrences: Vec::new(),
@@ -411,6 +444,7 @@ impl<'ast> SourceDeclarationVisitor<'ast> {
 
     fn occurrences_only() -> Self {
         Self {
+            source_references: None,
             occurrences: Some(Vec::new()),
             type_fragments: None,
             interface_occurrences: Vec::new(),
@@ -425,6 +459,7 @@ impl<'ast> SourceDeclarationVisitor<'ast> {
 
     fn with_global_census(context: ModuleBindingContext) -> Self {
         Self {
+            source_references: None,
             occurrences: None,
             type_fragments: None,
             interface_occurrences: Vec::new(),
@@ -877,6 +912,9 @@ impl<'ast> Visit<'ast> for SourceDeclarationVisitor<'ast> {
     }
 
     fn enter_node(&mut self, kind: AstKind<'ast>) {
+        if let Some(references) = self.source_references.as_mut() {
+            references.enter(kind);
+        }
         if let Some(census) = self.global_census.as_mut() {
             census.result.source_nodes_visited =
                 census.result.source_nodes_visited.saturating_add(1);
@@ -1180,6 +1218,9 @@ impl<'ast> Visit<'ast> for SourceDeclarationVisitor<'ast> {
     }
 
     fn leave_node(&mut self, kind: AstKind<'ast>) {
+        if let Some(references) = self.source_references.as_mut() {
+            references.leave(kind);
+        }
         if matches!(kind, AstKind::VariableDeclaration(_)) {
             self.variable_kinds.pop();
         }

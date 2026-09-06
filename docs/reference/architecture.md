@@ -256,6 +256,13 @@ requires `&mut Interner` while the relation engine borrows the store immutably:
    authenticated; missing or inconsistent ordinary binder rows fail closed.
    `TypeGroup::fragments` remains the only canonical fragment-order authority. No semantic consumer
    performs a second declaration AST walk or reconstructs declarations by name.
+   The same visitor emits the owned, AST-free `SourceReferenceManifest` exposed by
+   `source_references()`: occurrence lookup spaces/read-write kinds, operation edges, syntax regions
+   and scope anchors, copy candidates, and possible boundary acquisitions. Parentheses retain their
+   edges while propagating context in constant work; optional statement slots remain distinguishable.
+   `StructuralTraversal` certifies balanced traversal and row integrity, not parser validity or
+   authenticated binding scopes. Synthetic-empty manifests have `Unavailable` reference coverage.
+   These facts contain no resolved binder identities, semantic results, or closed-use certificate.
 3. **Reservation and class publication.** The checker reserves class, alias, and interface
    identities, persistent binders, raw syntax slots, and lexical event tickets compilation-wide
    before lowering a class surface. `ClassSurfaceLowerer` has only narrow construction

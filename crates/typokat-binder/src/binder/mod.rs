@@ -8,6 +8,7 @@ pub mod declaration;
 pub mod namespace;
 pub mod product;
 pub mod scope;
+pub mod source_references;
 pub mod symbol;
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -35,3 +36,7 @@ mod exact_declaration_site_spec;
 #[cfg(test)]
 #[path = "spec/compilation_origin_spec.rs"]
 mod compilation_origin_spec;
+
+#[cfg(test)]
+#[path = "spec/source_reference_manifest_spec.rs"]
+mod source_reference_manifest_spec;

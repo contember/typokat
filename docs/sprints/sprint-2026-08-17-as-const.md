@@ -560,6 +560,17 @@ The broader `cargo test --workspace` additionally enables an optional binder-pro
 compilation error. It is not part of the default-member gate or a C0 regression; keep its failure
 record separate rather than changing unrelated projection semantics during the scanner repair.
 
+C0 integration closure: C0a independent review found no remaining issues; the separate optional-root
+scanner repair also received independent GO. Leader reran `cargo test --no-fail-fast`, exact ordinary
+conformance (`583/699/583/0`), all-target Clippy, and full formatting on their unchanged combined
+candidate; all pass. After transferring only the four reviewed binder files and scanner helper to
+the primary tree, leader repeated 148 binder unit tests plus its integration test, all 11 lifecycle
+tests, all-target Clippy and formatting successfully. Integrated files match the tested candidate;
+the original 14-file WU1 diff retains hash
+`177d58ca77073296f8ce80bbea0946c66c6503a3ff777766566ee6aec3178b03`.
+The structural fact API is frozen. C1/C2 and ADR-0034 source construction remain unimplemented;
+the full-suite PASS applies to the clean committed-source candidate, not the unrelated primary WIP.
+
 ### Approved feasibility reset — 2026-09-05
 
 The user approved only spec expansion, bounded literal-model and assignment-flow feasibility,
