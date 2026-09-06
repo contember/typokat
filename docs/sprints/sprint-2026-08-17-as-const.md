@@ -388,6 +388,27 @@ the real full/partial B/C-order witness and add outer substitution of an admitte
 method with local binders. Verify opposite retained orders, selected reductions, original model
 transport, and T1's complete traversal witnesses. No broader alias/union/source cutover is approved.
 
+#### Source-construction blueprint — not approved for implementation
+
+A separate read-only blueprint proposes immutable registered callable references, source-owned
+header/signature/return/body completion states, ordered `NeedsSource` handoff after pure-query
+rollback, and relative constituent creation identities frozen before callable publication. This
+is not a second checker or a query-chosen once-cell. Expression-arrow return demand additionally
+needs owned checked-expression receipts; block return demand cannot run the whole body early.
+
+Independent review gives GO only for a narrower spec/ADR, not the blueprint's current profile.
+Even a nullary declared-return signature with no extra source producer can construct shared types
+in different orders: for `A extends C[] | B[]` and return `[B[], C[], A, B, C]`, a forward call and
+a forward callable assignment produce opposite constituent orders and rejected leaves. Both
+normal CLI results match diagnostic-first TypeScript API checks. Therefore the first proof must
+exclude return construction that affects relevant constituent identity, or explicitly model
+demand-lazy signature fields. “No additional source demand” is not a sufficient admission rule.
+
+Registered-reference safety, immutable publication snapshots, exact source permits, query-only
+retry, effect ownership, resource limits, and static admission require an ADR before source cutover.
+No class/library/overload/multi-file expansion follows from the blueprint. Keep this architecture
+gate separate from T1/T2 and do not treat the written plan as a passing implementation experiment.
+
 ### Approved feasibility reset — 2026-09-05
 
 The user approved only spec expansion, bounded literal-model and assignment-flow feasibility,
