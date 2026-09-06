@@ -463,6 +463,67 @@ The `source_construction_*` fixtures pin twelve admitted source observations plu
 frontier. That frontier remains required for eventual sprint closure but is outside the first proof.
 No producer-only classifier may silently extend the profile to unsupported pre-completion consumers.
 
+#### Closed-use capability — selected next dependency
+
+Read-only feasibility establishes a route through the existing declaration visitor and finalized
+binder join. It does not grant source-construction cutover. Capture every occurrence and syntax
+role during that visitor, authenticate real scopes/slots after binder normalization, and build
+direct top-level immutable const-copy edges. Any outside use disqualifies the complete reachable
+producer before registration; no consumer-time fallback is needed. Final library group **and
+declaration** mappings, gateway storage lists, module edges, and script global-object acquisition
+belong to the closure proof. Automatic raw global-property transport must cause no source births.
+
+Implement sequentially, with one active code unit and independent review per unit:
+
+| Unit | Territory | Done-check |
+|---|---|---|
+| C0 structural facts | binder declaration visitor and a source-reference fact module | one traversal; exact occurrences, roles, regions and honest coverage; no behavior cutover |
+| C1 authenticated census | binder finalization and reference resolution | scalar/batch parity, scope holes, final identities, bounded joins |
+| C2 closed-use certificate | checker inventory and product/global boundary receipts | all twelve positives selected, every outside acquisition rejects the complete producer before construction |
+| C3 registered reference protocol | immutable model and shared query/publication seams | ADR-0034 execution contract, snapshots, safety, permits and rollback |
+| C4 source construction | existing source producers and shared union/array operation owners | real CheckerSession source fixtures and once-only header/bound effects |
+
+Only C0 is authorized for implementation now. C1–C4 require their own leader-authored acceptance
+spec and step review where the interfaces change. Use a clean detached worktree based on current
+committed source for C0; do not attach this independent structural capability to the unaccepted
+literal-model migration. Preserve the accepted frozen intersection candidate and primary WIP.
+
+##### C0 acceptance contract
+
+Add immutable, AST-free source-use facts to `SourceDeclarationManifest` from its existing visitor.
+Record dense occurrence/operation/region identities, exact spans, reference lookup space and edge
+role, structural read/write kind, owning callable/class/namespace/header region, scope anchor and
+direct-program-body placement. Retain call optionality, explicit type arguments, argument count,
+annotation/result-context role, and exact single-binding unannotated const-copy syntax. Parentheses
+are transparent through retained edges, not repeated ancestor/span searches. No binder lookup,
+semantic type, RHS evaluation, effect, construction rank, or certificate is produced by C0.
+
+The leader-owned `spec/fixtures/source-reference-manifest.ts` marks every `producer` occurrence
+that is a local reference candidate. Assert those exact spans and lookup/write categories; declaration
+names, labels, static property keys, exported spellings and import qualifiers must not become false
+local reads. Keep separate operation facts for import/qualified/global/dynamic channels. For marked
+edge roles, retain either the exact role or a complete constant-work parent-edge path that proves it;
+do not rediscover syntax after traversal. The file is structural parser input, not a tsc-clean program.
+The TSX fixture distinguishes component roots, member names, intrinsic tags and expression children.
+
+Cover assignments and updates, destructuring defaults, explicit call type arguments, type queries,
+computed keys/spreads, decorators/static blocks, dead/captured regions, ambient/module/export syntax,
+and scopes not currently modeled by the binder. Structural coverage does not authenticate a scope;
+retain anchors/uncertainty for C1 rather than assigning the enclosing scope. Test shadowed references
+as separate regions without pretending C0 knows their resolved identities.
+
+Facts must be emitted independently of the optional global-binding census and its early returns.
+Each generated AST visit and each structural edge is processed a bounded number of times. Existing
+manifest-build/node counters and long parenthesis/reference/region controls must exclude a second
+walk or quadratic ancestor reconstruction. Preserve all old declaration/type-fragment/global-census
+results. `empty_for_program` must mark reference coverage unavailable, not vacuously complete.
+An interrupted/invalid structural projection cannot claim complete coverage. Be explicit about
+parser diagnostics not present in the Program input; C0 must not invent parser-recovery certainty.
+
+Thread no new checker path, producer selection, resolver, library schema, or public unsupported
+notice in C0. Freeze the fact API only after independent review. C1 later needs binder-owned batched
+resolution or an honest non-linear bound; scalar lookup is not assumed constant time.
+
 ### Approved feasibility reset — 2026-09-05
 
 The user approved only spec expansion, bounded literal-model and assignment-flow feasibility,
