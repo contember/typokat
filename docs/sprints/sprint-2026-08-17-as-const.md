@@ -262,6 +262,15 @@ records significant choices in an ADR before production integration. No push, pu
   incomplete markers. This verifies the acceptance corpus, not candidate conformance. The new
   generic-return fixture also pins direct, union, nested-object, and tuple return policy for regular
   and widening primitive/enum contributions before R1c implementation.
+- R2b independent design review gives conditional GO with mandatory corrected seams. The adopted
+  symbolic-signature, source-write census, bound-view, row-relation, and invocation ownership
+  contracts are [ADR-0033](../decisions/0033-separate-contextual-row-views-from-symbolic-signatures.md).
+  Explicit literal payload specialization and aggregate-rest arity controls extend the source spec.
+- Implementation order after R1b2 review: R2a's single arrow/default/actual-return producer first,
+  then signature-aware R1c candidate policy and contextual fixing through that producer, then R2b.
+  Return contributions are retained until unioning before endpoint widening as part of R2a's
+  return publication owner. This avoids adding two separate contextual arrow pipelines. M2/M3 and
+  all full-diff/differential/official closure gates remain pending.
 
 ### Approved feasibility reset — 2026-09-05
 
