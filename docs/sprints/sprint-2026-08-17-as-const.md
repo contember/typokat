@@ -364,6 +364,30 @@ preserve the real source-product witness and all valid open object/array/tuple/f
 without introducing a fixture hook, permissive recovery, or claiming broader form coverage. Both
 clusters need review before any tracer acceptance; neither changes the union-producer STOP.
 
+T2 admission decision: select only whole, finite product intersection trees whose leaves are
+resolved parameters owned by the immediate generic signature or existing modeled ground
+intrinsic/literal terminals. Parentheses are already transparent in the product; nested intersection
+structure must remain retained. Exclude outer parameters, aliases/applications, unions, operators,
+and all compound leaves from this minimum. Static admission is not a readiness certificate.
+
+Choose the whole-root producer before lowering any leaf. Non-selected roots use the existing
+canonical producer exactly once. Never partially retain a mixed root, select by fixture/name/flag,
+retry canonically after an error, or put a compatibility fallback in inference. Validate the selected
+plan's resulting leaf identities against the signature-local binder set; a mismatch is a construction
+failure. Selection is query-free and uses existing product reference resolution, not spelling.
+
+Keep the unrestricted model constructor and its closed-object outer-substitution witness unchanged.
+The bounded product subset is stable under outer signature substitution because all of its open
+leaves are shielded local binders. This does not promise retained-adapter execution after an arbitrary
+outer parameter becomes an open composite; such a producer occurrence is not selected here.
+
+T2 acceptance adds real product/session controls for open object/array/tuple/function operands,
+nested and parenthesized intersections, unprotected outer-parameter roots, and mixed roots. They
+must remain complete through their original producer, with no partial retained descriptor. Preserve
+the real full/partial B/C-order witness and add outer substitution of an admitted published generic
+method with local binders. Verify opposite retained orders, selected reductions, original model
+transport, and T1's complete traversal witnesses. No broader alias/union/source cutover is approved.
+
 ### Approved feasibility reset — 2026-09-05
 
 The user approved only spec expansion, bounded literal-model and assignment-flow feasibility,
