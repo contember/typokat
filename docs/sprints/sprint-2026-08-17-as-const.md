@@ -90,6 +90,17 @@ all literals unconditionally. Reuse the existing source-aware contextual literal
 reserved producer, lexical owner tests and candidate rollback. Freeze the repaired delta for a
 second independent review and rerun the focused, contextual differential and ordinary gates.
 
+The second review confirms the original 26 regressions fixed, but rejects the repair for a new
+shared-caller false clean. Object/array/tuple producers now preserve mixed-union literals without
+regularizing their widening mode, so a copied property/element accepts an invalid later write.
+Leader acceptance `contextual_container_literal_modes.ts` pins downstream-copy and direct-write
+checks across those routes and nested object returns, both union orders, optional/boolean/numeric
+members, valid same-value writes and broad same-kind controls. Keep syntax-directed ownership and
+reference boundaries: regularize the admitted source contribution at its producer, never recursively
+rewrite a referenced container. The source-aware decision and publication mode must agree in every
+affected shared caller. This repair stays in the same contextual-literal cluster; no new inference,
+source-construction or return-path dependency is authorized.
+
 **Why this is a separate sprint.** TypeScript implemented const contexts in
 [`microsoft/TypeScript#29510`](https://github.com/microsoft/TypeScript/pull/29510), independently of
 the later `satisfies` operator. This is an inference/provenance change, not an assignability operator.
