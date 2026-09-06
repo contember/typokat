@@ -571,6 +571,89 @@ the original 14-file WU1 diff retains hash
 The structural fact API is frozen. C1/C2 and ADR-0034 source construction remain unimplemented;
 the full-suite PASS applies to the clean committed-source candidate, not the unrelated primary WIP.
 
+##### C1 step review and corrected sequencing
+
+Independent step review stopped the first C1 design on two authentication defects and a lifecycle
+misstatement. Adopt these corrections before implementation:
+
+- Validate an existing lookup basis against all current dependency rows **before** refreshing any
+  immutable backing witness. Public mutation followed by freeze must not authenticate stale lookup
+  summaries. Refresh only after every required family freeze succeeds; partial failure invalidates
+  C1 readiness. Ordinary binder freeze errors and return behavior remain unchanged.
+- Root attachment records the actual statement-entry scope and its creation parent. The existing
+  normalization owner records the permitted root-parent transition; it does not replace the entry
+  scope with a publication/global scope. Ordinary child receipts retain their actual creation parent.
+- Fresh product instantiation is the production lifecycle under ADR-0023. Count one prefix
+  projection per compilation batch. Freeze/fork is compatibility coverage, not a new production
+  shared Binder. Defer prefix acceleration; sharing an index alone does not prove zero prefix work.
+
+Split C1 sequentially into C1a consumed-input/scope receipts, C1b final basis/borrowed views, and
+C1c shared scalar policy/batch resolution. Only C1a is authorized now. Intermediate receipts are
+construction evidence, not authenticated resolved rows or a ready census. C1b must enumerate its
+exact dependency read-set before implementation. Its domain check precedes generic lookup, so an
+unsupported inner binder cannot expose a same-named outer parameter. C1c must account for total
+basis, scope, generic, namespace, participant and output work, not only the final lookup operation.
+
+##### C1a acceptance contract — consumed input and scope receipts
+
+Keep C0's public fact accessors unchanged. Privately share its AST-free projection through `Arc`:
+a manifest clone shares occurrence origin; rebuilding over the same Program or an equal parse does
+not. The allocation identifies the reference input, not an authenticated declaration table or a
+bound instance. Record its consumption for each module/source pair, including reference-only and
+empty sources. The same input may be consumed in two modules, but their receipts remain qualified
+by their distinct module/source identities. Reinstalling a receipt for one module is invalid.
+Retain no AST, source text, AST address, numeric pointer token, or process-wide origin registry.
+
+At existing binding operations, retain exact `(AstType, full span)` anchor, input operation/region,
+actual entered ScopeId, ScopeKind and creation parent. Index C0 anchors once per input; lookups must
+not search containing spans or walk the AST again. Record root, function/arrow, ordinary block,
+for/for-in/for-of head, switch and catch scope creation. FunctionBody itself creates no extra scope.
+Binder-skipped functions/blocks remain explicit missing attachment observations; neither the nearest
+C0 region nor a same-start function/block map entry can manufacture an attachment. Duplicate exact
+anchors, conflicting attachments and malformed operation relationships are typed invalid evidence.
+
+Root consumption covers ordinary source, source-compiled library, fresh product users, and frozen
+continuation users through their existing entry points. For source-compiled scripts, record the
+shared global entry when that is what `bind_library_statements` receives. For ordinary/product
+sources, record the actual syntax module. Distinguish creation and final parent through a receipt
+emitted at the existing normalization mutation, with exact source/module, old parent and authorized
+new parent. Never infer permission afterward from whichever parent happens to be present.
+Root transitions do not rewrite function/block parents or certify an unrelated graph mutation.
+
+The `source-scope-receipts.ts` fixture proves the current binder's scope choices, not new TypeScript
+semantics: ordinary-for callbacks belong to its head; for-in/of source callbacks and switch
+discriminant callbacks belong to the enclosing function; case tests belong to switch scope. Catch
+and catch body are separate scopes. Parameter-default callbacks belong to their function scope.
+The `var` initializer's callback remains in the lexical block even though its storage is hoisted.
+Assert full anchor and parent identity against the existing binding owner, not lookup by spelling.
+
+The `source-scope-holes.ts` fixture contrasts bound field/method/control functions with currently
+skipped conditional/computed-key/member/decorator/static-block/type-key callbacks. Preserve every
+C0 reference and distinguish missing attachment from no runtime scope required. Do not extend the
+binder's visited grammar to make the receipt appear complete. Header/generic resolution, class/type
+domain support and per-reference lookup contexts remain C1c work, not partial scope guesses here.
+
+Direct tests must cover consumed clone versus rebuilt/equal manifest, reference-only/empty input,
+same spans in different sources, dual consumption, duplicate installation, unknown/wrong-module
+requests, dropped parser arenas, exact-anchor collision and conflicting attachment injection.
+Verify legitimate root normalization in ordinary/library/product/continuation routes and original
+scope choices in nested loops/switches. Fork/resume clears source-consumption authority; freezing
+does not reissue it or publish lookup readiness. C1a introduces no reusable prefix index or seal.
+Unavailable C0 coverage cannot become a complete input receipt. Test instrumentation may inspect
+private receipts; no public success API may let a caller treat them as a resolved census.
+
+Count the new work: one linear anchor index per input, bounded exact probes per actual bind hook,
+and linear receipt finalization. Repeated span-starts, many sibling functions, and many sources must
+not trigger per-hook full-map scans or a second manifest build. Preserve C0 counters and all existing
+binder/reference inventories. New private receipt fields must participate honestly in Binder's
+internal data-reference audit; they are not semantic query or persisted type references.
+
+Territory: binder declaration storage, bind hooks, the existing root normalizer, new private
+source-input receipt module and its specs, and necessary binder module wiring. No checker, product
+schema, type-model, scalar resolver, library provider, scoreboards, or C2–C4 path changes. Implement
+on a new clean detached worktree from this spec, not on the isolated literal experiment or primary
+WU1 edits. After review and leader gates, integrate this behavior-neutral receipt unit separately.
+
 ### Approved feasibility reset — 2026-09-05
 
 The user approved only spec expansion, bounded literal-model and assignment-flow feasibility,
