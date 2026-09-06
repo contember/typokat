@@ -74,6 +74,22 @@ roles to [122](../backlog/122-signature-candidate-fixing-policy.md). Those owner
 witnesses and limits. Apart from the explicit mixed-return split, corpus registration and all
 mixed-fixture assertions remain untouched pending the respective minimal repair specs.
 
+### R2a review repair — contextual literal members
+
+Independent review rejected the first reduced R2a candidate: its return helper preserves only
+all-literal contexts and newly widens `"a"` under `"a" | undefined` to `string`. Boolean context
+also loses exact `true` source returns through `satisfies`. Both expression and single-return block
+bodies regress against frozen R1a and strict tsc 6.0.3. This is required single-return context
+preservation, not deferred return-path analysis or generic construction.
+
+Leader acceptance is `contextual_return_literal_members.ts`: preserve the actual matching source
+literal for mixed literal/undefined/null/other-primitive unions and boolean contexts, through both
+declaration and `satisfies` routes. Ordinary broad string/number contexts must still widen; invalid
+literal targets still reject. Do not substitute the contextual union for the source return or keep
+all literals unconditionally. Reuse the existing source-aware contextual literal rule; preserve the
+reserved producer, lexical owner tests and candidate rollback. Freeze the repaired delta for a
+second independent review and rerun the focused, contextual differential and ordinary gates.
+
 **Why this is a separate sprint.** TypeScript implemented const contexts in
 [`microsoft/TypeScript#29510`](https://github.com/microsoft/TypeScript/pull/29510), independently of
 the later `satisfies` operator. This is an inference/provenance change, not an assignability operator.
