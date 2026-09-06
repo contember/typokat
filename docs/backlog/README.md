@@ -78,7 +78,7 @@ numeric pass/fail gate.
 
 ## Roadmap at a glance
 
-The roadmap has **52 remaining items**: 50 release/consumer items in the existing four-track view
+The roadmap has **53 remaining items**: 51 release/consumer items in the existing four-track view
 and 2 non-blocking engineering-maintenance items. The release classification comes from
 [`completion-1.0.toml`](completion-1.0.toml) — that manifest, not this prose, decides what blocks
 checker 1.0; the grouping below is the human roadmap view. Consumer-surface items are deliberately
@@ -88,7 +88,7 @@ absent from the manifest — they gate *consumers* of the checker, not the check
 |---|---:|---|---|
 | **A — model completeness** | 2 | L–XL | Eliminate the remaining silently-permissive model gaps; namespace/declaration merging is shipped. |
 | **B — checker completeness** | 11 | M–L | Exhaust the Tier S/A/B diagnostic surface; independent items make useful sprint fillers. |
-| **C — soundness/parity tail** | 30 | S–XL | Release-blocking known gaps, safe-direction parity improvements, reporting/robustness, default-library fallout, and checker scaling. |
+| **C — soundness/parity tail** | 31 | S–XL | Release-blocking known gaps, safe-direction parity improvements, reporting/robustness, default-library fallout, and checker scaling. |
 | **D — scale + IDE** | 7 | M–XL | Preview, resolver breadth, parallel identity, incrementality — plus the non-blocking consumer surface (resolution queries, the resolution oracle). |
 | **Maintenance — non-blocking** | 2 | S–XL | Safe checker seams and reliable development feedback. |
 
@@ -151,6 +151,8 @@ items — `53` `55` `57` `58` `61` — **shipped** in sprint-2026-07-07-soundnes
   dependencies; separate from bounded `as const` delivery.
 - **L** · [`122`](122-signature-candidate-fixing-policy.md) — remaining candidate-position,
   contextual parameter fixing and compound return-role policy beyond bounded feature regressions.
+- **XL** · [`123`](123-contextual-class-initializer-publication.md) — effective contextual class
+  initializer inputs, including self-dependent contexts; separate from bounded field `as const`.
 
 FP / tsc-parity tail (safe direction, scheduled by opportunity):
 

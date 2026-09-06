@@ -95,12 +95,22 @@ preparation counts for parentheses, conditional/logical expressions and repeated
 unavailable/exhausted alternatives rolling back earlier successful writes, symbolic versus bound
 identity, contextual-this timing, memo reuse/separation, and selected/rejected effect ownership.
 
-**Class readiness remains unresolved, not silently rejected.** The independently tested broad-index
-class control is clean in the pre-feature checker, R1a, both later candidates and tsc. Blanket
-deferred-context rejection would introduce a regression. Keep all class implementation files frozen
-during this Pass seam; `publication_class_context_controls.ts` preserves the existing clean cases.
-A separate read-only class-capability decision must find an admissible preparation path. This split
-does not certify the current class finalizer's raw-context call or permit whole-feature integration.
+**Class migration scope narrowed with explicit user approval.**
+[ADR-0036](../decisions/0036-bound-contextual-class-publication-migration.md) supersedes only the
+requirement to complete general contextual class preparation in this sprint. Keep the bounded
+literal-owned field feature and its ready-context tests. Retained class contextual behavior is
+legacy and incomplete, not ADR-0035-ready. Class implementation files stay frozen during the Pass
+seam and remain subject to independent review before acceptance.
+
+The broad-index and broad self-conditional controls are clean in the pre-feature checker, R1a,
+both later candidates and strict tsc. Their finite self-conditional counterpart silently loses a
+TypeScript error in all four checker versions. External-context preparation alone cannot resolve
+that dependency; blanket rejection would regress the broad controls. The semantic work and preserved
+negative assertions belong to [123](../backlog/123-contextual-class-initializer-publication.md), not
+the behavior-preserving maintenance item 119. `publication_class_context_controls.ts` is clean in
+the three feature candidates, but its `as const` case was unsupported before the feature. Do not
+claim whole-file pre-feature parity. No new diagnostic losses, blanket unsupported admission or
+unreviewed class cutover is authorized by this reduction.
 
 The user explicitly authorized shipping the useful bounded feature rather than reaching complete
 TypeScript compatibility in this step, with remaining issues assigned to backlog owners. This

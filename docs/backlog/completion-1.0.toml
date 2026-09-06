@@ -341,6 +341,17 @@ links = ["../reference/divergences.md", "../archive/sprint-2026-08-11-optional-p
 deps = []
 
 [[criterion]]
+id = "C-contextual-class-initializer-publication"
+track = "C"
+title = "Effective contextual class initializer publication, including self-dependent contexts"
+state = "incomplete"
+blocks_release = "true"
+owner = "./123-contextual-class-initializer-publication.md"
+witness = "disabled strict tsc 6.0.3 acceptance: b123_class_contextual_publication; broad positive control retained in b44_as_const"
+links = ["../../tests/cases/b123_class_contextual_publication/external_key_context.ts", "../../tests/cases/b123_class_contextual_publication/self_dependent_context.ts", "../../tests/cases/b44_as_const/publication_class_self_context_control.ts", "../decisions/0036-bound-contextual-class-publication-migration.md", "../reference/divergences.md"]
+deps = []
+
+[[criterion]]
 id = "C-numeric-stringification"
 track = "C"
 title = "JS-exact number stringification (String(n) dtoa) — UNDER-report, not safe FP"

@@ -58,6 +58,10 @@ The B44 `publication_*` fixtures specify ADR-0035's literal-publication roles an
 Their mutable-copy checks complement direct type-store mode tests; immediate literal assignability
 alone cannot detect a retained widening wrapper.
 
+ADR-0036 narrows the class migration, not the bounded field const feature. The B44 class controls
+remain required. `b123_class_contextual_publication/` retains disabled future assertions for
+effective external and self-dependent class contexts; it is not part of the ordinary inventory.
+
 `b46_return_paths/contextual_mixed_returns.ts` is a disabled future acceptance fixture owned by
 backlog 46. It preserves the mixed/fallthrough return assertions separated from bounded backlog 44;
 it is not counted in the ordinary gate until that return-path work is implemented.
@@ -437,6 +441,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b34_fix_params_keyof/` | backlog `34` | `fix_params` evaluates substituted `keyof` constraints before deciding whether to gate them as deferred |
 | `b33_as_cast_assignability/` | backlog `33` | `as` / angle-bracket assertions participate in normal assignment and call-argument assignability |
 | `b44_satisfies/` | backlog `44` | `satisfies` contextually checks one-way assignability while preserving the source type and exact diagnostic ownership |
+| `b123_class_contextual_publication/` | backlog `123` (disabled) | effective finite key contexts and self-dependent class contextual inference; preserves missing downstream write errors without weakening broad B44 positive controls |
 | `b44_as_const/` | backlog `44` (disabled in the committed registration) | bounded const contexts plus provenance/flow feasibility: mixed literal contributions, contextual parameter copies, declared-target reduction, invalid-write recovery, enum authentication, class reference publication, and candidate/back-edge controls; spread/elision remain `71`, computed keys/object methods/invalid operands remain `75` |
 | `b84_binding_pattern_owners/` | declaration-inventory sprint WU1 | object, parameter, and catch binding-pattern default expressions preallocate their nested callable/body lexical owners before semantic checking |
 | `b84_interface_occurrence_owners/` | declaration-inventory sprint WU3a | function, arrow, block, and control-flow local interfaces receive exact header/heritage/member lexical owners while namespace/global controls keep their order |

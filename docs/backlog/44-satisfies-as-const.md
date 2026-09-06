@@ -32,6 +32,12 @@ cyclic-constraint/source-construction order is tracked by
 owned; regressions introduced by this feature, including dropped ordinary diagnostics, may not be
 waived under that deferral. The active sprint records the exact fixture/gate dispositions.
 
+[ADR-0036](../decisions/0036-bound-contextual-class-publication-migration.md) retains bounded
+literal-owned `as const` in instance fields but excludes general contextual class-initializer
+preparation from this milestone. [123](123-contextual-class-initializer-publication.md) owns the
+pre-existing contextual class gap; it remains release-blocking and is not proof of a correct legacy
+path. No blanket new unsupported admission or unreviewed class implementation is accepted.
+
 ## Touch points
 
 `crates/typokat-check/src/check/checker/expr.rs` (both operators), the freshness/excess path,

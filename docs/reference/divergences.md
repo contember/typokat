@@ -498,6 +498,20 @@ type, clamp-to-constraint inference reporting `TK2345`, `TK2313` for a circular 
 
 ## Classes (M11–M16 · b06 · b20)
 
+- **Self-dependent class contextual publication can miss write errors (under-report).** A field
+  context selected by a conditional on its own class does not necessarily retain the non-widening
+  literal required by tsc. The narrow self-conditional witness is clean in the pre-feature checker
+  and three frozen feature candidates, while strict tsc 6.0.3 reports TS2322. Backlog 123 owns this
+  existing semantic gap; ADR-0036 excludes general class context preparation from bounded as-const
+  closure without approving new diagnostic losses or blanket unsupported admission.
+  <!-- div: id=classes/self-dependent-contextual-publication dir=under scope=s-assignability owner=../backlog/123-contextual-class-initializer-publication.md witness=../../tests/cases/b123_class_contextual_publication/self_dependent_context.ts -->
+- **External finite class contexts can reject valid initializers (over-report).** An object field
+  checked against a property of type `keyof Keys` can publish a broad string instead of its actual
+  non-widening key. The preserved external-key witness has an initializer TK1360 in the same four
+  checker versions; tsc instead rejects only the later write. Preparing external inputs alone does
+  not resolve the self-dependent family above. Backlog 123 owns both publication-context gaps.
+  <!-- div: id=classes/external-key-contextual-publication dir=over scope=s-assignability owner=../backlog/123-contextual-class-initializer-publication.md witness=../../tests/cases/b123_class_contextual_publication/external_key_context.ts -->
+
 Implemented: fields/constructor/methods/`this`/`new`/structural instances (M11); inheritance,
 including local plain-identifier generic heritage applications (M12/M16); access modifiers +
 `static` (M13); member-assignment + `readonly` (M14); getters/setters + `abstract` (M15); generic
