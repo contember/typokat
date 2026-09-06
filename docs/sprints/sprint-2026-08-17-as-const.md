@@ -271,6 +271,14 @@ records significant choices in an ADR before production integration. No push, pu
   Return contributions are retained until unioning before endpoint widening as part of R2a's
   return publication owner. This avoids adding two separate contextual arrow pipelines. M2/M3 and
   all full-diff/differential/official closure gates remain pending.
+- R1b2 review returned FAIL despite its ten-probe screen and 81 inference tests passing. Scheduling
+  every retained alias argument visits erased arguments; canonical union/intersection storage and
+  structural interface lowering also lose mapper-order distinctions. The new semantic-identity and
+  erased-supplied fixtures pair valid and invalid leaves, including both fixers, against tsc.
+  Stop local planner remediation here. A read-only architecture reset must establish the exact
+  information loss and its authoritative immutable owner before more implementation. In particular,
+  do not assume written union order equals TypeScript's lazy type-identity allocation order.
+  No R1b/R1b2 acceptance or integration is implied by terminating without `TK2589`.
 
 ### Approved feasibility reset — 2026-09-05
 
