@@ -41,6 +41,16 @@ repro scoreboard; leader ordinary/full/official gates. Known R1c/M2/M3/rest and 
 residuals remain visible, not waived. Freeze all evidence and source hashes before review. A bounded
 unit acceptance is not whole-as-const acceptance, and no failing full feature candidate may land.
 
+The first ADR-0035 implementation stops at its readiness boundary: a projected `keyof` context
+reaches finalization without its effective literal-union result. Seven existing B32 positives gain
+errors. `publication_effective_context.ts` pins valid/invalid `keyof` use, projected source modes,
+array/tuple slots, both arrow bodies, a union context, a conditional source and annotated class
+initializers. Strict tsc 6.0.3 confirms all nine negative markers; three frozen checker comparisons
+are retained. The pure finalizer must stay query-free. Before resuming, the leader must select the
+existing checker-owned demand/preparation seam and its typed failure propagation; no unconditional
+preservation or fake ready context is allowed. This does not authorize evaluator access in class
+construction or new declaration-demand breadth.
+
 The user explicitly authorized shipping the useful bounded feature rather than reaching complete
 TypeScript compatibility in this step, with remaining issues assigned to backlog owners. This
 supersedes the expanded completion chain below where it made general compatibility work mandatory.
