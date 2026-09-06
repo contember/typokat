@@ -57,6 +57,51 @@ its TK2322 and target `[number, string]`, but the rendered source is now `[numbe
 `[number, number]`; the oracle still reports the incompatible second element. This is mutable-slot
 publication progress under ADR-0035, not an omitted diagnostic or blanket scoreboard update.
 
+### Approved supporting seam: Pass-owned effective contexts
+
+Independent design and step review authorize a bounded `Pass` preparation/transport change in
+`expr.rs`, `calls.rs`, `statements.rs` and focused tests. The pure finalizer, query kernels, type
+store and relation engine remain unchanged. Reuse `Pass::evaluate_type` and existing coordinator
+savepoints; no separate evaluator, context cache or expression graph.
+
+One local prepared product distinguishes original target, evaluated publication context, apparent
+shaping context and contextual `this`. Preserve original targets for inference and declared/satisfies
+obligations. Preserve symbolic parameter IDs in publication context, including union alternatives;
+follow bounds only for shaping. Prepare outer operator chains and contextual alternatives in one
+existing-owner traversal, not separate evaluated and apparent passes. Projected properties/elements
+become preparation roots when the normal source traversal reaches them; never normalize the entire
+annotation tree in advance.
+
+Publication consumers retain the prepared context alongside their source result. Other callers can
+keep the existing source/span wrapper. Share preparation across transparent parentheses and value
+branches within one contextual attempt. Conditional tests still execute before arm preparation;
+logical `&&` keeps its context-free left operand; call inference receives the original target.
+Use a body-local preparation slot at the first existing return-context consumption boundary, reuse
+it for later value returns and aggregate finalization, and do not prepare eagerly at body entry.
+Unprepared, absent, prepared and failed states are distinct. Candidate reconstruction remains its
+own attempt; no cross-attempt global sharing is introduced.
+
+Commit preparation-query writes only for a successfully prepared product. `Ready(Unavailable)`
+inside the ordinary transaction helper is insufficient: it would commit. Unavailable applicability
+and exhaustion both roll back, while remaining distinct outcomes. Preserve real `unknown` and
+symbolic types; never manufacture an exhaustion reason or use failed/absent context to finalize a
+partial aggregate. Existing declaration/demand owners report failures without duplicate diagnostics.
+Audit `ContextualWalkKey` so results with different original/publication identities cannot collide
+merely because their shaping views match; extend the existing key, not the cache topology.
+
+Acceptance adds `publication_context_views.ts` and the prior nine-marker effective-context fixture,
+plus unchanged B32 forward/reverse/class/alias/heritage/mutual controls. Rust witnesses must prove
+preparation counts for parentheses, conditional/logical expressions and repeated returns, late
+unavailable/exhausted alternatives rolling back earlier successful writes, symbolic versus bound
+identity, contextual-this timing, memo reuse/separation, and selected/rejected effect ownership.
+
+**Class readiness remains unresolved, not silently rejected.** The independently tested broad-index
+class control is clean in the pre-feature checker, R1a, both later candidates and tsc. Blanket
+deferred-context rejection would introduce a regression. Keep all class implementation files frozen
+during this Pass seam; `publication_class_context_controls.ts` preserves the existing clean cases.
+A separate read-only class-capability decision must find an admissible preparation path. This split
+does not certify the current class finalizer's raw-context call or permit whole-feature integration.
+
 The user explicitly authorized shipping the useful bounded feature rather than reaching complete
 TypeScript compatibility in this step, with remaining issues assigned to backlog owners. This
 supersedes the expanded completion chain below where it made general compatibility work mandatory.
