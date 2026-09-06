@@ -26,6 +26,12 @@ Corpus first: `as const` object/array/nested shapes, write-through-readonly `TK2
 interaction with M30 contextual typing and literal widening. Cross-check tsc 6.0.3 `--strict` and
 open the remaining `syntax:as-const` official-suite gate.
 
+Delivery targets the bounded literal-owned feature, not complete TypeScript compatibility. General
+cyclic-constraint/source-construction order is tracked by
+[120](120-semantic-constraint-construction-order.md). Existing unrelated gaps may remain explicitly
+owned; regressions introduced by this feature, including dropped ordinary diagnostics, may not be
+waived under that deferral. The active sprint records the exact fixture/gate dispositions.
+
 ## Touch points
 
 `crates/typokat-check/src/check/checker/expr.rs` (both operators), the freshness/excess path,

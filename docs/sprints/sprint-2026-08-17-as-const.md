@@ -4,6 +4,32 @@
 object properties readonly, infer array literals as readonly tuples, and stop const propagation at
 referenced values.
 
+## Current delivery boundary — user-approved reduction, 2026-09-06
+
+The user explicitly authorized shipping the useful bounded feature rather than reaching complete
+TypeScript compatibility in this step, with remaining issues assigned to backlog owners. This
+supersedes the expanded completion chain below where it made general compatibility work mandatory.
+
+Keep primitive/enum literals, literal-owned readonly objects/tuples/nesting, parentheses, shorthand
+and reference boundaries, contextual suppression and instance class-field publication. Keep ordinary
+regression gates, publication safety, single-owner effects and independent review. Do not accept a
+new false clean merely by giving it a backlog number.
+
+Stop implementation of C1b/C1c, closed-use certificates, registered callable construction and general
+constraint-order migration. Their owner is
+[120](../backlog/120-semantic-constraint-construction-order.md); the limited intersection proof and
+all experimental failures remain preserved. Landed C0/C1a capabilities stay in place. ADR-0034 remains
+proposed. The optional workspace probe build failure has separate maintenance owner
+[121](../backlog/121-optional-project-binder-probe-test-build.md).
+
+Before selecting the next candidate, classify the retained generic and core-feature failures against
+the pre-feature binary and frozen M1/R1a snapshots. Prefer a new clean worktree reconstruction before
+the rejected R1b planner experiments; never reset the preserved WIP or erase experiments in place.
+Record exact fixture dispositions before changing corpus registration. Preserve oracle assertions
+for deferred cases under their backlog owner. Core literal, arrow/contextual, assignment, default,
+enum and class regressions remain required wherever the feature introduces them. General pre-existing
+gaps can be deferred explicitly; no blanket scoreboard rebaseline or diagnostic suppression follows.
+
 **Why this is a separate sprint.** TypeScript implemented const contexts in
 [`microsoft/TypeScript#29510`](https://github.com/microsoft/TypeScript/pull/29510), independently of
 the later `satisfies` operator. This is an inference/provenance change, not an assignability operator.

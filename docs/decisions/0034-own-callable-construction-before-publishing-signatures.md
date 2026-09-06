@@ -9,6 +9,9 @@ date: 2026-09-06
 
 ## Context
 
+This proposal is deferred to [backlog 120](../backlog/120-semantic-constraint-construction-order.md).
+It is not an implementation prerequisite for bounded backlog-44 delivery.
+
 Cyclic generic fallback depends on semantic instantiation order. Canonical structural types erase
 some of that order. The accepted intersection experiment preserves ordered immutable expressions,
 but TypeScript 6.0.3 union order also depends on when constituent identities are created and reused.

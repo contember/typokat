@@ -24,6 +24,10 @@ decisions → reference → archive.
 
 ## Active sprints
 
+The active `as const` sprint targets bounded feature delivery and regression safety, not complete
+TypeScript compatibility. General constraint construction and remaining reference-authentication
+infrastructure are tracked by [120](backlog/120-semantic-constraint-construction-order.md).
+
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
 - [`sprint-2026-08-17-as-const.md`](sprints/sprint-2026-08-17-as-const.md) — autonomous completion
   through immutable literal modes ([ADR-0031](decisions/0031-preserve-literal-widening-in-immutable-type-identity.md))

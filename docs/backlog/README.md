@@ -78,8 +78,8 @@ numeric pass/fail gate.
 
 ## Roadmap at a glance
 
-The roadmap has **54 remaining items**: 49 release/consumer items in the existing four-track view
-and 5 non-blocking engineering-maintenance items. The release classification comes from
+The roadmap has **51 remaining items**: 49 release/consumer items in the existing four-track view
+and 2 non-blocking engineering-maintenance items. The release classification comes from
 [`completion-1.0.toml`](completion-1.0.toml) — that manifest, not this prose, decides what blocks
 checker 1.0; the grouping below is the human roadmap view. Consumer-surface items are deliberately
 absent from the manifest — they gate *consumers* of the checker, not the checker.
@@ -90,7 +90,7 @@ absent from the manifest — they gate *consumers* of the checker, not the check
 | **B — checker completeness** | 11 | M–L | Exhaust the Tier S/A/B diagnostic surface; independent items make useful sprint fillers. |
 | **C — soundness/parity tail** | 29 | S–XL | Release-blocking known gaps, safe-direction parity improvements, reporting/robustness, default-library fallout, and checker scaling. |
 | **D — scale + IDE** | 7 | M–XL | Preview, resolver breadth, parallel identity, incrementality — plus the non-blocking consumer surface (resolution queries, the resolution oracle). |
-| **Maintenance — non-blocking** | 5 | S–XL | Measured library-lifecycle simplification, safe checker seams, and faster development feedback. |
+| **Maintenance — non-blocking** | 2 | S–XL | Safe checker seams and reliable development feedback. |
 
 Effort is a **relative planning estimate**, not a time promise:
 
@@ -146,6 +146,9 @@ items — `53` `55` `57` `58` `61` — **shipped** in sprint-2026-07-07-soundnes
 - **L** · [`111`](111-structural-inference-literal-provenance.md) — preserve member-level literal
   widenability through structural inference so fresh object/array candidates do not silently stay
   narrower than tsc.
+- **XL** · [`120`](120-semantic-constraint-construction-order.md) — semantic generic-constraint
+  construction order, source-owned signature demand, and the remaining reference-authentication
+  dependencies; separate from bounded `as const` delivery.
 
 FP / tsc-parity tail (safe direction, scheduled by opportunity):
 
@@ -219,11 +222,14 @@ and must not weaken soundness or parity gates merely to improve layout or speed.
 
 - **M** · [`119`](119-class-publication-preparation.md) — extract owned class preparation while
   preserving one visible atomic publication facade.
+- **S** · [`121`](121-optional-project-binder-probe-test-build.md) — repair the optional workspace
+  probe's stale normalized import/export test projection.
 
 ## Recommended order
 
-1. **Finish the active `as const` sprint.** Resume the preserved `996eb5a` work now that the
-   project-local library lifecycle no longer owns its checker seams.
+1. **Finish bounded `as const` and its regressions.** Follow the active sprint's reduced delivery
+   boundary; preserve the primary WIP and frozen experiments. General construction-order fidelity
+   and its remaining infrastructure belong to `120`, not to this feature's immediate critical path.
 2. **Close the remaining general blockers exposed by the immutable `placetext` screen.** The
    archived [`object-binding sprint`](../archive/sprint-2026-08-09-object-binding-publication.md)
    removed all 22 measured binding `TK2304` identities, and the archived
