@@ -511,6 +511,12 @@ type, clamp-to-constraint inference reporting `TK2345`, `TK2313` for a circular 
   checker versions; tsc instead rejects only the later write. Preparing external inputs alone does
   not resolve the self-dependent family above. Backlog 123 owns both publication-context gaps.
   <!-- div: id=classes/external-key-contextual-publication dir=over scope=s-assignability owner=../backlog/123-contextual-class-initializer-publication.md witness=../../tests/cases/b123_class_contextual_publication/external_key_context.ts -->
+  The active `b44_as_const/publication_class_lexical_source.ts` compatibility guard retains exactly
+  the earlier TK1360 at `(4,14)`, with no incomplete, until the published field itself becomes correct.
+  Its b123 counterpart still expects tsc's downstream TS2322 at `(7,1)`. The related B44 validation
+  boundary/failure fixtures likewise retain legacy TK1360 sites and cardinality; they do not claim
+  those sites match tsc. Declared field/return checks keep current fresh-source validation instead:
+  their previously fixed false positives must not be restored by retained source selection (ADR-0037).
 
 Implemented: fields/constructor/methods/`this`/`new`/structural instances (M11); inheritance,
 including local plain-identifier generic heritage applications (M12/M16); access modifiers +

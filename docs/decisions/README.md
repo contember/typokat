@@ -52,3 +52,4 @@ a commit message suffices.
 - [`0034`](0034-own-callable-construction-before-publishing-signatures.md) — own callable construction before publishing signatures — proposed (2026-09-06)
 - [`0035`](0035-finalize-literal-types-at-publication-owners.md) — finalize complete literal identities at role-specific publication boundaries — accepted (2026-09-06)
 - [`0036`](0036-bound-contextual-class-publication-migration.md) — narrowly supersede ADR-0035's class migration closure scope; retain bounded field const support and defer general contextual class preparation — accepted (2026-09-06)
+- [`0037`](0037-retain-class-initializer-validation-sources.md) — retain construction-owned sources at existing inferred class validation boundaries, excluding declared-return body checks — accepted (2026-09-06)

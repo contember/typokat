@@ -59,14 +59,15 @@ new class validation/publication disagreement, prematurely regularized scalar cl
 and excluded enum-member matching. Focused tests passing does not close these defects. Preserve
 `publication-context-independent-review.md`; repair the bounded publication cluster before integration.
 
-**Next bounded repairs, sequentially:** scalar field publication and enum matching may change
-`checker/classes/initializer.rs`, `checker/literal_publication.rs` and focused tests/module wiring.
-Scalar `satisfies` operands retain their mode until outer field publication; nested mutable members
-keep their own publication role. Ready enum-member identities participate in the shared literal-kind
-policy, including whole-enum contexts, without replacing the actual source or bypassing enum ownership.
-Type store, query/evaluator/relation/inference engines, generator and scoreboards stay unchanged.
-Class lexical/source alignment needs a separate owned-source design before its implementation; this
-does not authorize class queries, partial surfaces or global disabling of effective Pass contexts.
+Scalar/enum role repairs are frozen for cumulative review (`publication-role-repair-*`, binary
+`0e8f6051…`): 18 strict-tsc pairs and 17 focused cases pass; class source disagreement remains RED.
+**Next:** retain construction-owned validation inputs under
+[ADR-0037](../decisions/0037-retain-class-initializer-validation-sources.md), including its corrected
+declared-return exclusion. Territory: `checker/classes/{initializer,publication,members}.rs`,
+`checker/{context,mod,expr,calls}.rs` and focused tests. `classes/mod.rs` may narrowly re-export data;
+`classes/construction.rs` may transport owned receipts only, with unchanged identity roots and SCCs.
+No class queries, partial surfaces, new expression/check graph, type/query/relate/infer changes,
+generator/scoreboard changes or global disabling of effective Pass contexts. Preserve repaired roles.
 
 ### Preparation and transport contract
 
@@ -111,6 +112,7 @@ Paths below are under `tests/cases/b44_as_const/` unless stated otherwise.
 | Prior failures | `contextual_arrow_checks.ts`, `contextual_return_contexts.ts`, `contextual_return_literal_members.ts`, `contextual_container_literal_modes.ts`, `return_literal_contributions.ts` |
 | Class compatibility | `publication_class_context_controls.ts`, `publication_class_self_context_control.ts`; no blanket deferred-context rejection |
 | Review regressions | `publication_class_scalar_satisfies.ts` — 8 strict-tsc pairs; `publication_enum_contexts.ts` — 10 pairs; direct identities and valid mutable-copy controls remain required |
+| Class source alignment | `publication_class_lexical_source.ts`, `publication_class_validation_{boundaries,authority,failures}.ts` — 14 explicit legacy TK1360, 16 strict-tsc errors, 8 unchanged incompletes; exact ownership/identity controls in ADR-0037 |
 | Direct Rust tests | Exact mode IDs; symbolic versus bound contexts in both union orders; preparation counts; late unavailable/exhausted alternatives roll back earlier writes; memo identity/ThisType; selected/rejected effects and defaults |
 
 Preserve all 13 prior arrow/default owner tests and the 116 classified callback diagnostic-owner
@@ -186,8 +188,8 @@ The retained official regression set is four files, not permission to rebaseline
   1,200 byte-identical differential outputs, 72 strict-tsc transitions and the unchanged repro gate;
   independent review rejected the cumulative candidate. Preserve corpus hashes and classify every new delta.
 - `publication-class-scope-leader-spec-oracle.json`: three committed class-scope witnesses checked
-  against strict tsc and four frozen checkers. Spec/scope commit `0f4a69f6` was not copied into the
-  active delivery input mid-implementation; sync it after handoff and verify under a new receipt.
+  against strict tsc and four frozen checkers. Scope and repair specs through `c453b53f` were synced
+  after handoff under `publication-review-repair-leader-spec-sync.json`; production hashes stayed unchanged.
 
 ## Verification and closure
 
@@ -199,7 +201,7 @@ The retained official regression set is four files, not permission to rebaseline
 3. Leader reruns relevant gates on the unchanged candidate: checker tests, all-target Clippy, fmt,
    ordinary conformance, full default tests, differential/repro checks and official `run --check`.
    Every mismatch needs an oracle, cause and explicit disposition. Run the manifest/docs guards too;
-   Python parsing/link checks alone do not replace the pending Cargo manifest gate for backlog 123.
+   the leader's post-sync backlog-123 manifest gate passed 11/11 before the role repairs started.
 4. After all repairs settle, reconcile `tests/conformance.rs`, `tests/type_tag_exhaustiveness.rs`
    (including the `flow.rs#5` wildcard adjudication) and `tests/surface/inventory.toml` explicitly.
    The inventory test is the count/order authority; do not reuse old expanded-corpus receipts.

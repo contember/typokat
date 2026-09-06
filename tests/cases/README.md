@@ -62,6 +62,12 @@ alone cannot detect a retained widening wrapper.
 regressions: scalar field operands must not consume the member role early, and ready enum members
 must participate in contextual literal matching. Both include projection/copy/write controls.
 
+`publication_class_lexical_source.ts` and `publication_class_validation_*` specify ADR-0037's
+construction-owned validation inputs. Their TK1360 markers preserve documented legacy class
+diagnostics, not tsc-equivalent locations. Their ordinary error markers follow strict tsc; incomplete
+markers preserve unsupported initializer admission. See the class divergence ledger and unchanged
+`b123_class_contextual_publication/` assertions for the still-unimplemented correct class semantics.
+
 ADR-0036 narrows the class migration, not the bounded field const feature. The B44 class controls
 remain required. `b123_class_contextual_publication/` retains disabled future assertions for
 effective external and self-dependent class contexts; it is not part of the ordinary inventory.
