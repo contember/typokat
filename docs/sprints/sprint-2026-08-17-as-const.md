@@ -101,6 +101,22 @@ rewrite a referenced container. The source-aware decision and publication mode m
 affected shared caller. This repair stays in the same contextual-literal cluster; no new inference,
 source-construction or return-path dependency is authorized.
 
+The container repair is also rejected: its single-source helper falls back to a target-only rule
+for union-valued sources, losing existing contextual regularization of `true | undefined` under
+`boolean | undefined`. Independent review confirms 18 container variants plus both nested arrow
+body forms newly accept invalid copied writes that all three prior frozen binaries rejected.
+The previous 20 container and 26 primitive-arrow defects remain fixed; the 1200-program differential
+classification is valid but does not cover this composition. No candidate in this repair chain is
+accepted or integrated. Further local predicate fixes are paused pending a complete contextual
+literal publication contract covering single and union sources and every shared consumer.
+
+Leader verification of the rejected container revision passes 13 focused Rust tests, the new
+container fixture and Clippy. A completed default-member `cargo test --no-fail-fast` run still fails
+three targets: conformance (184 marker mismatches plus stale inventory), type-tag exhaustiveness
+(literal-wrapper inventory and flow wildcard), and the known compound-assignment checker test.
+The initial full-test attempt timed out during compilation; the retry completed and is the test
+authority. These checks do not supersede the independent false-clean finding.
+
 **Why this is a separate sprint.** TypeScript implemented const contexts in
 [`microsoft/TypeScript#29510`](https://github.com/microsoft/TypeScript/pull/29510), independently of
 the later `satisfies` operator. This is an inference/provenance change, not an assignability operator.
