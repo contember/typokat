@@ -279,6 +279,40 @@ records significant choices in an ADR before production integration. No push, pu
   information loss and its authoritative immutable owner before more implementation. In particular,
   do not assume written union order equals TypeScript's lazy type-identity allocation order.
   No R1b/R1b2 acceptance or integration is implied by terminating without `TK2589`.
+- Architecture reset decision: use the existing immutable declared-expression ownership route for
+  an intersection-only tracer, not a second general type graph. The two read-only analyses agree
+  that the current descriptor input loses information. They do not establish a union producer:
+  normal TypeScript sorts unions by lazily allocated semantic type identities, shares their order,
+  and differs after forward signature demand. New construction/forward-demand source controls pin
+  that gate. Do not implement per-occurrence written union order as if it solved this requirement.
+
+#### R1b immutable-owner tracer contract
+
+This is an isolated architecture proof, not R1b completion or permission for another inference-only
+dependency heuristic. All existing acceptance fixtures remain unchanged.
+
+1. Extend the existing acyclic `DeclaredRecipeNode` hierarchy with an immutable ordered intersection
+   expression. Complete child handles participate in hash identity, free-parameter summaries,
+   reference census, substitution, and freeze/fork. Do not change canonical structural intersection
+   algebra, add AST/origin flags, or create cyclic recipes.
+2. With held named binder IDs B/C, construct two retained intersection constraints in opposite
+   orders. Require distinct retained and owning generic-signature IDs, equal canonical structural
+   projections, opposite ordered mapper requests, and unchanged original nodes after substitution.
+3. The existing query/materialization owner supplies the retained instantiation operation and
+   structural projection. Do not inspect flattened `TypeTag` members in inference to reconstruct
+   order or add a private evaluator. Relation still uses coordinator publication/poison/overlay
+   preflight and must give equal answers in both cold/warm relation orders.
+4. Transport the retained expression through outer substitution of a nested generic signature and
+   one real project-local descriptor publication path. Keep inner binders shielded. This producer
+   proof is limited to that explicit occurrence; no wholesale annotation or library cutover yet.
+5. Execute reference/freeze/fork witnesses, missing/poisoned publication and genuine exhaustion
+   rollback, and an adapter test through the same full/partial seed owner. Bare ordinary constraints
+   and the R1a/reverse-dependent controls must remain valid inputs, not acquire invented provenance.
+6. Before wider producer migration, independently accept erased-versus-retained alias forms and a
+   deterministic union-construction policy including the committed forward-demand control. If that
+   policy needs a larger availability change, decide it from evidence rather than smuggle it into
+   the tracer. Neither broader backlog 76 nor TypeScript's whole lazy allocation system is granted
+   by this tracer contract.
 
 ### Approved feasibility reset — 2026-09-05
 
