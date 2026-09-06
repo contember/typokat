@@ -8,7 +8,9 @@ blocked-by: []
 
 **Summary.** Supply effective contextual inputs to class initializer publication without exposing
 partial class surfaces. Effort XL; release-blocking semantic work, separate from bounded `as const`.
-The approved boundary is [ADR-0036](../decisions/0036-bound-contextual-class-publication-migration.md).
+The delivery boundary is [ADR-0036](../decisions/0036-bound-contextual-class-publication-migration.md),
+with the conservative compatibility amendment in
+[ADR-0038](../decisions/0038-reject-inconsistent-contextual-class-publication.md).
 
 ## Problem and verified witnesses
 
@@ -32,6 +34,13 @@ The query-free class inferer receives raw lowered annotation IDs. A projected pr
 Completed external interface objects do not make every nested operation ready. A conditional can
 require the same class whose field is being inferred. The normal query helper also requires class
 and alias registries staged only after class drafts finish.
+
+ADR-0038 explicitly accepts conservative initializer errors until this item supplies correct class
+publication inputs. The active B44 `publication_class_conservative_{external,self}.ts` guards are
+both tsc-clean but report one TK1360 with the retained-source candidate. Exported/external and
+self-dependent contexts are affected; removing downstream uses does not remove the false positive.
+The broad controls stay clean. These new errors are not restored legacy behavior or completion of
+the downstream TS2322 witnesses above. Ready rest-parameter projection bugs are not covered here.
 
 ## Approach / acceptance
 

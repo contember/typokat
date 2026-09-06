@@ -54,20 +54,16 @@ at the class boundary by ADR-0036. The first role-aware candidate passes focused
 but introduces seven B32 `keyof` false positives: child checking prepares context, then publication
 uses the original deferred context instead of the effective literal union.
 
-**Independent review: FAIL.** The frozen Pass seam removes seven B32 regressions, but review finds
-new class validation/publication disagreement, prematurely regularized scalar class `satisfies`,
-and excluded enum-member matching. Focused tests passing does not close these defects. Preserve
-`publication-context-independent-review.md`; repair the bounded publication cluster before integration.
-
-Scalar/enum role repairs are frozen for cumulative review (`publication-role-repair-*`, binary
-`0e8f6051…`): 18 strict-tsc pairs and 17 focused cases pass; class source disagreement remains RED.
-**Next:** retain construction-owned validation inputs under
-[ADR-0037](../decisions/0037-retain-class-initializer-validation-sources.md), including its corrected
-declared-return exclusion. Territory: `checker/classes/{initializer,publication,members}.rs`,
-`checker/{context,mod,expr,calls}.rs` and focused tests. `classes/mod.rs` may narrowly re-export data;
-`classes/construction.rs` may transport owned receipts only, with unchanged identity roots and SCCs.
-No class queries, partial surfaces, new expression/check graph, type/query/relate/infer changes,
-generator/scoreboard changes or global disabling of effective Pass contexts. Preserve repaired roles.
+**Independent review: FAIL.** Candidate `574212…` fixes source disagreement and retains scalar/enum
+repairs, but class arrow construction mistakes ready contextual rest containers for positional types.
+The new conservative external/self-dependent errors are explicitly accepted by
+[ADR-0038](../decisions/0038-reject-inconsistent-contextual-class-publication.md), not called legacy
+restorations or backlog-123 completion. That amendment does not waive the ready-rest producer defect.
+**Next:** align already-admitted class-arrow positional parameters with ready array/tuple contexts;
+preserve inferred body and completed function identities, explicit parameter/return authority and
+[ADR-0037](../decisions/0037-retain-class-initializer-validation-sources.md)'s source ownership.
+Limit implementation to the query-free class initializer and the existing ready rest projection seam,
+plus focused tests; no new class preparation, SCC scheduling, inference policy or receipt suppression.
 
 ### Preparation and transport contract
 

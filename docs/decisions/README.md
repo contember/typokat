@@ -53,3 +53,4 @@ a commit message suffices.
 - [`0035`](0035-finalize-literal-types-at-publication-owners.md) — finalize complete literal identities at role-specific publication boundaries — accepted (2026-09-06)
 - [`0036`](0036-bound-contextual-class-publication-migration.md) — narrowly supersede ADR-0035's class migration closure scope; retain bounded field const support and defer general contextual class preparation — accepted (2026-09-06)
 - [`0037`](0037-retain-class-initializer-validation-sources.md) — retain construction-owned sources at existing inferred class validation boundaries, excluding declared-return body checks — accepted (2026-09-06)
+- [`0038`](0038-reject-inconsistent-contextual-class-publication.md) — accept conservative contextual class-preparation diagnostics for external and class-dependent targets, without waiving ready-source producer bugs — accepted (2026-09-07)

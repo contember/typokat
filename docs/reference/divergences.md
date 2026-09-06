@@ -517,6 +517,14 @@ type, clamp-to-constraint inference reporting `TK2345`, `TK2313` for a circular 
   boundary/failure fixtures likewise retain legacy TK1360 sites and cardinality; they do not claim
   those sites match tsc. Declared field/return checks keep current fresh-source validation instead:
   their previously fixed false positives must not be restored by retained source selection (ADR-0037).
+- **Conservative contextual class validation can reject valid initializers (over-report).** Under
+  ADR-0038, eligible validation uses the construction-owned source even when missing effective
+  class context made that source broader than tsc's. Both exported external-keyof fields and narrow
+  class-dependent conditional fields can therefore report TK1360 on otherwise valid programs.
+  This includes unused classes and same-value writes. Broad contexts and independent declared-return
+  body checks remain valid; ready producer bugs and source-scope leaks are not covered. Backlog 123
+  still requires correct field publication and the unchanged downstream TS2322 witnesses.
+  <!-- div: id=classes/conservative-contextual-publication dir=over scope=s-assignability owner=../backlog/123-contextual-class-initializer-publication.md witness=../../tests/cases/b44_as_const/publication_class_conservative_external.ts -->
 
 Implemented: fields/constructor/methods/`this`/`new`/structural instances (M11); inheritance,
 including local plain-identifier generic heritage applications (M12/M16); access modifiers +

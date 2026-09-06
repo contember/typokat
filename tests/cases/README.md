@@ -68,6 +68,11 @@ diagnostics, not tsc-equivalent locations. Their ordinary error markers follow s
 markers preserve unsupported initializer admission. See the class divergence ledger and unchanged
 `b123_class_contextual_publication/` assertions for the still-unimplemented correct class semantics.
 
+`publication_class_conservative_{external,self}.ts` pin ADR-0038's explicitly accepted conservative
+TK1360 diagnostics on tsc-clean class initializers; these are new compatibility reductions, not
+restored legacy errors. `publication_class_contextual_rest.ts` instead requires strict-tsc parity
+for ready positional class-arrow contexts and their actual body/call diagnostic owners.
+
 ADR-0036 narrows the class migration, not the bounded field const feature. The B44 class controls
 remain required. `b123_class_contextual_publication/` retains disabled future assertions for
 effective external and self-dependent class contexts; it is not part of the ordinary inventory.
