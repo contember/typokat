@@ -654,6 +654,13 @@ schema, type-model, scalar resolver, library provider, scoreboards, or C2–C4 p
 on a new clean detached worktree from this spec, not on the isolated literal experiment or primary
 WU1 edits. After review and leader gates, integrate this behavior-neutral receipt unit separately.
 
+C1a candidate passes its 15 direct specs and ordinary conformance, but the existing exact-site
+shape guard rejects the new private `source_inputs: SourceInputs` field. Authorize only that explicit
+addition to its private-field list and an exactly-one assertion. Preserve the complete public-field
+list, all other private-field exclusions, and the sole declaration-table exact-site index checks.
+The new receipt's identity edges must remain covered by the reference audit. This is a guard contract
+update for the already specified owner, not C1a acceptance or permission to add another lookup index.
+
 ### Approved feasibility reset — 2026-09-05
 
 The user approved only spec expansion, bounded literal-model and assignment-flow feasibility,
