@@ -547,6 +547,19 @@ the old `producer` filter, and check the unchanged exact TS/TSX marker corpus. R
 REDs before implementation, then rerun binder tests, feature checks, and consumer compilation.
 The fact API remains unfrozen until independent re-review; no C1/certificate work starts yet.
 
+C0/C0a received independent GO; leader binder and ordinary conformance gates pass (`583/699/583/0`).
+The default complete test run fails only the pre-existing lifecycle scanner's unconditional
+`examples/` directory read in a clean worktree. No example is tracked. Close this test-tooling
+blocker separately before C0 integration: only absent optional `examples/` is skipped; present
+examples remain recursively scanned/sorted, missing required roots still fail, and wrong-type or
+broken optional roots are errors. The new lifecycle inventory tests pin those cases without changing
+the lifecycle prohibition assertions. Do not create an untracked placeholder directory to pass.
+
+The broader `cargo test --workspace` additionally enables an optional binder-probe test path whose
+`BoundProjectBinder.normalized` field no longer exists. A clean pre-C0 baseline reproduces that
+compilation error. It is not part of the default-member gate or a C0 regression; keep its failure
+record separate rather than changing unrelated projection semantics during the scanner repair.
+
 ### Approved feasibility reset — 2026-09-05
 
 The user approved only spec expansion, bounded literal-model and assignment-flow feasibility,

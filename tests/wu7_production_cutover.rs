@@ -378,3 +378,95 @@ fn text_files_under(root: &std::path::Path, roots: &[PathBuf]) -> Vec<(String, S
     files.sort_by(|left, right| left.0.cmp(&right.0));
     files
 }
+
+#[cfg(test)]
+mod lifecycle_source_inventory_spec {
+    use super::*;
+
+    struct SourceFixture(PathBuf);
+
+    impl SourceFixture {
+        fn new() -> Self {
+            let root = unique_temp_path("lifecycle-source-inventory", "dir");
+            fs::create_dir(&root).expect("create fixture root");
+            for name in ["src", "crates", "tests", "tooling", ".github"] {
+                fs::create_dir(root.join(name)).expect("create required source directory");
+            }
+            fs::write(root.join("Cargo.toml"), "[package]\nname = \"fixture\"\n")
+                .expect("write root manifest");
+            fs::write(root.join("src/main.rs"), "fn main() {}\n").expect("write mandatory source");
+            Self(root)
+        }
+    }
+
+    impl Drop for SourceFixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn missing_optional_examples_preserves_required_sources() {
+        let fixture = SourceFixture::new();
+        let sources = lifecycle_surface_sources(&fixture.0);
+        assert_eq!(
+            sources
+                .iter()
+                .map(|(path, _)| path.as_str())
+                .collect::<Vec<_>>(),
+            ["Cargo.toml", "src/main.rs"]
+        );
+    }
+
+    #[test]
+    fn present_examples_are_scanned_recursively_in_sorted_order() {
+        let fixture = SourceFixture::new();
+        fs::create_dir_all(fixture.0.join("examples/nested")).expect("create examples");
+        fs::write(fixture.0.join("examples/z.rs"), "fn example() {}\n").expect("write example");
+        fs::write(fixture.0.join("examples/nested/a.py"), "print('probe')\n")
+            .expect("write nested example");
+        let sources = lifecycle_surface_sources(&fixture.0);
+        assert_eq!(
+            sources
+                .iter()
+                .map(|(path, _)| path.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "Cargo.toml",
+                "examples/nested/a.py",
+                "examples/z.rs",
+                "src/main.rs"
+            ]
+        );
+        assert_eq!(sources[1].1, "print('probe')\n");
+        assert_eq!(sources[2].1, "fn example() {}\n");
+    }
+
+    #[test]
+    #[should_panic(expected = "read source directory")]
+    fn missing_required_source_directory_still_fails() {
+        let fixture = SourceFixture::new();
+        fs::create_dir(fixture.0.join("examples")).expect("create optional directory");
+        fs::remove_file(fixture.0.join("src/main.rs")).expect("remove fixture source");
+        fs::remove_dir(fixture.0.join("src")).expect("remove required directory");
+        lifecycle_surface_sources(&fixture.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "read source directory")]
+    fn examples_file_is_not_treated_as_absent() {
+        let fixture = SourceFixture::new();
+        fs::write(fixture.0.join("examples"), "not a directory").expect("write invalid root");
+        lifecycle_surface_sources(&fixture.0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[should_panic(expected = "read source directory")]
+    fn broken_examples_link_is_not_treated_as_absent() {
+        let fixture = SourceFixture::new();
+        std::os::unix::fs::symlink("absent-target", fixture.0.join("examples"))
+            .expect("write broken link");
+        lifecycle_surface_sources(&fixture.0);
+    }
+}
