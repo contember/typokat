@@ -404,6 +404,27 @@ the real full/partial B/C-order witness and add outer substitution of an admitte
 method with local binders. Verify opposite retained orders, selected reductions, original model
 transport, and T1's complete traversal witnesses. No broader alias/union/source cutover is approved.
 
+T2 independent review found the original over-admission repaired and 31 source controls matching
+tsc diagnostic-code multisets, but returned FAIL on new transient space amplification. A validated
+shared product DAG becomes an owned plan tree before lowering. The old producer repeated CPU work;
+the simultaneous exponential plan storage is new and must not be accepted.
+
+T2a acceptance: construct a validated product with `D0 = unknown & number` and
+`Dn = Intersection(Dn-1, Dn-1)`. Planning storage and selected construction visits must be bounded
+by unique admitted product nodes and ordered edges, not unfolded tree occurrences. Keep repeated
+child edges and their order while sharing completed nodes; cloning cached subtrees is insufficient.
+Use deterministic counters or plan-size assertions, not memory or wall-clock thresholds. Prove
+the same property for shared local-parameter leaves and preserve both retained B/C orders.
+
+Keep planning and construction state local to the complete constraint's immediate-signature
+resolution context. An active node is not a completed node. A genuine selected cycle must fail;
+a shared completed child must not. Reusing a product key under a different signature/context must
+not reuse another scope's admission or lowered binder identity. Whole-root exclusion must still
+lower canonically once with zero partially retained children, even after a large eligible sibling.
+Selected construction errors remain errors; no memoized error or canonical retry is permitted.
+This repairs only T2's transient producer plan and construction, without persistent type metadata,
+grammar expansion, shared query/inference changes, or reopening T1 and the union-producer gate.
+
 #### Source-construction blueprint — not approved for implementation
 
 A separate read-only blueprint proposes immutable registered callable references, source-owned
