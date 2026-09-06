@@ -315,17 +315,20 @@ fn unique_temp_path(tag: &str, extension: &str) -> PathBuf {
 }
 
 fn lifecycle_surface_sources(root: &std::path::Path) -> Vec<(String, String)> {
-    let mut sources = text_files_under(
-        root,
-        &[
-            root.join("src"),
-            root.join("crates"),
-            root.join("tests"),
-            root.join("tooling"),
-            root.join("examples"),
-            root.join(".github"),
-        ],
-    );
+    let mut roots = vec![
+        root.join("src"),
+        root.join("crates"),
+        root.join("tests"),
+        root.join("tooling"),
+        root.join(".github"),
+    ];
+    let examples = root.join("examples");
+    match fs::symlink_metadata(&examples) {
+        Ok(_) => roots.push(examples),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => panic!("read source directory metadata: {error}"),
+    }
+    let mut sources = text_files_under(root, &roots);
     sources.push((
         "Cargo.toml".to_owned(),
         fs::read_to_string(root.join("Cargo.toml")).expect("read root manifest"),
