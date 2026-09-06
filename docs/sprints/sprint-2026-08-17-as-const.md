@@ -59,10 +59,14 @@ new class validation/publication disagreement, prematurely regularized scalar cl
 and excluded enum-member matching. Focused tests passing does not close these defects. Preserve
 `publication-context-independent-review.md`; repair the bounded publication cluster before integration.
 
-**Frozen Pass-seam territory:** `crates/typokat-check/src/check/checker/{expr.rs,calls.rs,statements.rs}`
-and focused checker tests/module wiring. Class files, `literal_publication.rs`, type store, query kernels,
-evaluator kernels, relation/inference engines, generator, fixtures, scoreboards and docs stay frozen
-for this supporting seam. New source capability requires a leader decision, not a fallback.
+**Next bounded repairs, sequentially:** scalar field publication and enum matching may change
+`checker/classes/initializer.rs`, `checker/literal_publication.rs` and focused tests/module wiring.
+Scalar `satisfies` operands retain their mode until outer field publication; nested mutable members
+keep their own publication role. Ready enum-member identities participate in the shared literal-kind
+policy, including whole-enum contexts, without replacing the actual source or bypassing enum ownership.
+Type store, query/evaluator/relation/inference engines, generator and scoreboards stay unchanged.
+Class lexical/source alignment needs a separate owned-source design before its implementation; this
+does not authorize class queries, partial surfaces or global disabling of effective Pass contexts.
 
 ### Preparation and transport contract
 
@@ -106,6 +110,7 @@ Paths below are under `tests/cases/b44_as_const/` unless stated otherwise.
 | Effective context | `publication_effective_context.ts` — 9 pairs; `publication_context_views.ts` — 7 pairs; unchanged B32 forward/reverse/class/alias/heritage/mutual controls |
 | Prior failures | `contextual_arrow_checks.ts`, `contextual_return_contexts.ts`, `contextual_return_literal_members.ts`, `contextual_container_literal_modes.ts`, `return_literal_contributions.ts` |
 | Class compatibility | `publication_class_context_controls.ts`, `publication_class_self_context_control.ts`; no blanket deferred-context rejection |
+| Review regressions | `publication_class_scalar_satisfies.ts` — 8 strict-tsc pairs; `publication_enum_contexts.ts` — 10 pairs; direct identities and valid mutable-copy controls remain required |
 | Direct Rust tests | Exact mode IDs; symbolic versus bound contexts in both union orders; preparation counts; late unavailable/exhausted alternatives roll back earlier writes; memo identity/ThisType; selected/rejected effects and defaults |
 
 Preserve all 13 prior arrow/default owner tests and the 116 classified callback diagnostic-owner

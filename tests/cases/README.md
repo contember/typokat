@@ -58,6 +58,10 @@ The B44 `publication_*` fixtures specify ADR-0035's literal-publication roles an
 Their mutable-copy checks complement direct type-store mode tests; immediate literal assignability
 alone cannot detect a retained widening wrapper.
 
+`publication_class_scalar_satisfies.ts` and `publication_enum_contexts.ts` pin independent review
+regressions: scalar field operands must not consume the member role early, and ready enum members
+must participate in contextual literal matching. Both include projection/copy/write controls.
+
 ADR-0036 narrows the class migration, not the bounded field const feature. The B44 class controls
 remain required. `b123_class_contextual_publication/` retains disabled future assertions for
 effective external and self-dependent class contexts; it is not part of the ordinary inventory.
