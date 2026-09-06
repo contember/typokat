@@ -425,6 +425,15 @@ Selected construction errors remain errors; no memoized error or canonical retry
 This repairs only T2's transient producer plan and construction, without persistent type metadata,
 grammar expansion, shared query/inference changes, or reopening T1 and the union-producer gate.
 
+T2/T2a closure: independent review found no new defects. Leader reran the six T2a counter/identity
+tests, all 53 publisher tests, and all-target Clippy successfully; all 1,997 source hashes match
+the frozen candidate. Independent validation also passed 167 query, 83 inference, and 156 type
+tests and all 31 source controls. Accepted T1 plus T2/T2a closes the four original tracer findings
+and the additional transient-plan finding. The intersection-only ownership experiment is accepted
+within its recorded contract, not as R1b/M1/B44 completion. Its implementation still depends on the
+unaccepted isolated migration; this proof is not a standalone production integration receipt.
+Keep the frozen candidate intact while settling the narrower source-construction spec/ADR.
+
 #### Source-construction blueprint — not approved for implementation
 
 A separate read-only blueprint proposes immutable registered callable references, source-owned
