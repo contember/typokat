@@ -524,6 +524,29 @@ Thread no new checker path, producer selection, resolver, library schema, or pub
 notice in C0. Freeze the fact API only after independent review. C1 later needs binder-owned batched
 resolution or an honest non-linear bound; scalar lookup is not assumed constant time.
 
+C0 independent review returned FAIL on three immediate-edge classification gaps despite all 11
+new tests and 142 binder tests passing. The source-use projection otherwise preserves its single
+visitor and owned-data boundary. C0a repairs only these structural classifications:
+
+- `satisfies` assignment targets propagate `Write` for assignment/destructuring/loop targets and
+  `ReadWrite` for update/compound assignment. Member receivers, computed keys and RHS remain reads.
+  `satisfies` remains opaque to const-copy/result-context transparency; do not infer this from its
+  target propagation. Preserve ordinary assertion/non-null controls.
+- Computed keys of both `TSPropertySignature` and `TSMethodSignature` are value-expression edges
+  in aliases, interfaces, variable annotations, type arguments and return annotations. Noncomputed
+  names are not references. Nested key-expression type arguments and property annotations still use
+  type space; a computed key must not change the whole signature's lookup space.
+- Ordinary `for` initializers, tests, updates and bodies retain exact optional-slot roles. The three
+  padded `source-reference-for-*` fixtures have equal parent/reference spans but different slots;
+  their manifests must differ in those roles, including a distinct body edge. An omitted slot must
+  not shift another child into that role. No semantic scope assignment or source-text scan is needed.
+
+The separately committed `source-reference-write-wrappers.ts` and `source-reference-type-keys.ts`
+fixtures use unrelated names. Assert every reference row's lookup/write classification, not only
+the old `producer` filter, and check the unchanged exact TS/TSX marker corpus. Reproduce the three
+REDs before implementation, then rerun binder tests, feature checks, and consumer compilation.
+The fact API remains unfrozen until independent re-review; no C1/certificate work starts yet.
+
 ### Approved feasibility reset — 2026-09-05
 
 The user approved only spec expansion, bounded literal-model and assignment-flow feasibility,
