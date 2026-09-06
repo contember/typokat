@@ -314,6 +314,27 @@ dependency heuristic. All existing acceptance fixtures remain unchanged.
    the tracer. Neither broader backlog 76 nor TypeScript's whole lazy allocation system is granted
    by this tracer contract.
 
+#### Union producer gate — blocked after independent scheduling probes
+
+The independent continuation checked 46 fresh source programs through both compiler API and the
+normal TypeScript 6.0.3 CLI; all outputs agreed. First textual call, first value observation, first
+signature observation plus parameter ranks, and source-ticket order are each insufficient. Callable
+relations, type-only consumers, demanded versus deferred function-expression bodies, and composite
+union-constituent creation affect the result. The current early signature publication occurs before
+those observations and carries no deterministic semantic construction trace.
+
+The missing capability is a source-owned construction authority separating value acquisition,
+signature resolution, header checking, and demanded/deferred work. It must establish relevant
+constituent-creation identity before publishing usable callable semantics. A query-chosen once-cell
+would still make meaning query-order-dependent; a second semantic prepass would duplicate work.
+Neither is an accepted workaround. This does not establish that copying TypeScript's entire lazy
+allocation system or absorbing backlog 76 is necessary or justified.
+
+Finish and independently review the already authorized intersection tracer. Do not expand it into
+a new source scheduler, waive the union witnesses, or claim R1b/B44 completion from its local gates.
+The producer boundary requires a separate architecture unit with an executable ownership and
+publication contract before further cutover. No production integration or closure gates are waived.
+
 ### Approved feasibility reset — 2026-09-05
 
 The user approved only spec expansion, bounded literal-model and assignment-flow feasibility,
