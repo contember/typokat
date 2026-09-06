@@ -455,6 +455,14 @@ retry, effect ownership, resource limits, and static admission require an ADR be
 No class/library/overload/multi-file expansion follows from the blueprint. Keep this architecture
 gate separate from T1/T2 and do not treat the written plan as a passing implementation experiment.
 
+The narrower profile received independent GO for spec/ADR only: direct own-parameter/ground returns
+plus leaf/selector constraints that cannot demand a selector through another bound. Its proposed
+construction/publication contract and unresolved real-route admission gate are
+[ADR-0034](../decisions/0034-own-callable-construction-before-publishing-signatures.md).
+The `source_construction_*` fixtures pin twelve admitted source observations plus the bound-chain
+frontier. That frontier remains required for eventual sprint closure but is outside the first proof.
+No producer-only classifier may silently extend the profile to unsupported pre-completion consumers.
+
 ### Approved feasibility reset — 2026-09-05
 
 The user approved only spec expansion, bounded literal-model and assignment-flow feasibility,

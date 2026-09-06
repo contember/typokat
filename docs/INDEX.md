@@ -28,6 +28,8 @@ decisions → reference → archive.
 - [`sprint-2026-08-17-as-const.md`](sprints/sprint-2026-08-17-as-const.md) — autonomous completion
   through immutable literal modes ([ADR-0031](decisions/0031-preserve-literal-widening-in-immutable-type-identity.md))
   and source-owned assignment work ([ADR-0032](decisions/0032-own-semantic-assignment-work-by-source-and-query-environment.md)); implementation remains uncommitted.
+  Callable construction is a proposed dependency, not an approved source cutover
+  ([ADR-0034](decisions/0034-own-callable-construction-before-publishing-signatures.md)).
 
 ## What's hot
 
