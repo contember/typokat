@@ -162,6 +162,7 @@ The retained official regression set is four files, not permission to rebaseline
 | Owner | Boundary |
 |---|---|
 | [46](../backlog/46-return-path-analysis.md) | Bare returns, fallthrough and reachability; disabled `b46_return_paths/contextual_mixed_returns.ts` keeps its assertions |
+| [60](../backlog/60-fresh-literal-union-targets.md), [69](../backlog/69-signature-rest-parity-tail.md) | Verified old union-initializer FP at `assignment_semantic_reduction.ts:29` and eight outer rest-relation FPs; M2/R2b neighboring repairs and recovered errors stay required |
 | [51](../backlog/51-narrowing-tail.md), [76](../backlog/76-lazy-value-type-resolution.md) | Pre-existing flow/loop-product and general declaration-availability gaps, not newly introduced regressions |
 | [110](../backlog/110-contextual-return-literal-inference.md), [111](../backlog/111-structural-inference-literal-provenance.md), [122](../backlog/122-signature-candidate-fixing-policy.md) | Broader inference/fixing policy beyond required feature repairs; mixed B44 fixtures are not wholesale disabled |
 | [120](../backlog/120-semantic-constraint-construction-order.md) | Source/constraint construction order; rejected R1b planners; stopped C1b/C1c/C2–C4; ADR-0034 remains proposed |
@@ -180,6 +181,9 @@ The retained official regression set is four files, not permission to rebaseline
   not portable substitutes for committed acceptance fixtures.
 - `as-const-delivery-reconstruction.json`, `m1-*`, `r1a-*`: baseline authentication. `r1b*` and
   `tracer-*`: excluded experiments. `c0*`, `c1a-*`, `lifecycle-scanner-*`: accepted infrastructure.
+- `publication-conformance-ownership-triage.{md,json}` and `publication-conformance-unclassified-followup.*`:
+  frozen 182-record matrix; leader assigned its nine old FPs to 60/69. Not a current count; 26 mixed
+  files cannot be disabled wholesale. Required neighbors and original evidence remain unchanged.
 - `r2a-*-independent-review.md`: rejected helper repairs. `publication-contract-receipt.md` and
   `publication-contract-leader-authentication.json`: frozen first role-aware candidate; 2,040 source
   hashes, patches and binary verified, but the candidate remains rejected for context readiness.

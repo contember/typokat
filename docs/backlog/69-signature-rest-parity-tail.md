@@ -33,6 +33,22 @@ The M32 adversarial review found no remaining dropped-error blocker after
 All are safe-direction over-reports, but they are close enough to the M32 surface that
 they should be fixed before broader `lib.d.ts` work depends on variadic tuple inference.
 
+## Fixed source versus union-rest target
+
+This item owns the eight pre-existing outer TK2322 identities in
+`tests/cases/b44_as_const/contextual_rest_write_boundaries.ts`, lines 5/9/13/17/21/26/30/33,
+column 7. Fixed positional callbacks are rejected against
+`(...args: ["A", number] | ["B", string]) => void`; one source has an optional first parameter.
+Strict TypeScript 6.0.3 accepts each outer relation. Pre-feature, R1a and both frozen publication/role
+candidates each report one error at every site, even though contextual parameter/body checking
+improves the source types in the feature candidates.
+
+Leader disposition: defer these exact old relation identities from bounded as-const delivery to
+this item, coordinated with R2b. The introduced body-property false positives at 24:29 and 28:29
+remain required R2b repairs. Preserve the six correct recovered body diagnostics at 6:29, 11:29,
+14:29, 18:29, 31:29 and 35:11, plus the clean direct-narrowing control at line 36. Do not remove
+contextual checking to clear outer errors, or disable the mixed fixture wholesale.
+
 ## Approach / acceptance
 
 Extend rest-shape inference to flatten embedded tuple rest patterns in both call-site

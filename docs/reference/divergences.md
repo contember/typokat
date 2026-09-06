@@ -837,6 +837,12 @@ property, fixed tuple positions, function param/return; same-name covariant cand
 
 ## Contextual expressions
 
+- **A fresh discriminated object initializer can lose its discriminator (over-report).** The valid
+  union-target declaration at `assignment_semantic_reduction.ts:29` reports TK2322 with `kind: string`
+  in the pre-feature checker and three frozen feature candidates; strict tsc accepts it. Backlog 60
+  owns this older contextual-initializer gap, separately from the fixture's assignment-flow repairs.
+  <!-- div: id=contextual/discriminated-union-initializer dir=over scope=s-assignability owner=../backlog/60-fresh-literal-union-targets.md witness=../../tests/cases/b44_as_const/assignment_semantic_reduction.ts -->
+
 - **`satisfies` uses the AST operator gap as its primary span (cosmetic).** OXC exposes the source
   expression and target annotation spans, but not the `satisfies` token span. Typokat therefore
   highlights the gap between those nodes, which can include adjacent whitespace; tsc starts at the
@@ -974,6 +980,12 @@ set), contextual fresh-literal shaping, and the M24 circular-constraint walk (`T
   <!-- div: id=objects/missing-property-vs-value-order dir=cosmetic scope=s-assignability owner=../backlog/91-missing-property-presence-pass.md witness=../../tests/cases/b91_missing_property_presence -->
 
 ## Object / interface signatures (F1 corpora)
+
+- **Fixed callbacks can be rejected against union-rest targets (over-report).** Eight outer TK2322
+  sites in `contextual_rest_write_boundaries.ts` predate the feature; strict tsc accepts those
+  relations. Backlog 69 owns the old outer failures. Newly recovered body errors and the two
+  introduced write-eligible body false positives remain separate bounded R2b obligations.
+  <!-- div: id=signatures/fixed-source-union-rest-target dir=over scope=s-assignability owner=../backlog/69-signature-rest-parity-tail.md witness=../../tests/cases/b44_as_const/contextual_rest_write_boundaries.ts -->
 
 Method signatures become function-typed properties; call/construct signatures make values
 callable/constructable (F1, backlog `05`). Since M33, ordered overload lists are preserved; B41

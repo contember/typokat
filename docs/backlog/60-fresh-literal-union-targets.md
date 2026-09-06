@@ -19,6 +19,21 @@ title: Fresh literals vs union targets — excess and assignability silently ski
   literal apparently satisfies one member vacuously; reproduces without any evaluator
   involvement (M2/M4/M30 union-source relation of fresh literals).
 
+## Discriminated initializer compatibility control
+
+This item also owns the pre-existing false positive at
+`tests/cases/b44_as_const/assignment_semantic_reduction.ts:29:5`. The valid initializer
+`{ kind: "b", value: "start" }` is rejected against
+`{ kind: "a"; value: number } | { kind: "b"; value: string }` after its discriminator becomes
+`kind: string`. Strict TypeScript 6.0.3 accepts it; pre-feature, R1a and the frozen publication/role
+candidates each report the same single TK2322. The internal context-loss point is not yet established.
+
+Leader disposition: this existing declaration-initializer gap is deferred from bounded as-const
+delivery to the fresh-literal/union-target owner. It is not B51's later transfer/copy failure and does
+not authorize deferring the introduced M2 errors at lines 6/25. Preserve all assertions and positive
+controls in the mixed fixture; do not disable it wholesale. Include this valid discriminator case
+alongside the union excess/optional-member negative controls below when implementing this item.
+
 ## Approach / acceptance
 
 **Acceptance spec (ready):** the disabled
