@@ -252,6 +252,16 @@ records significant choices in an ADR before production integration. No push, pu
   that generated inventory. This classification does not override the separately reproduced
   default/empty-return false negatives or approve the changed route. No scoreboard or allowlist
   changed; final acceptance still requires rerunning the repaired tree.
+- R1b's first review found a cyclic-seed ordering defect: tuple constraints traverse their elements
+  in instantiation order, while anonymous object constraints do not eagerly traverse properties in
+  that order. The separately committed `constraint_instantiation_order` fixtures cover both tuple
+  orders, the object counterexample, supplied candidates, and the partial constructor fixer.
+  R1b2 is the active remediation; no integration is approved on the first R1b result.
+- Leader oracle consolidation at `3ca4f7d6`: all 45 B44 source files match TypeScript 6.0.3 at the
+  expected 162 diagnostic line/code sites, including the declared `TS1355`/`TS7015` counterparts of
+  incomplete markers. This verifies the acceptance corpus, not candidate conformance. The new
+  generic-return fixture also pins direct, union, nested-object, and tuple return policy for regular
+  and widening primitive/enum contributions before R1c implementation.
 
 ### Approved feasibility reset — 2026-09-05
 
