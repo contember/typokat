@@ -6,6 +6,8 @@ const preservedGenericRows = ((kind, payload) => {
 }) satisfies GenericContextRows;
 preservedGenericRows<["a", number]>("a", 1);
 preservedGenericRows<["a", number]>("b", 1); // error[TK2345]
+preservedGenericRows<["a", 1]>("a", 1);
+preservedGenericRows<["a", 1]>("a", 2); // error[TK2345]
 
 const annotatedGenericRows: GenericContextRows = (kind, payload) => {
   if (kind === "a") payload.toFixed();
