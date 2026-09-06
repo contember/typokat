@@ -661,6 +661,52 @@ list, all other private-field exclusions, and the sole declaration-table exact-s
 The new receipt's identity edges must remain covered by the reference audit. This is a guard contract
 update for the already specified owner, not C1a acceptance or permission to add another lookup index.
 
+C1a independent implementation review returned FAIL on source-zero origin validation and incomplete
+regression assertions for the added identity audit. Handle them sequentially; neither opens C1b.
+
+**C1a-R1, origin authentication.** Consume `source-scope-reference-only.ts` twice with one manifest,
+distinct modules and User ordinals 0/1, first with source key 7 and then with source key zero. Both
+conflicting-origin cases must reject the second receipt. The actual trusted prelude still works;
+a source number alone never grants its exemption. Identify the prelude by the existing trusted
+module/entry role, not by an origin flag guessed from user input. Ordinary source/library/product
+inputs must retain their module/source/origin join even at reserved keys, or record typed invalidity
+for the reserved-key use. Preserve ordinary binder behavior, the consumed Arc and all reference rows.
+Keep dual consumption with valid distinct source keys, valid source-compiled prelude, empty prelude,
+product and continuation controls. Test a user with zero and no origin conflict as well: it must not
+take the prelude exemption, regardless of whether full validation accepts it or reserved-key policy
+rejects it. No namespace error suppression or changes to public source-key allocation are allowed.
+
+**C1a-R2, reference-audit gate.** After R1 is green, strengthen tests without changing enumeration.
+Keep the old 317-edge assertion and add exact new-edge multiset/count-and-target assertions qualified
+by consuming module. Cover the existing field contract completely:
+
+| Fields | Required relationships |
+|---|---|
+| 1–3 | input module/source/creation parent |
+| 4–7 | normalization module/source/old parent/new parent |
+| 8–11 | attachment scope/creation parent/anchor operation/region |
+| 12–14 | operation identity/parent/region |
+| 15–19 | callable/class/namespace/header owner and result context |
+| 20–22 | region identity/parent/anchor |
+| 23–25 | reference identity/operation/region |
+| 26–28 | copy declaration/reference and boundary operation |
+| 29–30 | anchor-index region and collection-error module |
+
+Use the existing rich C0 fixtures plus a controlled invalid collection entry so every field occurs.
+Every operation/region/reference target must be within its consuming input's own domain. Include
+two equal-span inputs in different modules and local/full views around freeze/fork; no numeric local
+ID may select another module's facts. Counts alone are insufficient: compare target multiplicities
+and reject substitution of another valid in-range target. Expected edges must come from the retained
+fixture facts/explicit relationships, not from calling the production enumeration to construct its
+own expectation. An external omission of operation-parent field 13 must fail the new test (the
+reviewer removed 272 such edges while all old tests passed). Cover representative owner, region,
+copy/boundary and error omissions too. Do not rebaseline the old count or exempt the private field.
+
+R1 may touch only source-input finalization, its existing binder call-site handshake if needed, and
+receipt specs. R2 may touch only reference-audit test code and test-only invalid-input setup. Keep
+the authorized exact-site guard unchanged. Freeze each delta/evidence separately, then obtain an
+independent re-review of their combined candidate before leader integration gates.
+
 ### Approved feasibility reset — 2026-09-05
 
 The user approved only spec expansion, bounded literal-model and assignment-flow feasibility,
