@@ -18,6 +18,7 @@ use crate::binder::namespace::{
 };
 use crate::binder::roots::{LibraryRootContributorSite, LibraryRootProjection};
 use crate::binder::scope::{Scope, ScopeGraph, ScopeId, ScopeKind};
+use crate::binder::source_inputs::SourceInputs;
 use crate::binder::symbol::{Symbol, SymbolId, SymbolTable};
 use crate::source::{CompilationOrigin, LibraryFileOrdinal};
 use crate::span::Span;
@@ -29,6 +30,7 @@ use oxc_ast::ast::{
     TSEnumDeclaration, TSModuleDeclarationName, TryStatement, VariableDeclarationKind,
     VariableDeclarator,
 };
+use oxc_ast::AstType;
 use rustc_hash::FxHashMap;
 use std::fmt;
 
@@ -234,6 +236,7 @@ pub struct Binder {
     /// Stable source ownership retained across the frozen-library continuation seam.
     #[cfg_attr(not(test), allow(dead_code))]
     module_sources: LayeredMap<ScopeId, SourceUnitKey>,
+    source_inputs: SourceInputs,
     next_source_key: SourceUnitKey,
     /// Writes this build refused because their row lives in the frozen library prefix. The
     /// checker turns each into an incomplete outcome, so a dropped declaration is never silent
@@ -270,6 +273,11 @@ pub enum ValueResolution {
 }
 
 impl Binder {
+    #[allow(dead_code)]
+    pub(super) fn source_input_observations(&self) -> &SourceInputs {
+        &self.source_inputs
+    }
+
     pub fn source_for_module(&self, module: ScopeId) -> Option<SourceUnitKey> {
         self.module_sources.get(&module).copied()
     }
@@ -307,6 +315,7 @@ impl Binder {
             default_function_values: FxHashMap::default(),
             block_scopes: FxHashMap::default(),
             module_sources: self.module_sources.fork_delta()?,
+            source_inputs: SourceInputs::default(),
             next_source_key: self.next_source_key,
             frozen_prefix_writes: Vec::new(),
         })
@@ -449,6 +458,7 @@ impl Binder {
                 }
                 layered
             },
+            source_inputs: SourceInputs::default(),
             next_source_key,
             frozen_prefix_writes: Vec::new(),
         }
@@ -752,6 +762,7 @@ pub(crate) struct BindState {
     pub(crate) namespaces: NamespaceTable,
     /// Stable source ownership for every module scope, including the prelude.
     module_sources: LayeredMap<ScopeId, SourceUnitKey>,
+    source_inputs: SourceInputs,
     next_source_key: SourceUnitKey,
     library_module_ordinals: FxHashMap<ScopeId, LibraryFileOrdinal>,
     /// Library provenance needed to keep fragment order canonical after binding mode changes.
@@ -927,7 +938,27 @@ impl BindState {
         Some(source)
     }
 
-    fn record_source_declarations(&mut self, manifest: &SourceDeclarationManifest<'_>) {
+    fn record_source_declarations(
+        &mut self,
+        manifest: &SourceDeclarationManifest<'_>,
+        origin: Option<CompilationOrigin>,
+    ) {
+        if let Some(source) = self.module_sources.get(&self.current_module) {
+            self.source_inputs.install(
+                self.current_module,
+                *source,
+                manifest.reference_input(),
+                self.graph
+                    .get(self.current_module)
+                    .and_then(|scope| scope.parent),
+                origin,
+            );
+        } else {
+            self.source_inputs.errors.push((
+                self.current_module,
+                super::source_inputs::InputError::WrongSource,
+            ));
+        }
         for occurrence in manifest.declarations() {
             let site = DeclarationSite {
                 module: self.current_module,
@@ -937,6 +968,16 @@ impl BindState {
             };
             self.declarations.push(occurrence.kind, site);
         }
+    }
+
+    fn record_source_scope(&mut self, syntax: AstType, span: oxc_span::Span, scope: ScopeId) {
+        self.source_inputs.attach(
+            self.current_module,
+            syntax,
+            Span::from_oxc(span),
+            scope,
+            &self.graph,
+        );
     }
 
     pub(crate) fn source_decl_at(&self, span_start: u32, kind: DeclarationKind) -> Option<DeclId> {
@@ -1226,6 +1267,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             type_groups: TypeGroupTable::default(),
             namespaces: NamespaceTable::default(),
             module_sources: LayeredMap::default(),
+            source_inputs: SourceInputs::default(),
             library_module_ordinals: FxHashMap::default(),
             type_group_library_ordinals: FxHashMap::default(),
             fn_scopes: FxHashMap::default(),
@@ -1444,6 +1486,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             type_groups: TypeGroupTable::default(),
             namespaces: NamespaceTable::default(),
             module_sources: LayeredMap::default(),
+            source_inputs: SourceInputs::default(),
             library_module_ordinals: FxHashMap::default(),
             type_group_library_ordinals: FxHashMap::default(),
             fn_scopes: FxHashMap::default(),
@@ -1463,7 +1506,8 @@ impl<'ast> ProjectBinderBuilder<'ast> {
         let prelude_module = state.graph.push(Scope::new(ScopeKind::Module, None));
         state.current_module = prelude_module;
         state.record_module_source(prelude_module, SourceUnitKey::PRELUDE);
-        state.record_source_declarations(manifest);
+        state.record_source_declarations(manifest, None);
+        state.record_source_scope(AstType::Program, prelude.span, prelude_module);
         bind_statements(&mut state, prelude_module, &prelude.body);
         let prelude_type_group_count =
             u32::try_from(state.type_groups.len()).expect("prelude type group count fits u32");
@@ -1676,7 +1720,10 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             .push(Scope::new(ScopeKind::Module, Some(module_parent)));
         self.state.current_module = module;
         self.state.record_module_source(module, unit.source);
-        self.state.record_source_declarations(manifest);
+        self.state
+            .record_source_declarations(manifest, Some(unit.origin));
+        self.state
+            .record_source_scope(AstType::Program, program.span, module);
         let mut placeholders = Vec::new();
         for import in imports {
             placeholders.push(declare_import(&mut self.state, module, import));
@@ -1898,7 +1945,8 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             self.state
                 .type_group_library_ordinals
                 .insert(module, file_ordinal);
-            self.state.record_source_declarations(manifest);
+            self.state
+                .record_source_declarations(manifest, Some(unit.origin));
             let provenance = source_global_binding_census_with_provenance(program, unit.binding);
             projection.source_census_count = projection.source_census_count.saturating_add(1);
             projection.uncertain_candidate_count = projection
@@ -1934,6 +1982,8 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             } else {
                 self.compilation_global
             };
+            self.state
+                .record_source_scope(AstType::Program, program.span, ordinary_scope);
             bind_library_statements(
                 &mut self.state,
                 ordinary_scope,
@@ -1983,10 +2033,17 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             &mut self.state.symbols,
             &mut self.state.frozen_prefix_writes,
             self.library_root_projection.as_mut(),
+            &mut self.state.source_inputs,
         );
         if let Some(projection) = self.library_root_projection.as_mut() {
             projection.root_rows = root_rows;
         }
+        self.state.source_inputs.finish(
+            &self.state.graph,
+            &self.state.module_sources,
+            &self.state.namespaces,
+            self.prelude_module,
+        );
         Binder {
             graph: self.state.graph,
             symbols: self.state.symbols,
@@ -2005,6 +2062,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             default_function_values: self.state.default_function_values,
             block_scopes: self.state.block_scopes,
             module_sources: self.state.module_sources,
+            source_inputs: self.state.source_inputs,
             next_source_key: self.state.next_source_key,
             frozen_prefix_writes: self.state.frozen_prefix_writes,
         }
@@ -2049,6 +2107,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             default_function_values: _,
             block_scopes: _,
             module_sources,
+            source_inputs: _,
             next_source_key,
             frozen_prefix_writes,
         } = binder;
@@ -2073,6 +2132,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
                     type_groups,
                     namespaces,
                     module_sources,
+                    source_inputs: SourceInputs::default(),
                     library_module_ordinals: FxHashMap::default(),
                     type_group_library_ordinals: FxHashMap::default(),
                     fn_scopes: FxHashMap::default(),
@@ -2133,8 +2193,22 @@ impl<'ast> ProjectBinderBuilder<'ast> {
                 .graph
                 .get_mut(module)
                 .ok_or("continuation module does not exist")?;
+            if let Some(source) = self.state.module_sources.get(&module) {
+                self.state.source_inputs.normalize_root(
+                    module,
+                    *source,
+                    scope.parent,
+                    Some(self.script_namespace_root),
+                );
+            }
             scope.parent = Some(self.script_namespace_root);
         }
+        self.state.source_inputs.finish(
+            &self.state.graph,
+            &self.state.module_sources,
+            &self.state.namespaces,
+            self.prelude_module,
+        );
         Ok(Binder {
             graph: self.state.graph,
             symbols: self.state.symbols,
@@ -2153,6 +2227,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             default_function_values: self.state.default_function_values,
             block_scopes: self.state.block_scopes,
             module_sources: self.state.module_sources,
+            source_inputs: self.state.source_inputs,
             next_source_key: self.state.next_source_key,
             frozen_prefix_writes: self.state.frozen_prefix_writes,
         })
@@ -2548,7 +2623,8 @@ pub(super) fn bind_statement(state: &mut BindState, scope: ScopeId, stmt: &State
             &for_in.left,
             &for_in.right,
             &for_in.body,
-            for_in.span.start,
+            for_in.span,
+            AstType::ForInStatement,
         ),
         Statement::ForOfStatement(for_of) => bind_for_in_of(
             state,
@@ -2556,7 +2632,8 @@ pub(super) fn bind_statement(state: &mut BindState, scope: ScopeId, stmt: &State
             &for_of.left,
             &for_of.right,
             &for_of.body,
-            for_of.span.start,
+            for_of.span,
+            AstType::ForOfStatement,
         ),
         // `label: <stmt>` — the label is not a binding; descend into the body so a
         // labeled loop gets its head scope and a labeled block binds normally.
@@ -2585,6 +2662,7 @@ fn bind_try(state: &mut BindState, parent: ScopeId, try_stmt: &TryStatement<'_>)
     bind_block(state, parent, &try_stmt.block);
     if let Some(handler) = &try_stmt.handler {
         let catch_scope = state.graph.push(Scope::new(ScopeKind::Block, Some(parent)));
+        state.record_source_scope(AstType::CatchClause, handler.span, catch_scope);
         state
             .block_scopes
             .insert((state.current_module, handler.span.start), catch_scope);
@@ -2645,6 +2723,7 @@ fn bind_declaration(state: &mut BindState, scope: ScopeId, decl: &Declaration<'_
 /// descends into the matching scope. The block's statements are bound inside it.
 fn bind_block(state: &mut BindState, parent: ScopeId, block: &BlockStatement<'_>) {
     let block_scope = state.graph.push(Scope::new(ScopeKind::Block, Some(parent)));
+    state.record_source_scope(AstType::BlockStatement, block.span, block_scope);
     state
         .block_scopes
         .insert((state.current_module, block.span.start), block_scope);
@@ -2661,6 +2740,7 @@ fn bind_block(state: &mut BindState, parent: ScopeId, block: &BlockStatement<'_>
 fn bind_switch(state: &mut BindState, scope: ScopeId, switch: &SwitchStatement<'_>) {
     bind_expression(state, scope, &switch.discriminant);
     let switch_scope = state.graph.push(Scope::new(ScopeKind::Block, Some(scope)));
+    state.record_source_scope(AstType::SwitchStatement, switch.span, switch_scope);
     state
         .block_scopes
         .insert((state.current_module, switch.span.start), switch_scope);
@@ -2684,6 +2764,7 @@ fn bind_switch(state: &mut BindState, scope: ScopeId, switch: &SwitchStatement<'
 /// initializer is scoped to the loop, then bind the test/update/body inside it.
 fn bind_for(state: &mut BindState, parent: ScopeId, for_stmt: &ForStatement<'_>) {
     let head = state.graph.push(Scope::new(ScopeKind::Block, Some(parent)));
+    state.record_source_scope(AstType::ForStatement, for_stmt.span, head);
     state
         .block_scopes
         .insert((state.current_module, for_stmt.span.start), head);
@@ -2719,12 +2800,14 @@ fn bind_for_in_of(
     left: &ForStatementLeft<'_>,
     right: &Expression<'_>,
     body: &Statement<'_>,
-    span_start: u32,
+    span: oxc_span::Span,
+    syntax: AstType,
 ) {
     let head = state.graph.push(Scope::new(ScopeKind::Block, Some(parent)));
+    state.record_source_scope(syntax, span, head);
     state
         .block_scopes
-        .insert((state.current_module, span_start), head);
+        .insert((state.current_module, span.start), head);
     bind_expression(state, parent, right);
     if let ForStatementLeft::VariableDeclaration(decl) = left {
         for declarator in &decl.declarations {
@@ -2955,6 +3038,7 @@ fn bind_function(state: &mut BindState, parent: ScopeId, func: &Function<'_>) {
     let fn_scope = state
         .graph
         .push(Scope::new(ScopeKind::Function, Some(parent)));
+    state.record_source_scope(AstType::Function, func.span, fn_scope);
     state
         .fn_scopes
         .insert((state.current_module, func.span.start), fn_scope);
@@ -2986,6 +3070,7 @@ fn bind_arrow(state: &mut BindState, parent: ScopeId, arrow: &ArrowFunctionExpre
     let fn_scope = state
         .graph
         .push(Scope::new(ScopeKind::Function, Some(parent)));
+    state.record_source_scope(AstType::ArrowFunctionExpression, arrow.span, fn_scope);
     state
         .fn_scopes
         .insert((state.current_module, arrow.span.start), fn_scope);

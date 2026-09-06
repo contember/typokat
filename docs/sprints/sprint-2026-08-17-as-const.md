@@ -707,6 +707,17 @@ receipt specs. R2 may touch only reference-audit test code and test-only invalid
 the authorized exact-site guard unchanged. Freeze each delta/evidence separately, then obtain an
 independent re-review of their combined candidate before leader integration gates.
 
+C1a closure: independent re-review gives GO with both origin/audit findings closed. Leader verified
+all 2,026 frozen file hashes, then passed the complete default-member test suite, exact ordinary
+conformance (`583/699/583/0`), all-target Clippy and formatting on the unchanged candidate. Integration
+transferred only its eight reviewed binder files; leader repeated 169 binder unit tests plus one
+integration test, all 11 lifecycle tests, Clippy and formatting successfully in the primary tree.
+The original WU1 diff still matches `177d58ca77073296f8ce80bbea0946c66c6503a3ff777766566ee6aec3178b03`.
+The complete-suite receipt applies to the isolated committed-source candidate, not to unrelated WIP.
+Consumed-input identity, actual scope receipts and their audit are accepted. No final lookup basis,
+borrowed authenticated census, C1c resolution, C2 certificate or source-construction cutover follows.
+Next is the separately specified C1b exact dependency/read-set and finalization contract.
+
 ### Approved feasibility reset — 2026-09-05
 
 The user approved only spec expansion, bounded literal-model and assignment-flow feasibility,

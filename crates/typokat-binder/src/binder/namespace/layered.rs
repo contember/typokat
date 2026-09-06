@@ -354,7 +354,10 @@ impl NamespaceTable {
         issues.into_iter()
     }
 
-    pub(super) fn source_unit_for_module(&self, module: ScopeId) -> Option<&SourceUnitRecord> {
+    pub(in crate::binder) fn source_unit_for_module(
+        &self,
+        module: ScopeId,
+    ) -> Option<&SourceUnitRecord> {
         let index = self.source_unit_indices_by_module.get(&module).copied()?;
         self.source_units
             .get(index)
@@ -438,12 +441,13 @@ impl NamespaceTable {
     }
 
     /// Freeze legal global publication, then connect every user module in one cutover.
-    pub(crate) fn finalize_global_scopes(
+    pub(in crate::binder) fn finalize_global_scopes(
         &self,
         graph: &mut ScopeGraph,
         symbols: &mut SymbolTable,
         refused: &mut Vec<FrozenPrefixWrite>,
         mut root_projection: Option<&mut LibraryRootProjection>,
+        source_inputs: &mut crate::binder::source_inputs::SourceInputs,
     ) -> Vec<RootNameRow> {
         let compilation_global = self
             .compilation_global
@@ -564,6 +568,12 @@ impl NamespaceTable {
                 .get_mut(unit.module)
                 .expect("user module scope exists");
             assert_eq!(module.kind, ScopeKind::Module);
+            source_inputs.normalize_root(
+                unit.module,
+                unit.source,
+                module.parent,
+                Some(script_namespace_root),
+            );
             module.parent = Some(script_namespace_root);
         }
         let mut root_rows = Vec::with_capacity(safe_symbols.len());

@@ -58,6 +58,10 @@ const REF_CANONICAL_DEFERRED_MODULE_INDEX: u8 = 26;
 const REF_CANONICAL_DEFERRED_CHILD_INDEX: u8 = 27;
 const REF_CANONICAL_UMD_EXPORT_INDEX: u8 = 28;
 const REF_CANONICAL_EXPORT_CONTEXT_INDEX: u8 = 29;
+const REF_SOURCE_INPUT: u8 = 30;
+const REF_SOURCE_OPERATION: u8 = 31;
+const REF_SOURCE_REGION: u8 = 32;
+const REF_SOURCE_REFERENCE: u8 = 33;
 
 // Field discriminants are local to an owner domain and append-only.
 const ROOT_MODULE: u8 = 1;
@@ -332,6 +336,110 @@ fn reference_records_with_view(
                 SCOPE_MODULE_SOURCE,
                 scope.0,
                 source.0,
+            );
+        }
+    }
+
+    for input in binder.source_input_observations().iter() {
+        if !root_scope_is_in_view(input.module) {
+            continue;
+        }
+        // C0 targets are source-local; the consuming module qualifies every edge.
+        let mut edge = |domain, field, target| {
+            push_reference(
+                &mut records,
+                REF_SOURCE_INPUT,
+                domain,
+                field,
+                input.module.0,
+                target,
+            );
+        };
+        edge(REF_SCOPE, 1, input.module.0);
+        edge(REF_SOURCE_UNIT, 2, input.source.0);
+        if let Some(parent) = input.module_creation_parent {
+            edge(REF_SCOPE, 3, parent.0);
+        }
+        if let Some(transition) = input.normalization {
+            edge(REF_SCOPE, 4, transition.module.0);
+            edge(REF_SOURCE_UNIT, 5, transition.source.0);
+            if let Some(parent) = transition.old_parent {
+                edge(REF_SCOPE, 6, parent.0);
+            }
+            if let Some(parent) = transition.new_parent {
+                edge(REF_SCOPE, 7, parent.0);
+            }
+        }
+        for observation in &input.regions {
+            if let super::source_inputs::RegionObservation::Attached(attachment) = observation {
+                edge(REF_SCOPE, 8, attachment.scope.0);
+                if let Some(parent) = attachment.creation_parent {
+                    edge(REF_SCOPE, 9, parent.0);
+                }
+                edge(REF_SOURCE_OPERATION, 10, attachment.anchor.operation.0);
+                edge(REF_SOURCE_REGION, 11, attachment.region.0);
+            }
+        }
+        for operation in input.facts.operations() {
+            edge(REF_SOURCE_OPERATION, 12, operation.id.0);
+            if let Some(parent) = operation.parent {
+                edge(REF_SOURCE_OPERATION, 13, parent.0);
+            }
+            edge(REF_SOURCE_REGION, 14, operation.region.0);
+            for (field, owner) in [
+                (15, operation.owners.callable),
+                (16, operation.owners.class),
+                (17, operation.owners.namespace),
+                (18, operation.owners.header),
+                (19, operation.result_context),
+            ] {
+                if let Some(owner) = owner {
+                    edge(REF_SOURCE_OPERATION, field, owner.0);
+                }
+            }
+        }
+        for region in input.facts.regions() {
+            edge(REF_SOURCE_REGION, 20, region.id.0);
+            if let Some(parent) = region.parent {
+                edge(REF_SOURCE_REGION, 21, parent.0);
+            }
+            edge(REF_SOURCE_OPERATION, 22, region.anchor.operation.0);
+            for (field, owner) in [
+                (15, region.owners.callable),
+                (16, region.owners.class),
+                (17, region.owners.namespace),
+                (18, region.owners.header),
+            ] {
+                if let Some(owner) = owner {
+                    edge(REF_SOURCE_OPERATION, field, owner.0);
+                }
+            }
+        }
+        for reference in input.facts.references() {
+            edge(REF_SOURCE_REFERENCE, 23, reference.id.0);
+            edge(REF_SOURCE_OPERATION, 24, reference.operation.0);
+            edge(REF_SOURCE_REGION, 25, reference.region.0);
+        }
+        for copy in input.facts.copy_candidates() {
+            edge(REF_SOURCE_OPERATION, 26, copy.declaration.0);
+            edge(REF_SOURCE_REFERENCE, 27, copy.reference.0);
+        }
+        for boundary in input.facts.boundaries() {
+            edge(REF_SOURCE_OPERATION, 28, boundary.operation.0);
+        }
+        for region in input.anchor_regions() {
+            edge(REF_SOURCE_REGION, 29, region.0);
+        }
+    }
+    for (module, _) in &binder.source_input_observations().errors {
+        if root_scope_is_in_view(*module) {
+            push_reference(
+                &mut records,
+                REF_SOURCE_INPUT,
+                REF_SCOPE,
+                30,
+                module.0,
+                module.0,
             );
         }
     }
@@ -1110,9 +1218,471 @@ pub fn local_reference_records_for_test(binder: &Binder) -> Vec<ReferenceRecord>
 mod tests {
     use super::*;
     use crate::binder::bind::{bind_module_with_prelude, ProjectBinderBuilder};
+    use crate::binder::declaration::SourceDeclarationManifest;
+    use crate::binder::source_inputs::{RegionObservation, SourceInputs};
     use oxc_allocator::Allocator;
     use oxc_parser::Parser;
     use oxc_span::SourceType;
+
+    fn audit_fixture(source: &str, source_type: SourceType, collection_error: bool) -> Binder {
+        let arena = Allocator::default();
+        let prelude = Parser::new(&arena, "", SourceType::ts()).parse();
+        let parsed = Parser::new(&arena, source, source_type).parse();
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        let manifest = SourceDeclarationManifest::build(&parsed.program);
+        let mut builder = ProjectBinderBuilder::new(&prelude.program);
+        let mut modules = Vec::new();
+        for source in [SourceUnitKey(11), SourceUnitKey(23)] {
+            modules.push(
+                builder
+                    .add_module_with_declaration_manifest(
+                        &parsed.program,
+                        &manifest,
+                        &[],
+                        CompilationUnit::implementation(source, &parsed.program),
+                    )
+                    .0,
+            );
+        }
+        if collection_error {
+            SourceInputs::inject_collection_error_on_next_finish_for_test(modules[1]);
+        }
+        let binder = builder.finish(modules[1]);
+        let first = binder.source_input_observations().get(modules[0]).unwrap();
+        let second = binder.source_input_observations().get(modules[1]).unwrap();
+        assert!(std::sync::Arc::ptr_eq(&first.facts, &second.facts));
+        assert_ne!(first.module, second.module);
+        assert_ne!(first.source, second.source);
+        assert_eq!(
+            first.facts.regions()[0].anchor.span,
+            second.facts.regions()[0].anchor.span
+        );
+        binder
+    }
+
+    fn assert_input_target_multisets(
+        binder: &Binder,
+        records: &[ReferenceRecord],
+        local: bool,
+    ) -> [usize; 30] {
+        let input_records: Vec<_> = records
+            .iter()
+            .filter(|record| record.0 == REF_SOURCE_INPUT)
+            .collect();
+        let mut counts = [0; 30];
+        let mut expected_total = 0;
+        for input in binder.source_input_observations().iter() {
+            if local && input.module.index() < binder.graph.base_len_for_test() {
+                continue;
+            }
+            let facts = &input.facts;
+            let attachments: Vec<_> = input
+                .regions
+                .iter()
+                .filter_map(|row| match row {
+                    RegionObservation::Attached(attachment) => Some(attachment),
+                    _ => None,
+                })
+                .collect();
+            let mut targets = |domain, field, mut expected: Vec<u32>| {
+                let mut actual: Vec<_> = input_records
+                    .iter()
+                    .filter(|row| row.3 == input.module.0 && row.1 == domain && row.2 == field)
+                    .map(|row| row.4)
+                    .collect();
+                expected.sort_unstable();
+                actual.sort_unstable();
+                assert_eq!(
+                    actual,
+                    expected,
+                    "consumer {:?}, domain {domain}, field {field}, expected {} edges",
+                    input.module,
+                    expected.len()
+                );
+                counts[usize::from(field - 1)] += expected.len();
+                expected_total += expected.len();
+            };
+            targets(REF_SCOPE, 1, vec![input.module.0]);
+            targets(REF_SOURCE_UNIT, 2, vec![input.source.0]);
+            targets(
+                REF_SCOPE,
+                3,
+                input
+                    .module_creation_parent
+                    .into_iter()
+                    .map(|id| id.0)
+                    .collect(),
+            );
+            targets(
+                REF_SCOPE,
+                4,
+                input.normalization.iter().map(|row| row.module.0).collect(),
+            );
+            targets(
+                REF_SOURCE_UNIT,
+                5,
+                input.normalization.iter().map(|row| row.source.0).collect(),
+            );
+            targets(
+                REF_SCOPE,
+                6,
+                input
+                    .normalization
+                    .iter()
+                    .filter_map(|row| row.old_parent)
+                    .map(|id| id.0)
+                    .collect(),
+            );
+            targets(
+                REF_SCOPE,
+                7,
+                input
+                    .normalization
+                    .iter()
+                    .filter_map(|row| row.new_parent)
+                    .map(|id| id.0)
+                    .collect(),
+            );
+            targets(
+                REF_SCOPE,
+                8,
+                attachments.iter().map(|row| row.scope.0).collect(),
+            );
+            targets(
+                REF_SCOPE,
+                9,
+                attachments
+                    .iter()
+                    .filter_map(|row| row.creation_parent)
+                    .map(|id| id.0)
+                    .collect(),
+            );
+            targets(
+                REF_SOURCE_OPERATION,
+                10,
+                attachments
+                    .iter()
+                    .map(|row| row.anchor.operation.0)
+                    .collect(),
+            );
+            targets(
+                REF_SOURCE_REGION,
+                11,
+                attachments.iter().map(|row| row.region.0).collect(),
+            );
+            targets(
+                REF_SOURCE_OPERATION,
+                12,
+                facts.operations().iter().map(|row| row.id.0).collect(),
+            );
+            targets(
+                REF_SOURCE_OPERATION,
+                13,
+                facts
+                    .operations()
+                    .iter()
+                    .filter_map(|row| row.parent)
+                    .map(|id| id.0)
+                    .collect(),
+            );
+            targets(
+                REF_SOURCE_REGION,
+                14,
+                facts.operations().iter().map(|row| row.region.0).collect(),
+            );
+            let owners: Vec<_> = facts
+                .operations()
+                .iter()
+                .map(|row| row.owners)
+                .chain(facts.regions().iter().map(|row| row.owners))
+                .collect();
+            targets(
+                REF_SOURCE_OPERATION,
+                15,
+                owners
+                    .iter()
+                    .filter_map(|row| row.callable)
+                    .map(|id| id.0)
+                    .collect(),
+            );
+            targets(
+                REF_SOURCE_OPERATION,
+                16,
+                owners
+                    .iter()
+                    .filter_map(|row| row.class)
+                    .map(|id| id.0)
+                    .collect(),
+            );
+            targets(
+                REF_SOURCE_OPERATION,
+                17,
+                owners
+                    .iter()
+                    .filter_map(|row| row.namespace)
+                    .map(|id| id.0)
+                    .collect(),
+            );
+            targets(
+                REF_SOURCE_OPERATION,
+                18,
+                owners
+                    .iter()
+                    .filter_map(|row| row.header)
+                    .map(|id| id.0)
+                    .collect(),
+            );
+            targets(
+                REF_SOURCE_OPERATION,
+                19,
+                facts
+                    .operations()
+                    .iter()
+                    .filter_map(|row| row.result_context)
+                    .map(|id| id.0)
+                    .collect(),
+            );
+            targets(
+                REF_SOURCE_REGION,
+                20,
+                facts.regions().iter().map(|row| row.id.0).collect(),
+            );
+            targets(
+                REF_SOURCE_REGION,
+                21,
+                facts
+                    .regions()
+                    .iter()
+                    .filter_map(|row| row.parent)
+                    .map(|id| id.0)
+                    .collect(),
+            );
+            targets(
+                REF_SOURCE_OPERATION,
+                22,
+                facts
+                    .regions()
+                    .iter()
+                    .map(|row| row.anchor.operation.0)
+                    .collect(),
+            );
+            targets(
+                REF_SOURCE_REFERENCE,
+                23,
+                facts.references().iter().map(|row| row.id.0).collect(),
+            );
+            targets(
+                REF_SOURCE_OPERATION,
+                24,
+                facts
+                    .references()
+                    .iter()
+                    .map(|row| row.operation.0)
+                    .collect(),
+            );
+            targets(
+                REF_SOURCE_REGION,
+                25,
+                facts.references().iter().map(|row| row.region.0).collect(),
+            );
+            targets(
+                REF_SOURCE_OPERATION,
+                26,
+                facts
+                    .copy_candidates()
+                    .iter()
+                    .map(|row| row.declaration.0)
+                    .collect(),
+            );
+            targets(
+                REF_SOURCE_REFERENCE,
+                27,
+                facts
+                    .copy_candidates()
+                    .iter()
+                    .map(|row| row.reference.0)
+                    .collect(),
+            );
+            targets(
+                REF_SOURCE_OPERATION,
+                28,
+                facts
+                    .boundaries()
+                    .iter()
+                    .map(|row| row.operation.0)
+                    .collect(),
+            );
+            targets(
+                REF_SOURCE_REGION,
+                29,
+                facts.regions().iter().map(|row| row.id.0).collect(),
+            );
+        }
+        let mut expected_errors: Vec<_> = binder
+            .source_input_observations()
+            .errors
+            .iter()
+            .filter(|(module, _)| !local || module.index() >= binder.graph.base_len_for_test())
+            .map(|(module, _)| (REF_SOURCE_INPUT, REF_SCOPE, 30, module.0, module.0))
+            .collect();
+        let mut actual_errors: Vec<_> = input_records
+            .iter()
+            .filter(|row| row.2 == 30)
+            .map(|row| **row)
+            .collect();
+        expected_errors.sort_unstable();
+        actual_errors.sort_unstable();
+        assert_eq!(actual_errors, expected_errors, "collection error field 30");
+        counts[29] = expected_errors.len();
+        expected_total += expected_errors.len();
+        assert_eq!(
+            input_records.len(),
+            expected_total,
+            "no extra field, domain, or consumer"
+        );
+        for row in input_records {
+            if row.2 == 30 {
+                assert!(binder.graph.get(ScopeId(row.4)).is_some());
+                continue;
+            }
+            let input = binder
+                .source_input_observations()
+                .get(ScopeId(row.3))
+                .expect("exact consumed module owns every added edge");
+            let target = usize::try_from(row.4).unwrap();
+            match row.1 {
+                REF_SOURCE_OPERATION => assert!(target < input.facts.operations().len()),
+                REF_SOURCE_REGION => assert!(target < input.facts.regions().len()),
+                REF_SOURCE_REFERENCE => assert!(target < input.facts.references().len()),
+                REF_SCOPE => assert!(binder.graph.get(ScopeId(row.4)).is_some()),
+                REF_SOURCE_UNIT => assert_eq!(row.4, input.source.0),
+                domain => panic!("unexpected source-input target domain {domain}"),
+            }
+        }
+        counts
+    }
+
+    #[test]
+    fn source_input_audit_pins_all_fields_and_exact_consumer_local_targets() {
+        let fixtures = [
+            (
+                "manifest",
+                include_str!("spec/fixtures/source-reference-manifest.ts"),
+                SourceType::ts(),
+            ),
+            (
+                "tsx",
+                include_str!("spec/fixtures/source-reference-manifest.tsx"),
+                SourceType::tsx(),
+            ),
+            (
+                "init",
+                include_str!("spec/fixtures/source-reference-for-init.ts"),
+                SourceType::ts(),
+            ),
+            (
+                "test",
+                include_str!("spec/fixtures/source-reference-for-test.ts"),
+                SourceType::ts(),
+            ),
+            (
+                "update",
+                include_str!("spec/fixtures/source-reference-for-update.ts"),
+                SourceType::ts(),
+            ),
+            (
+                "keys",
+                include_str!("spec/fixtures/source-reference-type-keys.ts"),
+                SourceType::ts(),
+            ),
+            (
+                "writes",
+                include_str!("spec/fixtures/source-reference-write-wrappers.ts"),
+                SourceType::ts(),
+            ),
+            (
+                "scopes",
+                include_str!("spec/fixtures/source-scope-receipts.ts"),
+                SourceType::ts(),
+            ),
+            (
+                "holes",
+                include_str!("spec/fixtures/source-scope-holes.ts"),
+                SourceType::ts(),
+            ),
+            (
+                "reference-only",
+                include_str!("spec/fixtures/source-scope-reference-only.ts"),
+                SourceType::ts(),
+            ),
+        ];
+        let mut totals = [0; 30];
+        for (name, source, source_type) in fixtures {
+            let binder = audit_fixture(source, source_type, true);
+            let records = reference_records_for_test(&binder);
+            assert_eq!(records, local_reference_records_for_test(&binder));
+            let counts = assert_input_target_multisets(&binder, &records, false);
+            if name == "manifest" {
+                assert_eq!(counts[12], 2 * 272);
+            }
+            for (total, count) in totals.iter_mut().zip(counts) {
+                *total += count;
+            }
+        }
+        for (field, count) in totals.iter().enumerate() {
+            assert!(*count > 0, "field {} has no positive fixture", field + 1);
+        }
+    }
+
+    #[test]
+    fn source_input_audit_keeps_historical_and_continuation_views_separate() {
+        let mut base = audit_fixture(
+            include_str!("spec/fixtures/source-reference-manifest.ts"),
+            SourceType::ts(),
+            true,
+        );
+        let before = reference_records_for_test(&base);
+        assert_input_target_multisets(&base, &before, false);
+        base.freeze_as_base().unwrap();
+        assert_eq!(reference_records_for_test(&base), before);
+        assert_input_target_multisets(&base, &before, false);
+        assert_eq!(
+            assert_input_target_multisets(&base, &local_reference_records_for_test(&base), true),
+            [0; 30]
+        );
+        let fork = base.fork_delta().unwrap();
+        assert_eq!(
+            assert_input_target_multisets(&fork, &reference_records_for_test(&fork), false),
+            [0; 30]
+        );
+        let (mut builder, source) = ProjectBinderBuilder::resume_frozen_library(fork);
+        let arena = Allocator::default();
+        let parsed = Parser::new(&arena, "outside;", SourceType::ts()).parse();
+        let unit = CompilationUnit::implementation(source, &parsed.program);
+        builder.reserve_script_namespace_roots([(&parsed.program, unit)]);
+        let module = builder.add_module(&parsed.program, &[], unit).0;
+        SourceInputs::inject_collection_error_on_next_finish_for_test(module);
+        let binder = builder
+            .finish_frozen_library_continuation(Some(module))
+            .unwrap();
+        let full = reference_records_for_test(&binder);
+        let local = local_reference_records_for_test(&binder);
+        assert_input_target_multisets(&binder, &full, false);
+        assert_input_target_multisets(&binder, &local, true);
+        assert_eq!(
+            full.iter()
+                .filter(|row| row.0 == REF_SOURCE_INPUT)
+                .collect::<Vec<_>>(),
+            local
+                .iter()
+                .filter(|row| row.0 == REF_SOURCE_INPUT)
+                .collect::<Vec<_>>()
+        );
+        assert!(full
+            .iter()
+            .filter(|row| row.0 == REF_SOURCE_INPUT)
+            .all(|row| row.3 == module.0));
+    }
 
     fn fixture_rich_reference_binder() -> Binder {
         let prelude_allocator = Allocator::default();
@@ -1152,7 +1722,15 @@ mod tests {
     fn binder_reference_inventory_is_exhaustive_canonical_and_bounded() {
         let binder = fixture_rich_reference_binder();
         let records = reference_records_for_test(&binder);
-        assert_eq!(records.len(), 317, "rich-fixture manifest is append-only");
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| record.0 != REF_SOURCE_INPUT)
+                .count(),
+            317,
+            "existing rich-fixture edges are unchanged"
+        );
+        assert!(records.iter().any(|record| record.0 == REF_SOURCE_INPUT));
         assert!(records.windows(2).all(|rows| rows[0] <= rows[1]));
         assert!(records.iter().all(|record| record.2 <= 31));
 
@@ -1187,10 +1765,29 @@ mod tests {
                 REF_CANONICAL_DEFERRED_CHILD_INDEX,
                 REF_CANONICAL_UMD_EXPORT_INDEX,
                 REF_CANONICAL_EXPORT_CONTEXT_INDEX,
+                REF_SOURCE_INPUT,
             ])
         );
 
         let required_edges = [
+            (REF_SOURCE_INPUT, REF_SCOPE, 1),
+            (REF_SOURCE_INPUT, REF_SOURCE_UNIT, 2),
+            (REF_SOURCE_INPUT, REF_SCOPE, 3),
+            (REF_SOURCE_INPUT, REF_SCOPE, 4),
+            (REF_SOURCE_INPUT, REF_SOURCE_UNIT, 5),
+            (REF_SOURCE_INPUT, REF_SCOPE, 6),
+            (REF_SOURCE_INPUT, REF_SCOPE, 7),
+            (REF_SOURCE_INPUT, REF_SCOPE, 8),
+            (REF_SOURCE_INPUT, REF_SCOPE, 9),
+            (REF_SOURCE_INPUT, REF_SOURCE_OPERATION, 10),
+            (REF_SOURCE_INPUT, REF_SOURCE_REGION, 11),
+            (REF_SOURCE_INPUT, REF_SOURCE_OPERATION, 12),
+            (REF_SOURCE_INPUT, REF_SOURCE_REGION, 14),
+            (REF_SOURCE_INPUT, REF_SOURCE_REGION, 20),
+            (REF_SOURCE_INPUT, REF_SOURCE_REFERENCE, 23),
+            (REF_SOURCE_INPUT, REF_SOURCE_OPERATION, 24),
+            (REF_SOURCE_INPUT, REF_SOURCE_REGION, 25),
+            (REF_SOURCE_INPUT, REF_SOURCE_REGION, 29),
             (REF_SCOPE, REF_SCOPE, SCOPE_PARENT),
             (REF_SCOPE, REF_SYMBOL, SCOPE_LOCAL_SYMBOL),
             (REF_SCOPE, REF_SOURCE_UNIT, SCOPE_MODULE_SOURCE),

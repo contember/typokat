@@ -139,6 +139,7 @@ fn production_cutover_keeps_binder_shape_and_owns_one_table_index() {
                 && !line.starts_with("#[")
                 && !line.starts_with("pub ")
                 && *line != "module_sources: LayeredMap<ScopeId, SourceUnitKey>,"
+                && *line != "source_inputs: SourceInputs,"
                 && *line != "default_function_values: FxHashMap<(ScopeId, u32), ValueStorageId>,"
                 && *line != "next_source_key: SourceUnitKey,"
                 && *line != "frozen_prefix_writes: Vec<FrozenPrefixWrite>,"
@@ -154,6 +155,13 @@ fn production_cutover_keeps_binder_shape_and_owns_one_table_index() {
             .count(),
         1,
         "Binder owns one durable source-key index for frozen continuation"
+    );
+    assert_eq!(
+        binder_fields
+            .matches("source_inputs: SourceInputs,")
+            .count(),
+        1,
+        "Binder owns one private source-input observation collection"
     );
     assert_eq!(
         binder_fields

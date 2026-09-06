@@ -8,6 +8,7 @@ pub mod declaration;
 pub mod namespace;
 pub mod product;
 pub mod scope;
+mod source_inputs;
 pub mod source_references;
 pub mod symbol;
 
@@ -40,3 +41,7 @@ mod compilation_origin_spec;
 #[cfg(test)]
 #[path = "spec/source_reference_manifest_spec.rs"]
 mod source_reference_manifest_spec;
+
+#[cfg(test)]
+#[path = "spec/source_input_receipt_spec.rs"]
+mod source_input_receipt_spec;

@@ -263,6 +263,13 @@ requires `&mut Interner` while the relation engine borrows the store immutably:
    `StructuralTraversal` certifies balanced traversal and row integrity, not parser validity or
    authenticated binding scopes. Synthetic-empty manifests have `Unavailable` reference coverage.
    These facts contain no resolved binder identities, semantic results, or closed-use certificate.
+   The binder privately retains each consumed reference projection by shared allocation identity,
+   qualified by syntax module and source. Existing binding operations record exact scope-creation
+   anchors and parents; root normalization records its authorized parent transition at the mutation.
+   Missing attachments stay explicit. Finalization checks construction-time source/origin and scope
+   correspondence; only the actual builder-owned prelude receives the prelude exemption. These are
+   historical observations, not authentication of later mutable binder state or resolved lookup
+   answers. Freeze does not reissue them; fork/resume discards consumed-source observations.
 3. **Reservation and class publication.** The checker reserves class, alias, and interface
    identities, persistent binders, raw syntax slots, and lexical event tickets compilation-wide
    before lowering a class surface. `ClassSurfaceLowerer` has only narrow construction

@@ -15,6 +15,7 @@ use oxc_ast::AstKind;
 use oxc_ast_visit::{walk, Visit};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
+use std::sync::Arc;
 
 #[cfg(any(test, feature = "test-utils", feature = "measurement-counters"))]
 thread_local! {
@@ -202,7 +203,7 @@ pub struct SourceDeclarationManifest<'ast> {
     declarations: Box<[SourceDeclarationOccurrence<'ast>]>,
     type_fragments: Box<[SourceTypeFragmentOccurrence<'ast>]>,
     interface_occurrences: Box<[SourceInterfaceOccurrence]>,
-    source_references: SourceReferenceManifest,
+    source_references: Arc<SourceReferenceManifest>,
 }
 
 impl<'ast> SourceDeclarationManifest<'ast> {
@@ -212,7 +213,7 @@ impl<'ast> SourceDeclarationManifest<'ast> {
             declarations: Box::new([]),
             type_fragments: Box::new([]),
             interface_occurrences: Box::new([]),
-            source_references: SourceReferenceManifest::unavailable(),
+            source_references: Arc::new(SourceReferenceManifest::unavailable()),
         }
     }
 
@@ -236,10 +237,12 @@ impl<'ast> SourceDeclarationManifest<'ast> {
                 .expect("type-fragment projection is enabled")
                 .into_boxed_slice(),
             interface_occurrences: visitor.interface_occurrences.into_boxed_slice(),
-            source_references: visitor
-                .source_references
-                .expect("reference projection is enabled")
-                .finish(),
+            source_references: Arc::new(
+                visitor
+                    .source_references
+                    .expect("reference projection is enabled")
+                    .finish(),
+            ),
         }
     }
 
@@ -249,6 +252,10 @@ impl<'ast> SourceDeclarationManifest<'ast> {
 
     pub fn source_references(&self) -> &SourceReferenceManifest {
         &self.source_references
+    }
+
+    pub(super) fn reference_input(&self) -> Arc<SourceReferenceManifest> {
+        Arc::clone(&self.source_references)
     }
 
     #[cfg(test)]
