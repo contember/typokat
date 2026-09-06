@@ -35,6 +35,12 @@ parameters, and non-fresh union/object sources that remain exact. Acceptance res
 diagnostic above without weakening the preserved controls, query-order stability, or optional
 fallback inference.
 
+The reduced as-const sprint retains mixed-return contribution witnesses under
+[46](46-return-path-analysis.md) and broader candidate position/fixing controls under
+[122](122-signature-candidate-fixing-policy.md). Immutable literal modes are necessary transport,
+not proof that every aggregation policy is correct. Neither related item is closed by shipping the
+bounded literal-owned feature.
+
 ## Touch points
 
 `crates/typokat-check/src/check/infer/mod.rs` (`CallSiteCandidate`, structural candidate

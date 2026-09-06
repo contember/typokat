@@ -9,12 +9,13 @@ title: Narrowing tail — remaining loop forms, member paths, closures
 `do-while` bodies falls back to declared types (safe), member-path narrowing (`x.a` —
 narrowing is symbol-keyed today, so a discriminant check through a property doesn't
 narrow that path), correlated narrowing across dependent destructured bindings, closure
-narrowing of never-reassigned bindings, and assignment-target evaluation order. The last gap
-drops an error; the other slices over-report safely.
+narrowing of never-reassigned bindings, assignment-target evaluation order, and semantic assignment
+results through loops. Assignment evaluation and inferred-copy transfer can drop errors; a reset
+to a declared surface is not a blanket soundness guarantee.
 
 ## Problem
 
-Six slices, in value order:
+Seven slices, in value order:
 
 1. **Loop forms** — generalize the `while` edge machinery (back edge / exit / `break` /
    `continue`) to `for`, `for-of` (element typing needs iterables — a `lib.d.ts`-era
@@ -39,7 +40,21 @@ Six slices, in value order:
    RHS. The disabled `sr_deferred_ledger/b51_assignment_target_evaluation_order.ts` witness currently
    drops tsc's `TS2339` because the RHS sees the stale pre-target narrow type. The inverse official
    witness, `controlFlowAssignmentExpression.ts` stripped line 9, emits a surplus `TK2339` for the
-   same ordering error.
+    same ordering error.
+7. **Semantic assignment products and loop discharge** — retain the actual checked source and
+   contextual expression result separately from declared-target transfer. The retained
+   `b44_as_const/assignment_contextual_result.ts`, `loop_semantic_dependencies.ts`, and
+   `loop_query_local_discharge.ts` witnesses fail before the feature as well as on frozen M1.
+   They remain future acceptance under this owner, not prerequisites for bounded `as const`.
+   [ADR-0032](../decisions/0032-own-semantic-assignment-work-by-source-and-query-environment.md)
+   specifies effect adoption and query-local loop discharge; only actual future initializer demand
+   belongs jointly to [76](76-lazy-value-type-resolution.md).
+
+The same pre-existing transfer gaps appear in `b44_as_const/flow_target_reduction.ts` at lines
+6/35/40 and `assignment_semantic_reduction.ts` at lines 26/33/40. These mixed fixtures also contain
+required feature assertions: deferring the old failures must not disable their newly recovered
+errors or waive introduced invalid-write false positives. Exact-source comparisons and the retained
+feature boundary are recorded in the [as-const sprint](../sprints/sprint-2026-08-17-as-const.md).
 
 ## Approach / acceptance
 
@@ -47,8 +62,10 @@ One slice per sprint WU; corpus first per slice. The loop fixpoint discipline (n
 memoize provisional seeds — invariants §1) applies to every new edge kind. Cross-check
 tsc 6.0.3 --strict. The assignment-order slice must emit `TK2339` for the disabled witness, remove
 the official line-9 surplus, and keep the no-target-side-effect control clean. The loop-form slice
-must remove only the three named official `TK2339` records. The deliberate complex-RHS
-reset-to-declared rule remains unchanged.
+must remove only the three named official `TK2339` records. Changing complex-RHS transfer belongs
+to the separate semantic-product slice, not an incidental loop-edge cleanup. Its acceptance must
+cover exact-copy errors, nested assignments, loop-local demand and exactly-once child diagnostics;
+never memoize a provisional loop result or substitute exhaustion for successful recovery.
 
 ## Touch points
 

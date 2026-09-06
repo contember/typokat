@@ -67,6 +67,13 @@ R1c, minimal assignment/default/class repairs and the newly exposed dependent-re
 separate clusters. All four ordinary official regression files remain blockers; eight new rest-body
 property errors cannot be waived by deferring the broader rest feature.
 
+Independent triage also assigns pre-existing semantic assignment/loop-product gaps to
+[51](../backlog/51-narrowing-tail.md), mixed return aggregation to
+[46](../backlog/46-return-path-analysis.md) with 111, and broader candidate fixing/compound return
+roles to [122](../backlog/122-signature-candidate-fixing-policy.md). Those owners retain the exact
+witnesses and limits. Apart from the explicit mixed-return split, corpus registration and all
+mixed-fixture assertions remain untouched pending the respective minimal repair specs.
+
 **Why this is a separate sprint.** TypeScript implemented const contexts in
 [`microsoft/TypeScript#29510`](https://github.com/microsoft/TypeScript/pull/29510), independently of
 the later `satisfies` operator. This is an inference/provenance change, not an assignability operator.

@@ -26,6 +26,12 @@ oracle is `tests/cases/b46_return_paths/contextual_mixed_returns.ts`. Both the p
 and frozen M1 miss the two assignment errors. This does not defer newly introduced empty/bare-only
 callback errors or the contextual-void regression; those remain backlog 44's responsibility.
 
+Retained `tests/cases/b44_as_const/return_literal_contributions.ts` also belongs here, coordinated
+with [111](111-structural-inference-literal-provenance.md): combine ordinary and exact return
+contributions before endpoint widening. Both pre-feature and frozen M1 miss the assignments at
+lines 9/16. Preserve order-reversed and different-value controls. Deferral does not permit losing
+single-return const identity in the bounded feature.
+
 ## Approach / acceptance
 
 Classify each body's CFG exit node: fall-through-reachable exits vs return coverage,

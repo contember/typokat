@@ -100,6 +100,11 @@ and validated the same way.
   `1 | 2` where tsc widens to `number`. Typed or asserted literal members must remain exact, which
   rules out recursively widening every union marked only by outer freshness.
   <!-- div: id=calls/structural-inference-literal-provenance dir=under scope=s-call-arguments owner=../backlog/111-structural-inference-literal-provenance.md witness=../backlog/111-structural-inference-literal-provenance.md -->
+- **General candidate fixing and compound return roles (over-report).** Unconsumed contextual
+  parameters and intersection/conditional callee returns can trigger unnecessary widening or
+  constraint errors. Backlog 122 owns these pre-existing gaps, separately from direct enum-result
+  and consumed-parameter regression safety in the bounded `as const` feature.
+  <!-- div: id=calls/signature-candidate-fixing dir=over scope=s-call-arguments owner=../backlog/122-signature-candidate-fixing-policy.md witness=../../tests/cases/b44_as_const/contextual_parameter_fixing.ts -->
 - **A contextually typed argument is blamed at the argument (cosmetic).** When an argument that
   carries a contextual type — an arrow, or a fresh object/array literal — fails to match its
   parameter, typokat reports `TK2345` on the whole argument and names the inner mismatch in the
@@ -323,6 +328,10 @@ and validated the same way.
   results and miss downstream `TK2322`. This predates `as const`; backlog 46 retains the disabled
   contextual-return witnesses while the feature repairs its own empty/void callback regressions.
   <!-- div: id=flow/mixed-return-inference dir=under scope=a-missing-return owner=../backlog/46-return-path-analysis.md witness=../../tests/cases/b46_return_paths/contextual_mixed_returns.ts -->
+- Ordinary and exact return contributions can widen before combination, losing the same-value
+  exact result and downstream assignment errors. Backlog 46 owns endpoint aggregation with 111;
+  this does not defer single-return const identity.
+  <!-- div: id=flow/return-literal-contributions dir=under scope=a-missing-return owner=../backlog/46-return-path-analysis.md witness=../../tests/cases/b44_as_const/return_literal_contributions.ts -->
 - `TK2454` *used before assigned* — needs definite-assignment flow analysis.
   <!-- div: id=flow/used-before-assigned dir=under scope=a-definite-assignment owner=../backlog/47-definite-assignment.md witness=../../tests/cases/m1_binder_inference -->
 - `TK2451` *cannot redeclare* — binder check, deferred; fixtures use unique names.
@@ -458,6 +467,12 @@ flow-node CFG (M23), the single narrowing model.
   an assignment target before its right-hand side. typokat currently checks the RHS first, so a
   target-side assignment can leave a stale narrow type and drop TypeScript's `TS2339`.
   <!-- div: id=narrowing/assignment-target-evaluation-order dir=under scope=a-narrowing-tail owner=../backlog/51-narrowing-tail.md witness=../../tests/cases/sr_deferred_ledger/b51_assignment_target_evaluation_order.ts -->
+- Assignment expression context and loop-local semantic source availability can miss exact-copy
+  assignment errors even with explicitly available call signatures. Backlog 51 owns these older
+  gaps under ADR-0032; future local initializer demand also needs 76. Resetting a complex RHS to
+  its declared type is not a general proof of soundness for inferred-copy consumers.
+  <!-- div: id=narrowing/semantic-assignment-loop-products dir=under scope=a-narrowing-tail owner=../backlog/51-narrowing-tail.md witness=../../tests/cases/b44_as_const/loop_semantic_dependencies.ts -->
+  <!-- div: id=narrowing/contextual-assignment-result dir=under scope=a-narrowing-tail owner=../backlog/51-narrowing-tail.md witness=../../tests/cases/b44_as_const/assignment_contextual_result.ts -->
 
 ## Generics & constraints (M9 / M10 / M24)
 
