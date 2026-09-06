@@ -73,6 +73,12 @@ TK1360 diagnostics on tsc-clean class initializers; these are new compatibility 
 restored legacy errors. `publication_class_contextual_rest.ts` instead requires strict-tsc parity
 for ready positional class-arrow contexts and their actual body/call diagnostic owners.
 
+`publication_class_opaque_rest_boundary.ts` preserves six strict-tsc error identities and explicitly
+adds four initializer incompletes for needed opaque contextual rest projection. Its pre-existing
+type-parameter-default incomplete remains separate. Fixed symbols, ready symbolic elements and
+explicitly annotated source parameters must not gain initializer incompletes. An unused opaque rest
+after a needed fixed prefix likewise retains its existing relation error without an initializer notice.
+
 ADR-0036 narrows the class migration, not the bounded field const feature. The B44 class controls
 remain required. `b123_class_contextual_publication/` retains disabled future assertions for
 effective external and self-dependent class contexts; it is not part of the ordinary inventory.

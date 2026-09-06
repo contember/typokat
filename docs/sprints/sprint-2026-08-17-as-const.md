@@ -62,8 +62,15 @@ restorations or backlog-123 completion. That amendment does not waive the ready-
 **Next:** align already-admitted class-arrow positional parameters with ready array/tuple contexts;
 preserve inferred body and completed function identities, explicit parameter/return authority and
 [ADR-0037](../decisions/0037-retain-class-initializer-validation-sources.md)'s source ownership.
-Limit implementation to the query-free class initializer and the existing ready rest projection seam,
-plus focused tests; no new class preparation, SCC scheduling, inference policy or receipt suppression.
+Move existing pure positioning into `checker/signature_projection.rs`; Pass delegates unchanged,
+and a private `SurfaceTypeFactory` wrapper gates ready class inputs before sharing the same algorithm.
+Territory: that new module, `checker/{mod,calls}.rs`, `classes/{initializer,surface_types}.rs`, tests.
+The leader explicitly reduces class admission when a requested position needs an opaque rest container
+(`T`, nested rest `T`, or a union containing one), even if constrained/defaulted: report the existing
+initializer incomplete, retain lexical diagnostics, discard that initializer's receipts. This is new
+admission behavior, not an ADR-0038 waiver. Fixed symbols and symbolic array/tuple elements remain ready;
+explicit source annotations bypass unused projection. Gate only positioning container edges; preserve
+Pass opaque fallback, optional-slot counts, declared IDs and all query/inference/reporting ownership.
 
 ### Preparation and transport contract
 

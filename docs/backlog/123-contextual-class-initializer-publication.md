@@ -42,6 +42,15 @@ self-dependent contexts are affected; removing downstream uses does not remove t
 The broad controls stay clean. These new errors are not restored legacy behavior or completion of
 the downstream TS2322 witnesses above. Ready rest-parameter projection bugs are not covered here.
 
+`publication_class_opaque_rest_boundary.ts` pins a separate bounded admission decision: a class
+initializer that needs a contextual position from an opaque rest container is explicitly incomplete,
+even if a type parameter has an array constraint/default or appears inside a represented rest tuple.
+This reduces previously admitted class publication rather than claiming those cases were already
+unsupported. The existing lexical errors still run. Fully annotated source parameters do not request
+unused projection; fixed symbolic parameters and symbolic elements of ready containers remain valid.
+Future contextual preparation owns supplying these container views, without leaking query capability
+into construction or changing the ordinary Pass rest fallback. Coordinate rest relations with 69.
+
 ## Approach / acceptance
 
 Design the semantic preparation and construction schedule first. An owned initializer-context

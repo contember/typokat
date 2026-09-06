@@ -525,6 +525,13 @@ type, clamp-to-constraint inference reporting `TK2345`, `TK2313` for a circular 
   body checks remain valid; ready producer bugs and source-scope leaks are not covered. Backlog 123
   still requires correct field publication and the unchanged downstream TS2322 witnesses.
   <!-- div: id=classes/conservative-contextual-publication dir=over scope=s-assignability owner=../backlog/123-contextual-class-initializer-publication.md witness=../../tests/cases/b44_as_const/publication_class_conservative_external.ts -->
+- **Opaque contextual rest containers do not publish inferred class arrow parameters (over-report).**
+  Required positional projection from a symbolic rest container, including constrained/defaulted
+  symbols and nested rest containers, records initializer incompleteness instead of using the whole
+  container as a parameter type. This is an explicit admission reduction; lexical diagnostics remain.
+  Ready arrays/tuples retain symbolic element IDs, and explicit source annotations bypass unused
+  projection. Ordinary Pass fallback behavior is unchanged; future preparation belongs to backlog 123.
+  <!-- div: id=classes/opaque-contextual-rest-projection dir=over scope=s-assignability owner=../backlog/123-contextual-class-initializer-publication.md witness=../../tests/cases/b44_as_const/publication_class_opaque_rest_boundary.ts -->
 
 Implemented: fields/constructor/methods/`this`/`new`/structural instances (M11); inheritance,
 including local plain-identifier generic heritage applications (M12/M16); access modifiers +
