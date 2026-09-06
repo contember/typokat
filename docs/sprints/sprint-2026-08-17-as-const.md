@@ -30,6 +30,43 @@ for deferred cases under their backlog owner. Core literal, arrow/contextual, as
 enum and class regressions remain required wherever the feature introduces them. General pre-existing
 gaps can be deferred explicitly; no blanket scoreboard rebaseline or diagnostic suppression follows.
 
+### Resumed repair baseline and next unit
+
+Leader reconstructed inherited WU1 + frozen M1 + independently reviewed R1a in a new delivery
+worktree on `68edd1a2`. All 40 M1/R1a file hashes match their retained manifests; landed binder and
+lifecycle-scanner code is unchanged. `cargo check --all-targets` passes. No R1b/R1b2/tracer production
+code is in this candidate. It is a repair baseline, not an integration receipt.
+
+Independent source comparison assigns general construction-order gaps to 120, but confirms two
+non-deferrable regressions: `recursive_constraint_fallbacks.ts` and
+`constraint_instantiation_order_supplied.ts` matched pre-feature diagnostics and now gain `TK2589`.
+Repair them without importing the rejected planner. Preserve acyclic exact dependent constraints,
+constrained candidate modes and the corrected reverse-dependent control. Other introduced depth
+errors also require explicit disposition; old missing union errors are not permission for new losses.
+
+R2a starts now, independently of construction order: one reserved arrow producer, default-expression
+tickets exactly once, explicit return annotation separate from return-expression context, actual
+source return publication, and ordinary outer callback obligation ownership. Keep all assertions in
+`contextual_arrow_checks.ts` and the retained `contextual_return_contexts.ts`. Ready contextual
+unannotated defaults use the same default owner; no separate post-body checker. The sole previously
+approved old-test amendment changes the ordinary object callback parameter from `any` to `number`
+and renames that assertion while retaining its actual `string` return, one error and no incompletes.
+
+The old mixed bare-return/fallthrough assertions moved intact into
+`b46_return_paths/contextual_mixed_returns.ts`; they are not R2a acceptance under the reduced scope.
+General return-contribution aggregation also remains with 46/111. Empty/bare-only source returns,
+value-returning contextual `void`, explicit annotation rejection, nested callback return context and
+single-return const identity remain mandatory. No diagnostic truncation, fabricated contextual
+return type, context removal, duplicate parameter/default/body walk or whole-Pass snapshot is allowed.
+
+R2a changes only arrow/contextual production and its directly owned body/default state in the checker,
+plus focused tests. It does not implement row correlation, generic fixing policy, assignment-flow
+availability, class demand or a new relation engine. Prove candidate rollback and selected/rejected
+owner counts. Then independently review against strict tsc and run the contextual differential gate.
+R1c, minimal assignment/default/class repairs and the newly exposed dependent-rest FPs follow as
+separate clusters. All four ordinary official regression files remain blockers; eight new rest-body
+property errors cannot be waived by deferring the broader rest feature.
+
 **Why this is a separate sprint.** TypeScript implemented const contexts in
 [`microsoft/TypeScript#29510`](https://github.com/microsoft/TypeScript/pull/29510), independently of
 the later `satisfies` operator. This is an inference/provenance change, not an assignability operator.

@@ -319,6 +319,10 @@ and validated the same way.
 
 - `TK2355` *function must return a value* — needs control-flow reachability (with narrowing).
   <!-- div: id=flow/missing-return-value dir=under scope=a-missing-return owner=../backlog/46-return-path-analysis.md witness=../../tests/cases/m3_functions -->
+- Mixed value/bare returns and reachable fallthrough can omit `undefined` from inferred callback
+  results and miss downstream `TK2322`. This predates `as const`; backlog 46 retains the disabled
+  contextual-return witnesses while the feature repairs its own empty/void callback regressions.
+  <!-- div: id=flow/mixed-return-inference dir=under scope=a-missing-return owner=../backlog/46-return-path-analysis.md witness=../../tests/cases/b46_return_paths/contextual_mixed_returns.ts -->
 - `TK2454` *used before assigned* — needs definite-assignment flow analysis.
   <!-- div: id=flow/used-before-assigned dir=under scope=a-definite-assignment owner=../backlog/47-definite-assignment.md witness=../../tests/cases/m1_binder_inference -->
 - `TK2451` *cannot redeclare* — binder check, deferred; fixtures use unique names.

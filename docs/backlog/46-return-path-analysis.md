@@ -21,6 +21,11 @@ The same return-model gap affects inference: a bare `return;` currently contribu
 so it is not folded as `undefined` into the inferred return union. Mixed `return value;` / bare
 `return;` paths must infer the tsc-equivalent union and let downstream assignability report it.
 
+The reduced `as const` sprint defers this pre-existing mixed/fallthrough gap here. Its preserved
+oracle is `tests/cases/b46_return_paths/contextual_mixed_returns.ts`. Both the pre-feature checker
+and frozen M1 miss the two assignment errors. This does not defer newly introduced empty/bare-only
+callback errors or the contextual-void regression; those remain backlog 44's responsibility.
+
 ## Approach / acceptance
 
 Classify each body's CFG exit node: fall-through-reachable exits vs return coverage,
