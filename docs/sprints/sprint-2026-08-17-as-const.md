@@ -335,6 +335,35 @@ a new source scheduler, waive the union witnesses, or claim R1b/B44 completion f
 The producer boundary requires a separate architecture unit with an executable ownership and
 publication contract before further cutover. No production integration or closure gates are waived.
 
+#### Intersection tracer review and bounded remediation
+
+Independent review returned FAIL despite passing 152 type, 161 query, 82 inference, and 43 publisher
+tests. Four concrete failures remain: an unavailable class hidden inside an admitted declared-array
+operand bypasses identity preflight; finite same-recipe/different-mapper nesting is called a cycle;
+shared intersection DAGs expand as trees; and the product-signature seam admits open composite
+operands that the adapter cannot consume. The last issue causes real valid product-backed calls to
+become incomplete, not just an untested hypothetical extension.
+
+The active remediation is the complete immutable-application traversal cluster:
+
+- `R = Intersection(T, B)`, `inner = R[T := C]`, `outer = R[T := inner]` must materialize through
+  both raw and derived APIs and public demand to the same canonical `B & C`. Preserve both owners
+  and their mapper identities; genuine active re-entry and malformed recipes remain non-clean.
+- For `Intersection(never, Declared(Array(Type(unpublished-class))))`, cold and warm identity,
+  assignability in both directions, and demand must all exhaust before success. Cover the complete
+  admitted recipe-child closure, including mapper substitutions, not only direct intersection
+  children. Repeat with a poisoned publication and after an earlier failed demand.
+- For `D0 = Intersection(B, C)` and `Dn = Intersection(Dn-1, Dn-1)`, completed projection work is
+  shared by complete immutable application. Raw/derived materialization and public demand must not
+  expand the linear DAG exponentially. Assert work/visit counts or a bounded deep witness, not a
+  wall-clock threshold. Preserve taint and derivation identity; incomplete results are not completed
+  memo entries. The retained ordered operation remains separate from canonical projection.
+
+Do not modify the overbroad publisher seam during that cluster. Its separate admission repair must
+preserve the real source-product witness and all valid open object/array/tuple/function controls,
+without introducing a fixture hook, permissive recovery, or claiming broader form coverage. Both
+clusters need review before any tracer acceptance; neither changes the union-producer STOP.
+
 ### Approved feasibility reset — 2026-09-05
 
 The user approved only spec expansion, bounded literal-model and assignment-flow feasibility,
