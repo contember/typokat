@@ -54,6 +54,10 @@ ledger). The public [`README.md`](../../README.md) "Known limitations" is the us
 
 ## Marker convention
 
+The B44 `publication_*` fixtures specify ADR-0035's literal-publication roles and grouping boundaries.
+Their mutable-copy checks complement direct type-store mode tests; immediate literal assignability
+alone cannot detect a retained widening wrapper.
+
 `b46_return_paths/contextual_mixed_returns.ts` is a disabled future acceptance fixture owned by
 backlog 46. It preserves the mixed/fallthrough return assertions separated from bounded backlog 44;
 it is not counted in the ordinary gate until that return-path work is implemented.

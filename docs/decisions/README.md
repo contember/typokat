@@ -50,3 +50,4 @@ a commit message suffices.
 - [`0032`](0032-own-semantic-assignment-work-by-source-and-query-environment.md) — own semantic assignment work by source and query environment — accepted (2026-09-06)
 - [`0033`](0033-separate-contextual-row-views-from-symbolic-signatures.md) — separate contextual row views from symbolic signatures — accepted (2026-09-06)
 - [`0034`](0034-own-callable-construction-before-publishing-signatures.md) — own callable construction before publishing signatures — proposed (2026-09-06)
+- [`0035`](0035-finalize-literal-types-at-publication-owners.md) — finalize complete literal identities at role-specific publication boundaries — accepted (2026-09-06)

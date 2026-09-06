@@ -26,11 +26,12 @@ oracle is `tests/cases/b46_return_paths/contextual_mixed_returns.ts`. Both the p
 and frozen M1 miss the two assignment errors. This does not defer newly introduced empty/bare-only
 callback errors or the contextual-void regression; those remain backlog 44's responsibility.
 
-Retained `tests/cases/b44_as_const/return_literal_contributions.ts` also belongs here, coordinated
-with [111](111-structural-inference-literal-provenance.md): combine ordinary and exact return
-contributions before endpoint widening. Both pre-feature and frozen M1 miss the assignments at
-lines 9/16. Preserve order-reversed and different-value controls. Deferral does not permit losing
-single-return const identity in the bounded feature.
+The active as-const sprint now includes the bounded value-return timing contract from
+[ADR-0035](../decisions/0035-finalize-literal-types-at-publication-owners.md): combine the value
+returns already visited before finalizing their literal modes. Its retained
+`tests/cases/b44_as_const/return_literal_contributions.ts` witnesses missed assignments at lines
+9/16 in both pre-feature and frozen M1. This inclusion supersedes their earlier deferral, not the
+bare-return/fallthrough work above, and does not claim that the implementation is accepted.
 
 ## Approach / acceptance
 

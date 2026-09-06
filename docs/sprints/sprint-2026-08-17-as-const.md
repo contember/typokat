@@ -6,6 +6,41 @@ referenced values.
 
 ## Current delivery boundary — user-approved reduction, 2026-09-06
 
+### Active unit: role-aware literal publication — user approved
+
+The user approved the independently grounded replacement contract in
+[ADR-0035](../decisions/0035-finalize-literal-types-at-publication-owners.md). It supersedes the paused
+helper-only repair strategy below. Preserve the immutable mode-bearing type model; replace split
+preservation/mode decisions with one checker-local operation returning a completed `TypeId`.
+
+One implementation unit owns `checker/literal_publication.rs`, `expr.rs`, `calls.rs`, `statements.rs`,
+`classes/initializer.rs`, `classes/surface_types.rs`, and their required checker-module/test wiring.
+These shared seams cannot be split into parallel source edits. The primary WU1 and rejected
+experiments remain preserved; use the isolated delivery candidate. Implementation remains distinct
+from independent review, leader verification and final integration.
+
+Leader acceptance adds `publication_grouping.ts`, `publication_union_sources.ts`,
+`publication_return_aggregation.ts`, and `publication_class_roles.ts`, with strict tsc 6.0.3 line/code
+oracles. Retain all prior arrow/default/literal/container regression fixtures and ownership tests.
+Direct Rust tests must distinguish regular and widening identities, not merely their display. Pin
+whole-source versus per-member policy, finalization before element collection, inferred-return
+finalization after value collection, both union orders, references and readiness. A successful
+contextual mode decision does not replace the ordinary compatibility obligation.
+
+The approved timing correction applies to all existing inferred callable-body consumers, not an
+arrow-only transitional branch. It includes multiple value-return bodies and the previously deferred
+`return_literal_contributions.ts` acceptance. It does not discover bare/fallthrough return paths or
+add reachability analysis. Preserve explicit annotations and satisfies/default/effect ownership.
+Class finalization uses its existing narrow factory and supported syntax; no declaration demand,
+construction-time queries, new generic policy, correlated rest implementation or audit cleanup.
+
+Gates: focused model/producer tests and all publication fixtures; checker tests with every inherited
+failure explicitly classified; Clippy/fmt; independent adversarial review of the complete cumulative
+change; existing three-seed differential corpus plus added transition compositions and unchanged
+repro scoreboard; leader ordinary/full/official gates. Known R1c/M2/M3/rest and inventory/tag-guard
+residuals remain visible, not waived. Freeze all evidence and source hashes before review. A bounded
+unit acceptance is not whole-as-const acceptance, and no failing full feature candidate may land.
+
 The user explicitly authorized shipping the useful bounded feature rather than reaching complete
 TypeScript compatibility in this step, with remaining issues assigned to backlog owners. This
 supersedes the expanded completion chain below where it made general compatibility work mandatory.

@@ -329,8 +329,9 @@ and validated the same way.
   contextual-return witnesses while the feature repairs its own empty/void callback regressions.
   <!-- div: id=flow/mixed-return-inference dir=under scope=a-missing-return owner=../backlog/46-return-path-analysis.md witness=../../tests/cases/b46_return_paths/contextual_mixed_returns.ts -->
 - Ordinary and exact return contributions can widen before combination, losing the same-value
-  exact result and downstream assignment errors. Backlog 46 owns endpoint aggregation with 111;
-  this does not defer single-return const identity.
+  exact result and downstream assignment errors. ADR-0035 includes existing value-return timing in
+  the active as-const repair; the gap remains until that cutover is verified. Backlog 46 retains
+  the separate return-path analysis, with 111 owning broader contribution inference.
   <!-- div: id=flow/return-literal-contributions dir=under scope=a-missing-return owner=../backlog/46-return-path-analysis.md witness=../../tests/cases/b44_as_const/return_literal_contributions.ts -->
 - `TK2454` *used before assigned* — needs definite-assignment flow analysis.
   <!-- div: id=flow/used-before-assigned dir=under scope=a-definite-assignment owner=../backlog/47-definite-assignment.md witness=../../tests/cases/m1_binder_inference -->
