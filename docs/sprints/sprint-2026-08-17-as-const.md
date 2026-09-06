@@ -51,6 +51,12 @@ existing checker-owned demand/preparation seam and its typed failure propagation
 preservation or fake ready context is allowed. This does not authorize evaluator access in class
 construction or new declaration-demand breadth.
 
+One existing message expectation is deliberately corrected: B61 `field_initializers.ts:9` keeps
+its TK2322 and target `[number, string]`, but the rendered source is now `[number, number]`, not
+`[1, 2]`. The leader queried the exact initializer with strict TypeScript 6.0.3 and verified
+`[number, number]`; the oracle still reports the incompatible second element. This is mutable-slot
+publication progress under ADR-0035, not an omitted diagnostic or blanket scoreboard update.
+
 The user explicitly authorized shipping the useful bounded feature rather than reaching complete
 TypeScript compatibility in this step, with remaining issues assigned to backlog owners. This
 supersedes the expanded completion chain below where it made general compatibility work mandatory.

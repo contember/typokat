@@ -6,7 +6,7 @@ type Shape = { kind: string };
 class C {
   n: number = "not-number"; // error[TK2322]: Type 'string' is not assignable to type 'number'
   s: Shape = { kind: "c", extra: 1 }; // error[TK2353]: 'extra' does not exist
-  t: [number, string] = [1, 2]; // error[TK2322]: Type '[1, 2]' is not assignable to type '[number, string]'
+  t: [number, string] = [1, 2]; // error[TK2322]: Type '[number, number]' is not assignable to type '[number, string]'
   o: { a: { b: number } } = { a: { b: 1, c: 2 } }; // error[TK2353]: 'c' does not exist
   u: string | number = true; // error[TK2322]
   arr: number[] = [1, "x"]; // error[TK2322]
