@@ -90,6 +90,8 @@ composition diagnostics, including mutable copies, when precise scalar results c
 phases and callback-return mapper authorities. They do not approve the rejected observation transport.
 `inference_native_boundary_regressions.ts` pins P/R parameter isolation, literal-union return context
 and equal upper-bound mode retention, including exact reads and mutable-copy writes together.
+`inference_returned_callback_parameter_context.ts` keeps parameter P distinct from return R inside
+returned callbacks and object/tuple wrappers; valid reads and invalid writes occupy separate rows.
 
 ADR-0036 narrows the class migration, not the bounded field const feature. The B44 class controls
 remain required. `b123_class_contextual_publication/` retains disabled future assertions for

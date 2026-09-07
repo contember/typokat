@@ -104,6 +104,10 @@ rejected: R reaches callback parameters too early, literal-union constraints los
 and the equal-upper-bound branch changes the ordinary literal mode. Repair these together under
 ADR-0039 without another architecture change. `inference_native_boundary_regressions.ts` pins the
 lost-error/valid-read/copy pairs; retain occurrence order and the existing query/publication owners.
+Product `5da34bd1…` repairs those minimal cases but still substitutes R through returned callable
+parameters. Apply the same native context product at the callable-return boundary, including object
+and tuple wrappers; `inference_returned_callback_parameter_context.ts` separates the three required
+write errors from the three clean exact reads. This is a residual implementation defect, not new scope.
 
 ### Acceptance witnesses
 
