@@ -188,6 +188,56 @@ and recursive-default fixtures have 11 leader-verified strict-tsc markers; the f
 diagnostic set already matches all three frozen baselines. The authoritative oracle is
 `registered-callable-leader-spec-oracle.json`, not its earlier draft containing an unrelated old FP.
 
+### Registered-callable implementation sequence
+
+The three approved stages are subdivided into the sequential units below. Shared-file ownership
+transfers only after independent acceptance. `registered-callable-implementation-map.md` supplies
+the frozen source audit; the contract remains ADR-0040, not the external sketch's incidental spelling.
+
+| Unit | Deliverable / write boundary | Required proof before the next unit |
+|---|---|---|
+| U1 | Neutral registered identity in types; immutable safety/snapshot data; query/relation views, ordered attempts and explicit lookup adapters; no source producer | Direct real-query lifecycle tests below; unchanged source behavior |
+| U2 | Complete constraint/default use metadata at existing producers and descriptor rewrites | Actual ordinary/retained-class descriptors; exact hash/remap/erasure/circular-clear behavior |
+| U3 | Current-binder/manifest admission join and complete const-copy use plans | All intended 22-file producers selected; explicit future-use/authentication rejection; no registration on rejection |
+| U4 | Full/partial native completion and default continuations | Original/active/completed identity, violations, exact reverse recovery and default controls; differential gate |
+| U5 | Header/call/early-assignment field service and atomic source cutover | Real CheckerSession timing, no reporting replay, held effects once, all 37 rows and clean reads |
+| U6 | Independent integration review and unchanged-tree closure | Complete feature gates; no model-only or static-table acceptance |
+
+U1 starts only after M2 acceptance and authentication of the integration base. Neutral model IDs stay
+in `typokat-types`; source keys, permits and continuations stay checker-owned. Extend the existing
+combined `PublishedClassLookup` with a required snapshot accessor and explicit empty adapters for
+genuinely classes-only contexts. Preserve its class/alias publication token; track callable domain and
+persistent availability separately. No second generic lookup parameter, mutable publication table,
+new source executor or native-fixer algorithm belongs in U1.
+
+#### U1 leader direct-test specification
+
+Use the real Interner, relation engine and SemanticQueryCoordinator. A model test may supply validated
+immutable field facts, but must not impersonate a lexical source executor. These are acceptance
+assertions to encode in the direct test cluster, not claims that tests already exist or pass.
+
+| Test boundary | Required observation |
+|---|---|
+| Safe transport | Copy, identity and unknown assignment preflight the full original closure; every shape field remains missing |
+| Hidden dependency | Poison/unavailability in an unused bound, return component or erased argument defeats identity/top/warm enclosing success |
+| Authentication | Wrong domain, argument arity, endpoint and binder alignment fail distinctly from a valid missing field |
+| Ordered request | Each missing binder/parameter/return/bound read returns one exact application/field request, never a native batch or verdict |
+| Receiving transaction | Ready nested work followed by a missing field restores pre-existing and overwritten query entries, including ancestor cache state |
+| Snapshot persistence | Reuse one query state across old/new/old/new snapshots; each sees only its own missing, completed or failed answers |
+| Partial field availability | A completed return tuple is usable while the descriptor remains absent; no partial FunctionType is interned |
+| Bound ownership | A selected-owned parameter inside that tuple consults snapshot ownership before Store; Missing requests a bound, Absent does not |
+| Completion identity | Repeated completed reads return the same TypeId with no allocation/query; conflicting publication cannot overwrite a field |
+| Ancestor caches | Success using pre-ready fields cannot promote its own or enclosing tuple/object relation into durable completed-callable caches |
+| Inspection | Rendering is inert; an unpermitted query retains its source request and cannot mint execution authority |
+| Transport/census | Equal applications hash equally; changed domain/registration/argument differs; substitution preserves identity and real outer edges; invalid fork/import domains fail |
+
+Predeclare `RegisteredCallable` as a new append-only tag and adjudicate each guarded production
+match, including rendering and reference traversal. The already-present `WideningLiteral` guard drift
+is a separate baseline obligation, not permission to rebaseline both tags blindly. Source requests
+must propagate losslessly through source-capable attempt APIs; no panic, unreachable branch, fake
+exhaustion or successful eager fallback stands in for unimplemented field service. Public source
+registration remains unreachable in U1, so its source diagnostic gate must be exactly unchanged.
+
 M2 follows [ADR-0032](../decisions/0032-own-semantic-assignment-work-by-source-and-query-environment.md):
 expression result, assigned source and declared-target transfer are distinct; keep non-union declared
 surfaces and whole-source union coverage. Exhaustion is not successful reset. Flow discharge is
