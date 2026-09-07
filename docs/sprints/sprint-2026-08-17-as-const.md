@@ -99,7 +99,11 @@ where sharing is actually restored and verify any deliberate environment-induced
 
 During implementation run focused gates. On the stable candidate run differential 1,200, owner 116,
 publication 604, repro and official gates once. Review changed mechanisms with authenticated reuse for
-unchanged code; no repeated whole-audit loops. The replacement remains unimplemented and unaccepted.
+unchanged code; no repeated whole-audit loops. Candidate `61a0daff…` is implemented but independently
+rejected: R reaches callback parameters too early, literal-union constraints lose return shaping,
+and the equal-upper-bound branch changes the ordinary literal mode. Repair these together under
+ADR-0039 without another architecture change. `inference_native_boundary_regressions.ts` pins the
+lost-error/valid-read/copy pairs; retain occurrence order and the existing query/publication owners.
 
 ### Acceptance witnesses
 
