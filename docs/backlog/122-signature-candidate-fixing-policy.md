@@ -9,6 +9,12 @@ blocked-by: []
 **Summary.** Complete ordinary inference policy for candidate position, contextual parameter
 consumption and compound callee return roles. Effort L; distinct from shipping bounded `as const`.
 
+[ADR-0039](../decisions/0039-own-inference-modes-and-context-mappers-at-native-call-boundaries.md)
+pulls a necessary bounded subset into the active repair: independent-input preparation and compatible
+upper bounds for independently typed callback-input-only targets. General variance/priorities,
+post-fix candidate exclusion, suffix scheduling/freezing and conditional substitution modeling remain
+here. This scope decision is not completion of the repair or this backlog item.
+
 ## Problem
 
 The as-const review exposed existing generic inference differences that do not require complete
