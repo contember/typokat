@@ -45,36 +45,32 @@ formatting. These receipts do not cover the primary WU1 edits or the current fea
 
 The delivery baseline reconstructs inherited WU1 + frozen M1 + reviewed R1a, retaining landed binder
 and scanner changes. R1b/R1b2 and later planner/tracer production experiments must not be copied in.
-M1's immutable literal-mode migration and all subsequent feature implementation remain unaccepted.
+M1's immutable literal-mode migration remains unaccepted as a shipping baseline. The publication
+cluster below is accepted in isolation; it does not accept the baseline's remaining regressions.
 
-## Active unit — Pass-owned effective publication contexts
+## Publication cluster — accepted in isolation
 
-Implement [ADR-0035](../decisions/0035-finalize-literal-types-at-publication-owners.md), narrowed only
-at the class boundary by ADR-0036. The first role-aware candidate passes focused publication tests
-but introduces seven B32 `keyof` false positives: child checking prepares context, then publication
-uses the original deferred context instead of the effective literal union.
+**Bounded GO:** frozen `d1dab67b…` has no independent review findings. Leader reran 26 focused cases,
+three projection tests, full tests, ordinary conformance, Clippy and fmt on the unchanged 2,067-file
+candidate. Full tests retain only the known compound failure, two type-tag guards, stale 671-versus-599
+inventory and the same 182 marker mismatches across 787 sources. Review also retains 1,200 raw-output
+matches, 116 complete owner records, 72 strict-tsc transitions and the unchanged repro scoreboard.
 
-**Independent review: FAIL.** Candidate `036f7863…` repairs ready-rest types but still withholds a
-fixed slot when an unused opaque-union rest rejects full-signature projection, losing a bad-call error.
-The new conservative external/self-dependent errors are explicitly accepted by
-[ADR-0038](../decisions/0038-reject-inconsistent-contextual-class-publication.md), not called legacy
-restorations or backlog-123 completion. That amendment does not waive the ready-rest producer defect.
-**Review contract:** align already-admitted class-arrow positional parameters with ready array/tuple contexts;
-preserve inferred body and completed function identities, explicit parameter/return authority and
-[ADR-0037](../decisions/0037-retain-class-initializer-validation-sources.md)'s source ownership.
-Move existing pure positioning into `checker/signature_projection.rs`; Pass delegates unchanged,
-and a private `SurfaceTypeFactory` wrapper gates ready class inputs before sharing the same algorithm.
-Territory: that new module, `checker/{mod,calls}.rs`, `classes/{initializer,surface_types}.rs`, tests.
-The leader explicitly reduces class admission when a requested position needs an opaque rest container
-(`T`, nested rest `T`, or a union containing one), even if constrained/defaulted: report the existing
-initializer incomplete, retain lexical diagnostics, discard that initializer's receipts. This is new
-admission behavior, not an ADR-0038 waiver. Fixed symbols and symbolic array/tuple elements remain ready;
-explicit source annotations bypass unused projection. Gate only positioning container edges; preserve
-Pass opaque fallback, optional-slot counts, declared IDs and all query/inference/reporting ownership.
-The repair is limited to `signature_projection.rs` and direct projection/producer tests: return a
-known fixed declared ID independently of unused rest alternatives. Pin identity/literal/mixed source
-forms in `publication_class_unused_union_rest.ts` (six strict-tsc errors, zero incompletes). Keep the
-ordinary Pass entry unchanged; do not broaden requested opaque-rest admission or alter failure recovery.
+Authorities: `publication-fixed-slot-independent-review.md`, `publication-cluster-leader-closure.json`,
+and `publication-fixed-slot-leader-authentication.json` under the evidence root. This is not shipping
+acceptance of M1/WU1 or backlog 44; production stays isolated until its baseline regressions are closed.
+
+Publication follows [ADR-0035](../decisions/0035-finalize-literal-types-at-publication-owners.md),
+the retained-source boundaries of [ADR-0037](../decisions/0037-retain-class-initializer-validation-sources.md),
+and the explicit conservative preparation-gap policy of
+[ADR-0038](../decisions/0038-reject-inconsistent-contextual-class-publication.md). Requested opaque-rest
+admission is separately reduced under spec `c292338a`, owned by backlog 123. Fixed declared IDs are
+independent of unused rest alternatives; normal Pass recovery and annotation authority are unchanged.
+
+**Next active front:** read-only R1c causal refresh for the two direct generic-enum regressions. The old
+`r1c-design.md` depends on rejected R1b experiments and is not implementation authority. Bound the
+new unit against this accepted publication candidate; broader pre-existing fixing/return-role work
+stays with backlog 122. No new production territory is granted before its separate acceptance spec.
 
 ### Preparation and transport contract
 
@@ -135,12 +131,12 @@ at its `as const` expression. Only the separately verified broad controls have p
 
 ## Remaining critical path
 
-Close the active publication cluster before starting another implementation front. Each later unit
-needs its own bounded spec, independent review and exact regression disposition.
+Keep the accepted publication cluster as the frozen baseline. Each remaining unit needs its own
+bounded spec, independent review and exact regression disposition before implementation acceptance.
 
 | Order | Required work / retained blocker |
 |---|---|
-| 1 | Repair the three independent publication findings; re-review the cumulative cutover, including bounded class changes under ADR-0036 |
+| 1 | Publication cluster accepted in isolation; preserve its source/diagnostic contracts during remaining repairs |
 | 2 | R1c: retained callee return role, original candidate position and actual contextual parameter consumption; fix B42 `structural_transport.ts:11` and direct enum-result over-widening without an enum exception |
 | 3 | Minimal recursive fallback repair: `recursive_constraint_fallbacks.ts` and `constraint_instantiation_order_supplied.ts` gain TK2589 versus pre-feature/tsc; general source-order gaps stay with 120 |
 | 4 | M2-min: declared-target transfer, invalid-write recovery and compound result modes; `compound_assignment_does_not_inherit_rhs_const_provenance` remains RED |
