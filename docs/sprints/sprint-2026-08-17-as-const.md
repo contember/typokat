@@ -156,12 +156,16 @@ rows remain in the current 165-record baseline. The new `recursive_constraint_se
 eight strict-tsc markers and finite recovery/default/reverse-dependency controls. Keep original seeds
 separate from completed fallback results; do not restore global one-pass fixing or change query budgets.
 The next unit is explicitly narrowed to the settled direct forms in
-`recursive-fallback-completion-design.md`, not an all-37 completion claim. Implement only after R1c
-acceptance; no R1b planner, shared substitution callback or semantic-access interpreter is authorized.
+`recursive-fallback-completion-design.md`, not an all-37 completion claim. Implementation is blocked
+pending admission evidence as well as R1c acceptance; no R1b planner, shared substitution callback or
+semantic-access interpreter is authorized. Independent step review found that eager interface
+application can already share the Object TypeId of a direct single-binder constraint, so TypeId-shape
+admission alone cannot prove this boundary. The following contract is conditional, not dispatch-ready.
 
 - Decide admission once from the original request: direct binders, ordered tuple/array/readonly
   accesses, single-free-active-binder structural constraints, and closed/settled earlier defaults.
   Free-parameter summaries establish membership only, not traversal order. Keep nested binders shielded.
+  Earlier defaults must be proven complete before use, not merely earlier in declaration order.
 - Full/partial owners use request-local `Unseen`, `Completing(seed)`, `Complete(result)` states.
   Recursive access reads the original seed; dependencies complete before original-candidate validation;
   completed access returns the identical TypeId without another substitution/demand/allocation.
