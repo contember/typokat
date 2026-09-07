@@ -79,6 +79,11 @@ type-parameter-default incomplete remains separate. Fixed symbols, ready symboli
 explicitly annotated source parameters must not gain initializer incompletes. An unused opaque rest
 after a needed fixed prefix likewise retains its existing relation error without an initializer notice.
 
+`inference_single_{scalar_roles,nested_position,consumed_context}.ts` specify the bounded R1c scalar
+candidate policy: direct versus nested return roles, original candidate positions, mode-preserving
+copies, and actual contextual parameter consumption. The mixed older inference fixtures retain their
+backlog-122 assertions; this unit does not require or authorize general fixing/scheduling parity.
+
 ADR-0036 narrows the class migration, not the bounded field const feature. The B44 class controls
 remain required. `b123_class_contextual_publication/` retains disabled future assertions for
 effective external and self-dependent class contexts; it is not part of the ordinary inventory.

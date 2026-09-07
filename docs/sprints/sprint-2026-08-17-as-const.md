@@ -67,42 +67,78 @@ and the explicit conservative preparation-gap policy of
 admission is separately reduced under spec `c292338a`, owned by backlog 123. Fixed declared IDs are
 independent of unused rest alternatives; normal Pass recovery and annotation authority are unchanged.
 
-**Next active front:** read-only R1c causal refresh for the two direct generic-enum regressions. The old
-`r1c-design.md` depends on rejected R1b experiments and is not implementation authority. Bound the
-new unit against this accepted publication candidate; broader pre-existing fixing/return-role work
-stays with backlog 122. No new production territory is granted before its separate acceptance spec.
+The accepted Pass preparation/transport contract remains binding through ADR-0035, its 26 fixtures
+and the frozen source/spec at `f58604a6`; do not re-demand raw publication targets, conflate unavailable
+with absent context, or change grouping, annotation, memo-identity and exactly-once effect boundaries.
 
-### Preparation and transport contract
+## R1c — bounded scalar inference policy (spec review)
 
-- Reuse `Pass::evaluate_type`, the existing coordinator and savepoints. A checker-local prepared
-  product retains original target, evaluated publication context, apparent shaping context and
-  contextual `this`. It is not a second evaluator, expression graph or provenance registry.
-- Original targets remain authoritative for generic calls and declared/excess/satisfies obligations.
-  Preserve symbolic parameter identity in publication context, including union alternatives; follow
-  bounds only for shaping. Extract `ThisType` at the existing normalized-intersection boundary.
-- Prepare outer operator chains and contextual alternatives in one traversal, not an identity pass
-  followed by an apparent pass. Projected children become roots when the existing source walk reaches
-  them. Do not eagerly normalize every property, element or return of an annotation tree.
-- Publication consumers retain effective context alongside source/span; other consumers may keep the
-  old tuple wrapper. Never re-demand the original target at finalization after checking the child.
-- Share preparation through transparent parentheses/value branches within one contextual execution
-  attempt. Conditional tests precede arm preparation; logical `&&` keeps its context-free left side;
-  call inference receives the original target. Selected-candidate reconstruction is a separate attempt.
-- Use a body-local preparation slot at the first existing return-context consumption boundary, then
-  reuse it for later value returns and aggregate publication. Do not prepare eagerly at body entry,
-  finalize individual returns or introduce an arrow-only legacy collection path.
-- Distinguish unprepared, absent, prepared and failed states. Real `unknown` and symbolic types are
-  not unavailable context. Preserve typed exhaustion and existing declaration-owned failure reporting.
-- Commit preparation writes only for a successfully prepared product. The ordinary transaction helper
-  commits every `Ready(_)`, so `Ready(Unavailable)` is insufficient. Unavailable and exhausted outcomes
-  both roll back but remain distinct; neither can produce a successfully finalized partial aggregate.
-- Audit satisfies-arrow shortcuts, contextual rewalks and `ContextualWalkKey`: equal shaping views
-  must not alias different original/publication identities. Extend the existing key, not cache topology.
+Fix the two introduced direct generic-enum errors without implementing backlog 122's full fixing
+engine. The obsolete `r1c-design.md` depends on rejected R1b experiments and is not authority.
+Implementation remains held until this concrete transport contract passes independent step review.
 
-The pure role finalizer returns a completed `TypeId`. Matching applies to the whole expression source;
-finalize elements before collection and inferred returns after existing value aggregation. Shallow
-regularization and wrapper-only widening must not transform referenced container members. Full role
-algebra, broad-context absorption and annotation authority are specified in ADR-0035, not duplicated here.
+### Policy and admission
+
+- Extend the existing request with explicit `ContextualPreview { retained_return }`,
+  `FinalCall { retained_return, context_facts }`, and `ClassApplication` purposes. Preview/class keep
+  existing behavior; final ordinary/construct calls use the bounded policy. No fabricated return ID.
+- Eligibility is exactly one surviving ordinary `CallSiteCandidate` occurrence after existing optional
+  fallback pruning, with a regular/W scalar literal or enum-member ID. Equal occurrences stay separate;
+  union-valued candidates and expected-result evidence do not qualify. Preserve optional-fallback and
+  primitive-constraint precedence. Do not change multi-contribution selection or constraint completion.
+- Record the original inference target at collection. Classify a binder as direct, structurally
+  nested, or unmodeled. Admit only binder paths through static object properties, arrays, fixed tuple
+  elements and readonly wrappers. A path through a callable, union/intersection, conditional, rest
+  container or unresolved operator is unmodeled, not merely nested. Use ready identities, no new query.
+- For admitted scalar target/return roles: preserve direct returned T unless its parameter context was
+  consumed; widen a direct target T into a nested result; preserve a structural target contribution.
+  Only W contributions broaden; regular IDs remain regular. Unmodeled roles/coverage use the unchanged
+  algorithm. Do not freeze later candidates, interpret raw conditional branches, or repair call results.
+
+### Original-context cursor
+
+- Seed an explicit cursor from original signature parameters before preliminary substitution, paired
+  with effective argument targets. It carries the original node and this candidate's outer binder set;
+  do not redefine `PreparedInitializerContext.original_target` or invert effective IDs to find binders.
+- Project only while visiting an existing source child: static object property/index fallback, array
+  element, ready tuple/rest position, parentheses/value operand, and callable parameter slot. Use the
+  existing positional contract with the same source count. Keep only the current traversal cursor;
+  no mirror context tree, declaration walk, eager annotation descent or durable provenance registry.
+- Successful unannotated fixed-parameter projection emits binders from its original matched slot.
+  For a source rest parameter, mirror the existing first-rest-parameter selection in both signatures;
+  do not change its aggregate inference behavior. Explicit annotations and omitted slots emit nothing.
+- Admit correspondence only for ready matching structural/callable shapes. Ambiguous, opaque or failed
+  projection marks affected original binders unmodeled, never unconsumed. Determine affected binders
+  from original free-parameter identity intersected with the active outer set; if a reliable local set
+  is unavailable, mark the entire active set. Fixed symbolic elements remain identities, not bounds.
+- Raw routes, parameter defaults and callback bodies receive no inherited cursor. Nested calls seed
+  their own observation. Container child arrows receive only the cursor projected by contextual descent.
+
+### Facts, effects and memo lifetime
+
+- Produce consumed/unmodeled binder facts in the existing candidate-local `CheckerEffects` tree.
+  Nested lexical frames transport them with existing tickets. At the contextual inference capture
+  boundary drain facts recursively before discarding diagnostic effects; return them alongside the
+  existing source/rewalk result, then aggregate in `PreparedInferenceArgs` for the final request.
+- Inner call captures drain only their own facts before outward effect merge. No global set or
+  binder-ID-only filtering across attempts. Facts are not observable diagnostics or durable event data;
+  preserve records, obligations, raw-batch supersession and nested-ticket ownership unchanged.
+- Fully observed success may establish nonconsumption. Known no-use routes add no facts; failed or
+  ambiguous routes mark affected coverage unmodeled. Retain actual source failures/diagnostics and the
+  recovered nested-body error at `contextual_parameter_fixing.ts:26`; facts cannot turn failure into success.
+- Refuse memo lookup/insertion for role-observing contextual walks, including enclosing container
+  walks that could bypass a descendant producer. Keep effect-discarding mode: never flip retain-checks
+  to disable caching. Nonobserving memo paths are unchanged. Native retries borrow the same immutable
+  prepared facts and retain existing query rollback; they do not re-collect or leak observations.
+
+Territory after step approval: `infer/{mod,tests}.rs`, `checker/{calls,expr,context,mod}.rs` and focused
+tests. No type/binder/query/relation, class construction, publication policy or shared projection edits.
+Direct tests must pin fact sets for annotated/omitted/unrelated equal-effective binders, nested
+object/array/parenthesized/rest routes, two equal contributions, role fallback, failed preparation,
+selected/rejected/nested/repeated calls, memo refusal without diagnostic retention, and native retries.
+The three `inference_single_{scalar_roles,nested_position,consumed_context}.ts` fixtures carry 27 exact
+strict-tsc markers. Keep all 26 publication fixtures, 116 owner records, 1,200 differential inputs,
+repro and official regression gates. Unchanged broader fixing/variance truth remains backlog 122.
 
 ### Acceptance witnesses
 
