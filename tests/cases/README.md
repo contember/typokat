@@ -107,6 +107,10 @@ escapes, captures, conditional uses or overloads reject whole-owner registration
 must also assert that rejection; unchanged diagnostics alone cannot prove it.
 `recursive_default_preparation.ts` pins six errors and clean active-seed, completed-dependency and
 demanding-first default controls. A nested provisional default is not the final completed default.
+`binding_default_mode_combination.ts` combines source/default literal modes before binding widening;
+`class_ready_collection_references.ts` preserves referenced child identity through ready collection
+lookup; `enum_ready_key_result_identity.ts` checks exact results of ready direct-root enum accesses.
+Their 17 markers are additional M3 controls, not permission to broaden class publication readiness.
 
 The registered-callable protocol in [ADR-0040](../../docs/decisions/0040-complete-registered-callables-at-source-demand-boundaries.md)
 must close the following frozen 37-row construction cluster. Counts are prior mismatches, not a

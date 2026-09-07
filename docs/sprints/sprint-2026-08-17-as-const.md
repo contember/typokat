@@ -262,6 +262,20 @@ exposes an old excess/missing-property double report. Repair both at their curre
 clean reads, broad/fresh controls and independent RHS errors. Do not weaken reduction or suppress
 committed diagnostics. The typed flow transaction/loop cleanup review found no additional defect.
 
+M3 preparation against frozen `0770a469…` reproduces all 38 original rows without fixture drift:
+18 flat defaults, four ready enum keys, eight collection references and eight local-class references.
+`m3-current-preparation.md` identifies the bounded existing owners. The 17 markers in
+`binding_default_mode_combination.ts`, `class_ready_collection_references.ts` and
+`enum_ready_key_result_identity.ts` are independently pinned in `m3-bounded-leader-spec-oracle.json`.
+Combine full mode-bearing source/default IDs before binding widening; keep annotation obligations
+distinct from inferred shaping. Authenticate a ready key separately from direct enum-root identity and
+member existence; retain indexed-access failure ownership and one lexical key walk. Ready tuple/array
+lookup unwraps only the collection and returns its child ID unchanged. Query-free annotation reservation
+may supply these complete collections without another walk or a new declaration schedule.
+The eight local-class member rows remain separate blockers: a ready ClassInstance ID is not a published
+member surface. No mutable draft read, early publication, lazy class query or deferred projection
+producer is authorized by the collection repair. This is not the conservative ADR-0038 context gap.
+
 R2b follows [ADR-0033](../decisions/0033-separate-contextual-row-views-from-symbolic-signatures.md):
 positional body views do not replace source binders/signatures. Any participant write, including
 captured/dead/later writes, disables correlation; unrelated/shadowed writes do not.
