@@ -71,7 +71,24 @@ The accepted Pass preparation/transport contract remains binding through ADR-003
 and the frozen source/spec at `f58604a6`; do not re-demand raw publication targets, conflate unavailable
 with absent context, or change grouping, annotation, memo-identity and exactly-once effect boundaries.
 
-## R1c — bounded scalar inference policy
+## Active R1c replacement — discriminator spec, implementation held
+
+Reject the observation/memo transport and raw-return restoration as the next implementation basis.
+The external architectural diagnosis and `r1c-replacement-independent-design.md` agree on native
+call/inference ownership, but the suggested static A/B/C replacement is not yet a dispatch contract:
+mode evidence is phase-sensitive; fixing distinguishes independent typed evidence from parameter
+demands; nested generic calls need an outer mapper while literal returns retain symbolic context.
+Keep original signature, ordinary preview P and expected-result-only R as distinct authorities.
+Unresolved conditionals stay on the old/opaque policy; no synthetic conditional identity graph.
+
+The three replacement fixtures carry 19 strict-tsc markers, including mixed/omitted ternary arms,
+logical operands, literal versus nested-call/factory returns, and object/array-wrapped enum returns.
+`r1c-replacement-leader-final-spec-oracle.json` retains exact oracle and frozen-baseline comparisons.
+These fixtures approve required behavior, not a replacement algorithm. Complete one native phase/mapper
+contract before dispatch; no further patches to the rejected observation strategy. Protect the accepted
+publication baseline and unrelated primary work; remove only authenticated agent-owned R1c changes.
+
+### Rejected R1c strategy — historical contract only
 
 Fix the two introduced direct generic-enum errors without implementing backlog 122's full fixing
 engine. The obsolete `r1c-design.md` depends on rejected R1b experiments and is not authority.
