@@ -54,12 +54,12 @@ at the class boundary by ADR-0036. The first role-aware candidate passes focused
 but introduces seven B32 `keyof` false positives: child checking prepares context, then publication
 uses the original deferred context instead of the effective literal union.
 
-**Independent review: FAIL.** Candidate `574212…` fixes source disagreement and retains scalar/enum
-repairs, but class arrow construction mistakes ready contextual rest containers for positional types.
+**Independent review: FAIL.** Candidate `036f7863…` repairs ready-rest types but still withholds a
+fixed slot when an unused opaque-union rest rejects full-signature projection, losing a bad-call error.
 The new conservative external/self-dependent errors are explicitly accepted by
 [ADR-0038](../decisions/0038-reject-inconsistent-contextual-class-publication.md), not called legacy
 restorations or backlog-123 completion. That amendment does not waive the ready-rest producer defect.
-**Next:** align already-admitted class-arrow positional parameters with ready array/tuple contexts;
+**Review contract:** align already-admitted class-arrow positional parameters with ready array/tuple contexts;
 preserve inferred body and completed function identities, explicit parameter/return authority and
 [ADR-0037](../decisions/0037-retain-class-initializer-validation-sources.md)'s source ownership.
 Move existing pure positioning into `checker/signature_projection.rs`; Pass delegates unchanged,
@@ -71,6 +71,10 @@ initializer incomplete, retain lexical diagnostics, discard that initializer's r
 admission behavior, not an ADR-0038 waiver. Fixed symbols and symbolic array/tuple elements remain ready;
 explicit source annotations bypass unused projection. Gate only positioning container edges; preserve
 Pass opaque fallback, optional-slot counts, declared IDs and all query/inference/reporting ownership.
+The repair is limited to `signature_projection.rs` and direct projection/producer tests: return a
+known fixed declared ID independently of unused rest alternatives. Pin identity/literal/mixed source
+forms in `publication_class_unused_union_rest.ts` (six strict-tsc errors, zero incompletes). Keep the
+ordinary Pass entry unchanged; do not broaden requested opaque-rest admission or alter failure recovery.
 
 ### Preparation and transport contract
 
