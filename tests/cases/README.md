@@ -83,6 +83,8 @@ after a needed fixed prefix likewise retains its existing relation error without
 candidate policy: direct versus nested return roles, original candidate positions, mode-preserving
 copies, and actual contextual parameter consumption. The mixed older inference fixtures retain their
 backlog-122 assertions; this unit does not require or authorize general fixing/scheduling parity.
+`inference_scalar_composition_regressions.ts` preserves function-context, rest-callback and enum-return
+composition diagnostics, including mutable copies, when precise scalar results cross call boundaries.
 
 ADR-0036 narrows the class migration, not the bounded field const feature. The B44 class controls
 remain required. `b123_class_contextual_publication/` retains disabled future assertions for

@@ -77,7 +77,19 @@ Fix the two introduced direct generic-enum errors without implementing backlog 1
 engine. The obsolete `r1c-design.md` depends on rejected R1b experiments and is not authority.
 The transport contract passed independent step review. Its initial memo refusal failed the unchanged
 scaling gate (8/52/1,004 walks at depths 2/4/8); the independently reviewed replay amendment below
-supersedes that refusal. The draft remains unaccepted; scalar tests and focused GREEN are outstanding.
+supersedes that refusal. Candidate `96db4da7…` passes scaling (6/20/72), 30 focused cases and unchanged
+differential/official rows, but independent review finds three composition regressions. Repair them
+together using `inference_scalar_composition_regressions.ts`: unobserved function parameters must not
+mean unused context; transported scalars must preserve rest-callback and enum-return/copy diagnostics.
+The leader permits bounded mode corrections at existing contribution preparation/final selection for
+these compositions, superseding the byte-identical multi-path requirement only where needed. Preserve
+occurrence cardinality, order, relation/query ownership and constraint completion; no enum exceptions,
+new inference pipeline, rest aggregation rewrite or post-call repairs. Unobserved raw routes receive
+conservative coverage, not a new contextual function implementation. Broader backlog-122 work stays out.
+The three measurement-vector updates to `[2,2,1,0,0]` are approved after independent verification of
+observing/nonobserving key separation; scaling bounds remain unchanged. During repair use focused tests
+and the retained reduced probes. Run expensive gates once on the stable candidate; review changed
+mechanisms and reuse authenticated evidence for unchanged code rather than repeating the whole audit.
 
 ### Policy and admission
 
