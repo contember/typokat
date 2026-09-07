@@ -71,7 +71,15 @@ The accepted Pass preparation/transport contract remains binding through ADR-003
 and the frozen source/spec at `f58604a6`; do not re-demand raw publication targets, conflate unavailable
 with absent context, or change grouping, annotation, memo-identity and exactly-once effect boundaries.
 
-## Active R1c replacement — native phase and mapper owners
+## R1c — accepted in isolation
+
+Frozen `028486f4…` has independent cumulative GO under ADR-0039 with no findings. Leader verified
+2,078 unchanged input entries, both patch reconstructions, all 62 native markers, 1,092 checker tests,
+Clippy/fmt, full tests and ordinary conformance. Only the five named inherited failures and the exact
+same 165 mismatch records remain. The completed nonincremental Cargo rerun is authoritative; an earlier
+timeout and subsequent incremental linker failures are retained, not counted as completed tests.
+`r1c-returned-context-leader-closure.json` and `r1c-returned-context-independent-review.md` carry the
+receipts. Production remains isolated; this does not accept M1/WU1 or close the feature.
 
 Implement [ADR-0039](../decisions/0039-own-inference-modes-and-context-mappers-at-native-call-boundaries.md)
 as one unit: native contextual inputs, phase-correct contribution preparation, then selected-candidate
@@ -97,17 +105,11 @@ The replacement oracle is `r1c-replacement-leader-final-spec-oracle.json`. Basel
 not exact 6/20/72; measure baseline/candidate with unchanged bounds. Restore old count vectors only
 where sharing is actually restored and verify any deliberate environment-induced difference separately.
 
-During implementation run focused gates. On the stable candidate run differential 1,200, owner 116,
-publication 604, repro and official gates once. Review changed mechanisms with authenticated reuse for
-unchanged code; no repeated whole-audit loops. Candidate `61a0daff…` is implemented but independently
-rejected: R reaches callback parameters too early, literal-union constraints lose return shaping,
-and the equal-upper-bound branch changes the ordinary literal mode. Repair these together under
-ADR-0039 without another architecture change. `inference_native_boundary_regressions.ts` pins the
-lost-error/valid-read/copy pairs; retain occurrence order and the existing query/publication owners.
-Product `5da34bd1…` repairs those minimal cases but still substitutes R through returned callable
-parameters. Apply the same native context product at the callable-return boundary, including object
-and tuple wrappers; `inference_returned_callback_parameter_context.ts` separates the three required
-write errors from the three clean exact reads. This is a residual implementation defect, not new scope.
+The accepted packet retains 1,200 differential outcomes, 604 publication probes, 116 owner records,
+874 official rows and the unchanged repro ratchet. Review reused authenticated unchanged mechanisms.
+Native scaling is 7/30/136 with original growth bounds and sharing assertions. The three first-review
+regressions and returned-callback residual are closed by `inference_native_boundary_regressions.ts`
+and `inference_returned_callback_parameter_context.ts`; keep invalid writes and valid reads separate.
 
 ### Acceptance witnesses
 
@@ -142,9 +144,9 @@ bounded spec, independent review and exact regression disposition before impleme
 | Order | Required work / retained blocker |
 |---|---|
 | 1 | Publication cluster accepted in isolation; preserve its source/diagnostic contracts during remaining repairs |
-| 2 | R1c: retained callee return role, original candidate position and actual contextual parameter consumption; fix B42 `structural_transport.ts:11` and direct enum-result over-widening without an enum exception |
-| 3 | Minimal recursive fallback repair: `recursive_constraint_fallbacks.ts` and `constraint_instantiation_order_supplied.ts` gain TK2589 versus pre-feature/tsc; general source-order gaps stay with 120 |
-| 4 | M2-min: declared-target transfer, invalid-write recovery and compound result modes; `compound_assignment_does_not_inherit_rhs_const_provenance` remains RED |
+| 2 | R1c accepted in isolation at `028486f4…`; retain native phase/P-R ownership and all regression controls |
+| 3 | M2-min next: declared-target transfer, invalid-write recovery and compound result modes; `compound_assignment_does_not_inherit_rhs_const_provenance` remains RED |
+| 4 | Recursive fallback: introduced TK2589 remains required; design the user-approved owner-local dependency/re-entry mechanism in parallel with M2, without concurrent production edits |
 | 5 | M3: inferred defaults retain context without annotation authority; remove `undefined`, retain `null`; authenticate ready enum keys at the direct enum root; safe class-reference publication |
 | 6 | R2b: eight newly exposed official rest-body property errors; preserve symbolic generic signatures, arity and readonly constraints under ADR-0033 |
 | 7 | Reconcile mixed/deferred fixtures, literal-tag guards and frozen inventory; full-diff review, unchanged-tree closure gates and lifecycle updates |
@@ -179,6 +181,15 @@ admission alone cannot prove this boundary. The following contract is conditiona
   both tuple orders and the counterexamples against frozen baselines. Classify all 37 rows after the
   stable repair; record which remain unchanged. Do not label this subset the complete recursive fix.
 
+The shape-admitted proposal above is blocked, not a dispatch basis. Further independent assessment
+falsified permanently frozen fallback results: a still-invalid reverse-dependent candidate needs its
+fallback updated. Restoring legacy cyclic outputs would also make the retained interface/canonical/
+erased-alias witnesses falsely clean relative to the feature candidate. The user explicitly approved
+designing an inference-owner-local dependency/re-entry mechanism after this boundary was reported.
+That authorizes a new bounded contract and independent step review, not the rejected R1b planner or
+an unreviewed implementation. General TS construction ordering and shared substitution callbacks remain
+outside scope; preserve required diagnostic records and typed genuine exhaustion.
+
 M2 follows [ADR-0032](../decisions/0032-own-semantic-assignment-work-by-source-and-query-environment.md):
 expression result, assigned source and declared-target transfer are distinct; keep non-union declared
 surfaces and whole-source union coverage. Exhaustion is not successful reset. Flow discharge is
@@ -190,6 +201,12 @@ assertions and existing 51/76 dispositions. `assignment_operation_result_modes.t
 string concatenation and logical result boundaries before implementation. Carry reduction exhaustion
 through the existing flow resolver and identifier adapter; never cache failed child or parent results.
 No new RHS traversal, declaration scheduling, loop solver or post-publication flow repair is authorized.
+Independent step review accepts this bounded implementation with one walk-local pending flow-write
+table and one enclosing query transaction. Commit only successful outer demands; discard pending writes
+before native retry or exhaustion, and always restore loop provisional/depth state. Preflight both
+endpoints through the coordinator even for non-union recovery or identity. Arithmetic compound reads
+use the target's pre-RHS flow position exactly once; extract result classification without enabling
+deferred compound diagnostics. Existing identifier demand reporting remains the sole failure owner.
 
 R2b follows [ADR-0033](../decisions/0033-separate-contextual-row-views-from-symbolic-signatures.md):
 positional body views do not replace source binders/signatures. Any participant write, including
