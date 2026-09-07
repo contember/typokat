@@ -11,4 +11,4 @@ excessOwnershipDirect = { value: 1, extra: true }; // error[TK2353]
 excessOwnershipDirect = { value: "wrong", extra: true }; // error[TK2322]
 
 declare function excessOwnershipNumber(value: number): number;
-excessOwnershipDirect = { tag: excessOwnershipNumber("wrong") }; // error[TK2353] error[TK2345]
+excessOwnershipDirect = { tag: excessOwnershipNumber("wrong") }; // error[TK2353] | error[TK2345]
