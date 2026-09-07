@@ -102,6 +102,8 @@ contributions while retaining the existing logical-assignment result boundaries.
 `assignment_boolean_union_modes.ts` expands semantic boolean members inside declared unions while
 preserving fresh/regular source modes; `assignment_excess_diagnostic_ownership.ts` pins one primary
 assignment diagnostic without losing independent RHS or missing-property errors.
+`assignment_nested_diagnostic_ownership.ts` pins literal-site primary selection through nested,
+optional, indexed and array containers, both sibling orders and independent RHS diagnostics.
 `source_construction_admission_controls.ts` preserves five existing errors when future mutable copies,
 escapes, captures, conditional uses or overloads reject whole-owner registration. Rust admission tests
 must also assert that rejection; unchanged diagnostics alone cannot prove it.

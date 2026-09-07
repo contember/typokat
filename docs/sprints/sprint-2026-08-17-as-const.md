@@ -261,6 +261,12 @@ exposes an old excess/missing-property double report. Repair both at their curre
 `assignment_{boolean_union_modes,excess_diagnostic_ownership}.ts` fixtures pin 14 strict-tsc markers,
 clean reads, broad/fresh controls and independent RHS errors. Do not weaken reduction or suppress
 committed diagnostics. The typed flow transaction/loop cleanup review found no additional defect.
+Followup `0770a469…` repairs the boolean and flat excess witnesses but remains NO-GO: choosing all
+recursive excess candidates from one outer relation drops correct nested/sibling diagnostics.
+`assignment_nested_diagnostic_ownership.ts` pins 16 strict-tsc markers, including optional/indexed/
+array nesting, both sibling orders and independent RHS errors. Primary selection must remain at the
+relevant literal site; do not restore redundant parent reports, inspect only the first failure chain,
+or delete already committed diagnostics. Boolean reduction and flow transactions are unchanged.
 
 M3 preparation against frozen `0770a469…` reproduces all 38 original rows without fixture drift:
 18 flat defaults, four ready enum keys, eight collection references and eight local-class references.
