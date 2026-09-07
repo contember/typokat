@@ -94,6 +94,9 @@ and equal upper-bound mode retention, including exact reads and mutable-copy wri
 returned callbacks and object/tuple wrappers; valid reads and invalid writes occupy separate rows.
 `recursive_constraint_seed_identity.ts` pins finite self/mutual fallback shapes, exact rejected seeds,
 recursive defaults, class partial recovery and reverse-dependent candidate revalidation.
+`recursive_constraint_use_order.ts` and `recursive_constraint_use_order_supplied.ts` pin opposite
+union/intersection orders, direct versus retained/erased references, and still-invalid dependency
+recovery through full function and partial constructor inference, with clean reads on separate rows.
 `assignment_operation_result_modes.ts` separates arithmetic/concatenation results from exact RHS
 contributions while retaining the existing logical-assignment result boundaries.
 

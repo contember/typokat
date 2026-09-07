@@ -175,6 +175,10 @@ violations, native P/R ownership and typed exhaustion rollback. Specify defaults
 earlier binder; declaration order alone does not prove completion. Pin opposite tuple/union orders,
 interface/direct-object and retained/erased-alias controls, both reverse candidates and immutable
 transport/memo identity. Classify all 37 retained rows; no all-37 acceptance follows from kernel traces.
+`recursive_constraint_use_order.ts` and `recursive_constraint_use_order_supplied.ts` separately pin
+16 strict-tsc markers and the opposite clean reads, including both full/partial still-invalid recovery.
+The leader oracle is `recursive-owner-leader-order-spec-oracle.json`; these specs do not make the
+unwritten producer/default-cycle contract implementation-ready and stay out of the active M2 input.
 
 M2 follows [ADR-0032](../decisions/0032-own-semantic-assignment-work-by-source-and-query-environment.md):
 expression result, assigned source and declared-target transfer are distinct; keep non-union declared
