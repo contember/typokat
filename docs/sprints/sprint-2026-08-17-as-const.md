@@ -157,38 +157,24 @@ creating new nested TypeIds until a stabilization budget expires. All 35 depth r
 rows remain in the current 165-record baseline. The new `recursive_constraint_seed_identity.ts` has
 eight strict-tsc markers and finite recovery/default/reverse-dependency controls. Keep original seeds
 separate from completed fallback results; do not restore global one-pass fixing or change query budgets.
-The next unit is explicitly narrowed to the settled direct forms in
-`recursive-fallback-completion-design.md`, not an all-37 completion claim. Implementation is blocked
-pending admission evidence as well as R1c acceptance; no R1b planner, shared substitution callback or
-semantic-access interpreter is authorized. Independent step review found that eager interface
-application can already share the Object TypeId of a direct single-binder constraint, so TypeId-shape
-admission alone cannot prove this boundary. The following contract is conditional, not dispatch-ready.
 
-- Decide admission once from the original request: direct binders, ordered tuple/array/readonly
-  accesses, single-free-active-binder structural constraints, and closed/settled earlier defaults.
-  Free-parameter summaries establish membership only, not traversal order. Keep nested binders shielded.
-  Earlier defaults must be proven complete before use, not merely earlier in declaration order.
-- Full/partial owners use request-local `Unseen`, `Completing(seed)`, `Complete(result)` states.
-  Recursive access reads the original seed; dependencies complete before original-candidate validation;
-  completed access returns the identical TypeId without another substitution/demand/allocation.
-- Preserve full no-candidate unknown seed semantics, partial absence, original defaults, fresh exemptions,
-  violations, native P/R callers, transaction rollback and typed real exhaustion. Reverse-dependent
-  child recovery must stay exact. Do not feed a completed fallback into its own construction again.
-- Requests needing unsettled conditional/callable/retained-alias access keep the existing full/partial
-  policy unchanged. This is preflight admission, not error-triggered fallback or a new unsupported
-  notice. Their TK2589 rows remain blockers, not accepted compatibility or successful recovery.
-- Territory: existing fixers in `infer/mod.rs` and `infer/tests.rs`. Pin numeric identity/re-access,
-  both tuple orders and the counterexamples against frozen baselines. Classify all 37 rows after the
-  stable repair; record which remain unchanged. Do not label this subset the complete recursive fix.
+Shape-only admission and permanently frozen fallbacks were independently rejected. The first loses
+already-erased interface/union ordering; the second loses a still-invalid reverse candidate's corrected
+fallback. `r1c-recursive-owner-design.md` specifies a finite `Unseen / Active(seed) / Done(result)`
+kernel and proves why canonical TypeIds alone cannot supply its dependency order.
 
-The shape-admitted proposal above is blocked, not a dispatch basis. Further independent assessment
-falsified permanently frozen fallback results: a still-invalid reverse-dependent candidate needs its
-fallback updated. Restoring legacy cyclic outputs would also make the retained interface/canonical/
-erased-alias witnesses falsely clean relative to the feature candidate. The user explicitly approved
-designing an inference-owner-local dependency/re-entry mechanism after this boundary was reported.
-That authorizes a new bounded contract and independent step review, not the rejected R1b planner or
-an unreviewed implementation. General TS construction ordering and shared substitution callbacks remain
-outside scope; preserve required diagnostic records and typed genuine exhaustion.
+The user explicitly approved both owner-local dependency/re-entry tracking and preserving its missing
+occurrence-owned input during existing constraint lowering. Complete the bounded producer, transport
+and default-cycle contract together, then obtain independent step review before implementation.
+This permits no extra AST walk, TypeId-based reconstruction of erased order, general provenance graph,
+shared substitution callback, rejected R1b planner, runtime missing-record fallback or silent new
+incomplete. Retained versus erased aliases must be distinguished semantically, not by written arguments.
+
+Preserve original mode-prepared seeds, exact completed TypeIds, full/partial absence, fresh exemptions,
+violations, native P/R ownership and typed exhaustion rollback. Specify defaults that reach an active
+earlier binder; declaration order alone does not prove completion. Pin opposite tuple/union orders,
+interface/direct-object and retained/erased-alias controls, both reverse candidates and immutable
+transport/memo identity. Classify all 37 retained rows; no all-37 acceptance follows from kernel traces.
 
 M2 follows [ADR-0032](../decisions/0032-own-semantic-assignment-work-by-source-and-query-environment.md):
 expression result, assigned source and declared-target transfer are distinct; keep non-union declared
