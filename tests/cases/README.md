@@ -102,6 +102,42 @@ contributions while retaining the existing logical-assignment result boundaries.
 `assignment_boolean_union_modes.ts` expands semantic boolean members inside declared unions while
 preserving fresh/regular source modes; `assignment_excess_diagnostic_ownership.ts` pins one primary
 assignment diagnostic without losing independent RHS or missing-property errors.
+`source_construction_admission_controls.ts` preserves five existing errors when future mutable copies,
+escapes, captures, conditional uses or overloads reject whole-owner registration. Rust admission tests
+must also assert that rejection; unchanged diagnostics alone cannot prove it.
+`recursive_default_preparation.ts` pins six errors and clean active-seed, completed-dependency and
+demanding-first default controls. A nested provisional default is not the final completed default.
+
+The registered-callable protocol in [ADR-0040](../../docs/decisions/0040-complete-registered-callables-at-source-demand-boundaries.md)
+must close the following frozen 37-row construction cluster. Counts are prior mismatches, not a
+current test receipt. `H` means lexical header, `C` singleton call, `A` an early annotated-assignment
+semantic decision, `S` signature-independent transport, and `Q` complete query-free class retention.
+Every existing marker and clean read in each full file remains part of the acceptance spec.
+
+| `b44_as_const/` file | Rows | Source construction obligation |
+|---|---:|---|
+| `constraint_instantiation_order.ts` | 3 | H then C; opposite tuple orders and anonymous capture order |
+| `constraint_instantiation_order_supplied.ts` | 4 | H/C and Q/new; invalid and valid supplied tuples, recovered leaves |
+| `recursive_constraint_fallbacks.ts` | 3 | H/C; finite self/mutual seeds and ready/rejected recursive candidates |
+| `constraint_semantic_identity.ts` | 5 | H/C; erased/indexed aliases, union/intersection and retained interface |
+| `erased_constraint_supplied.ts` | 2 | H/C and Q/new; erased alias uses under supplied recovery |
+| `constraint_union_construction.ts` | 3 | H/C; first-created union constituents and erased actual-argument construction |
+| `constraint_return_construction_call.ts` | 2 | C before H; constraint creates C[] before B[], return reuses both |
+| `constraint_return_construction_relation.ts` | 1 | A before H; return creates B[] before C[]; no relation replay at reporting |
+| `constraint_union_forward_demand.ts` | 1 | C before H; forward binder acquisition precedes constructed return |
+| `source_construction_alias_call.ts` | 1 | S then C before H; finite const-copy chain |
+| `source_construction_array_duplicate.ts` | 1 | C before H; duplicate array identity reuses its first receipt |
+| `source_construction_array_first.ts` | 1 | C before H; C[] before B[] |
+| `source_construction_array_reuse.ts` | 1 | C before H; an earlier bound creates B[] before the union |
+| `source_construction_array_reverse.ts` | 1 | C before H; B[] before C[] |
+| `source_construction_bound_frontier.ts` | 1 | H validation demands a later bound before the intervening header |
+| `source_construction_callable_assignment.ts` | 1 | A before H, then C; semantic decision cannot wait for effect draining |
+| `source_construction_copy.ts` | 1 | S before H, C after H; copy creates no shape |
+| `source_construction_forward_call.ts` | 1 | C before H; acquired binder order selects the union recovery |
+| `source_construction_header.ts` | 1 | H before C; opposite recovery to the same forward signature |
+| `source_construction_record_first.ts` | 1 | H/C; earlier record binders precede the later union |
+| `source_construction_return_parameter.ts` | 1 | C before H; preserve the other returned binder's recovered shape |
+| `source_construction_unknown_assignment.ts` | 1 | S before H, then C; safe unknown transfer is not shape demand |
 
 ADR-0036 narrows the class migration, not the bounded field const feature. The B44 class controls
 remain required. `b123_class_contextual_publication/` retains disabled future assertions for

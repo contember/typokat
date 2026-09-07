@@ -19,7 +19,7 @@ reduction. Historical F1 approval limits and C1b–C4 scheduling below the old l
 | Parentheses, shorthand and reference boundaries; suppression of outer context inside const syntax | General assertion compatibility, module breadth and general lazy declaration resolution |
 | Existing value-return aggregation timing for all inferred callable-body consumers | New bare-return/fallthrough/reachability discovery: 46 |
 | Literal-owned `as const` in instance fields, ordinary readonly modes, annotations and ready-context controls | General contextual class-initializer preparation: 123 |
-| Introduced ordinary-checker regressions, exactly-once effects and immutable publication | General construction-order compatibility: 120; no C1b–C4 restart |
+| Introduced regressions and the bounded first-source-demand construction protocol in ADR-0040; exactly-once effects and immutable publication | Construction-order breadth beyond ADR-0040: 120; no general C1b–C4 restart |
 
 Existing unrelated gaps need explicit backlog ownership. Deferral does not license new false cleans,
 blanket unsupported admission, removed assertions, diagnostic suppression or bulk scoreboard changes.
@@ -163,12 +163,14 @@ already-erased interface/union ordering; the second loses a still-invalid revers
 fallback. `r1c-recursive-owner-design.md` specifies a finite `Unseen / Active(seed) / Done(result)`
 kernel and proves why canonical TypeIds alone cannot supply its dependency order.
 
-The user explicitly approved both owner-local dependency/re-entry tracking and preserving its missing
-occurrence-owned input during existing constraint lowering. Complete the bounded producer, transport
-and default-cycle contract together, then obtain independent step review before implementation.
-This permits no extra AST walk, TypeId-based reconstruction of erased order, general provenance graph,
-shared substitution callback, rejected R1b planner, runtime missing-record fallback or silent new
-incomplete. Retained versus erased aliases must be distinguished semantically, not by written arguments.
+The user subsequently included first-semantic-demand construction order and approved the complete
+[ADR-0040](../decisions/0040-complete-registered-callables-at-source-demand-boundaries.md) protocol.
+It supersedes proposed ADR-0034: registration, source-owned field construction, pre-ready query views,
+persistent snapshots, early assignment decisions and detached header adoption form one contract.
+Independent static admission covers all 37 rows in 22 unchanged fixtures; it is not an executed selector
+or source cutover. Complete model/query lifecycle proof precedes real-source integration. No extra AST
+walk, reconstructed TypeId order, query-controlled construction, runtime missing-record fallback or
+silent incomplete is authorized. Full C1b–C4, general lazy values/bodies and class rescheduling stay out.
 
 Preserve original mode-prepared seeds, exact completed TypeIds, full/partial absence, fresh exemptions,
 violations, native P/R ownership and typed exhaustion rollback. Specify defaults that reach an active
@@ -178,7 +180,13 @@ transport/memo identity. Classify all 37 retained rows; no all-37 acceptance fol
 `recursive_constraint_use_order.ts` and `recursive_constraint_use_order_supplied.ts` separately pin
 16 strict-tsc markers and the opposite clean reads, including both full/partial still-invalid recovery.
 The leader oracle is `recursive-owner-leader-order-spec-oracle.json`; these specs do not make the
-unwritten producer/default-cycle contract implementation-ready and stay out of the active M2 input.
+new source protocol implemented and stay out of the active M2 input. The agreed three stages are:
+leader specs/ADR, model/query lifecycle proof, then source/native completion with independent review
+and unchanged-tree gates. M2 acceptance precedes overlapping source/query integration.
+The portable 22-file/37-row acceptance table is in `tests/cases/README.md`. Additional source-frontier
+and recursive-default fixtures have 11 leader-verified strict-tsc markers; the frontier's complete
+diagnostic set already matches all three frozen baselines. The authoritative oracle is
+`registered-callable-leader-spec-oracle.json`, not its earlier draft containing an unrelated old FP.
 
 M2 follows [ADR-0032](../decisions/0032-own-semantic-assignment-work-by-source-and-query-environment.md):
 expression result, assigned source and declared-target transfer are distinct; keep non-union declared
@@ -223,7 +231,7 @@ The retained official regression set is four files, not permission to rebaseline
 | [60](../backlog/60-fresh-literal-union-targets.md), [69](../backlog/69-signature-rest-parity-tail.md) | Verified old union-initializer FP at `assignment_semantic_reduction.ts:29` and eight outer rest-relation FPs; M2/R2b neighboring repairs and recovered errors stay required |
 | [51](../backlog/51-narrowing-tail.md), [76](../backlog/76-lazy-value-type-resolution.md) | Pre-existing flow/loop-product and general declaration-availability gaps, not newly introduced regressions |
 | [110](../backlog/110-contextual-return-literal-inference.md), [111](../backlog/111-structural-inference-literal-provenance.md), [122](../backlog/122-signature-candidate-fixing-policy.md) | Broader inference/fixing policy beyond required feature repairs; mixed B44 fixtures are not wholesale disabled |
-| [120](../backlog/120-semantic-constraint-construction-order.md) | Source/constraint construction order; rejected R1b planners; stopped C1b/C1c/C2–C4; ADR-0034 remains proposed |
+| [120](../backlog/120-semantic-constraint-construction-order.md) | General construction breadth beyond accepted ADR-0040; rejected R1b planners and general C1b–C4 remain excluded |
 | [121](../backlog/121-optional-project-binder-probe-test-build.md) | Pre-existing optional `project-binder-probe` test compile failure; distinct from default-member gates |
 | [123](../backlog/123-contextual-class-initializer-publication.md) | General class context preparation and preserved `b123_class_contextual_publication/` assertions; release-blocking, not sprint-blocking under ADR-0036 |
 

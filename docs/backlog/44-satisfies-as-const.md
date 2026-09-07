@@ -31,6 +31,10 @@ cyclic-constraint/source-construction order is tracked by
 [120](120-semantic-constraint-construction-order.md). Existing unrelated gaps may remain explicitly
 owned; regressions introduced by this feature, including dropped ordinary diagnostics, may not be
 waived under that deferral. The active sprint records the exact fixture/gate dispositions.
+The user explicitly included the bounded source-construction dependency in
+[ADR-0040](../decisions/0040-complete-registered-callables-at-source-demand-boundaries.md), including
+constructed returns and early callable relations. Its 37-row execution proof is required before
+closure; accepting the design does not accept a model-only implementation or all of backlog 120.
 
 [ADR-0036](../decisions/0036-bound-contextual-class-publication-migration.md) retains bounded
 literal-owned `as const` in instance fields but excludes general contextual class-initializer

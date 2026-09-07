@@ -7,8 +7,10 @@ blocked-by: []
 # 120 — Preserve semantic construction order for generic constraints
 
 **Summary.** Complete generic constraint instantiation and source-construction fidelity without
-reconstructing lost order from canonical types. Effort XL. This is separate from shipping bounded
-`as const`; deferral does not authorize new diagnostic losses in that feature's implementation.
+reconstructing lost order from canonical types. Effort XL. The bounded source-owned protocol in
+[ADR-0040](../decisions/0040-complete-registered-callables-at-source-demand-boundaries.md) is now
+explicitly required by the as-const sprint; broader construction/lazy-source compatibility remains here.
+Deferral does not authorize new diagnostic losses or restoring old missed errors in that proof.
 
 ## Problem
 
@@ -44,12 +46,13 @@ introduced erased-alias false cleans; those candidates cannot be shipped under t
   the pre-change diagnostic contract before integrating any shared inference changes.
 - Preserve immutable published meaning and single-owner source effects. No query-chosen once-cell,
   duplicate semantic walk, syntax/name heuristic, fixture dispatch or post-call inference repair.
-- Continue the proposed [ADR-0034](../decisions/0034-own-callable-construction-before-publishing-signatures.md)
-  only after its real-route admission and execution gates are satisfied. It remains proposed.
+- [ADR-0040](../decisions/0040-complete-registered-callables-at-source-demand-boundaries.md) supersedes
+  proposed ADR-0034. Prove its complete admission, field-demand, early-decision, snapshot and effect
+  contract before source cutover; the old restricted tracer cannot stand in for constructed returns.
 - C0 structural facts (`93058337`) and C1a consumed-input/scope receipts (`ae145bc8`) are available.
-  Final-basis authentication, batch resolution, closed-use certificates and registered-callable
-  construction are not implemented. They belong here if that architecture is selected, not on
-  backlog 44's immediate critical path. Do not restore a process-shared production Binder.
+  General final-basis authentication and batch resolution are not prerequisites established by the
+  bounded protocol. Its narrow current-binder join, closed-use plan and registered-callable construction
+  are now on backlog 44's critical path. Do not restore a process-shared production Binder.
 - Require direct malformed/poison/rollback/freeze tests, real `CheckerSession` source witnesses,
   independent adversarial review, differential and official regression gates before cutover.
 

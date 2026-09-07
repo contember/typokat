@@ -1,7 +1,7 @@
 ---
 id: 0034
 title: Own callable construction before publishing signatures
-status: proposed
+status: superseded by 0040
 date: 2026-09-06
 ---
 
