@@ -71,11 +71,13 @@ The accepted Pass preparation/transport contract remains binding through ADR-003
 and the frozen source/spec at `f58604a6`; do not re-demand raw publication targets, conflate unavailable
 with absent context, or change grouping, annotation, memo-identity and exactly-once effect boundaries.
 
-## R1c — bounded scalar inference policy (spec review)
+## R1c — bounded scalar inference policy
 
 Fix the two introduced direct generic-enum errors without implementing backlog 122's full fixing
 engine. The obsolete `r1c-design.md` depends on rejected R1b experiments and is not authority.
-Implementation remains held until this concrete transport contract passes independent step review.
+The transport contract passed independent step review. Its initial memo refusal failed the unchanged
+scaling gate (8/52/1,004 walks at depths 2/4/8); the independently reviewed replay amendment below
+supersedes that refusal. The draft remains unaccepted; scalar tests and focused GREEN are outstanding.
 
 ### Policy and admission
 
@@ -126,16 +128,36 @@ Implementation remains held until this concrete transport contract passes indepe
 - Fully observed success may establish nonconsumption. Known no-use routes add no facts; failed or
   ambiguous routes mark affected coverage unmodeled. Retain actual source failures/diagnostics and the
   recovered nested-body error at `contextual_parameter_fixing.ts:26`; facts cannot turn failure into success.
-- Refuse memo lookup/insertion for role-observing contextual walks, including enclosing container
-  walks that could bypass a descendant producer. Keep effect-discarding mode: never flip retain-checks
-  to disable caching. Nonobserving memo paths are unchanged. Native retries borrow the same immutable
-  prepared facts and retain existing query rollback; they do not re-collect or leak observations.
+- Reuse `infer_contextual_source_observing`'s existing fresh capture as the per-walk fact owner.
+  Recovered container/lexical child facts belong there; never snapshot accumulated parent facts or
+  subtract sibling sets. Nested callees drain their own observations before outward effect merge.
+- Extend the existing contextual memo key with owned original-cursor authority: original node and
+  outer-binder universe by content equality/hash. No observation differs from opaque observation.
+  Keep every existing environment/prepared-context field, dependency check, budget and region lifetime.
+- Memo values carry source/span, final rewalk status and immutable consumed/unmodeled facts, never
+  tickets, diagnostics, effects or journals. Nonobserving entries have empty facts and a distinct key.
+  Preserve raw memo behavior; cloning a served value must not change declaration-write adoption.
+- On an observing miss, the inner walker returns a stack-local pending insertion token with the
+  original lookup key and pre-execution declaration-log mark. Insert only after the reporting wrapper
+  normalizes validation failure and the observing capture drains its complete facts. Assert both fact
+  sets belong to the original outer universe. Merge only fact-drained residual effects outward;
+  return the facts through the existing triple to `PreparedInferenceArgs`, without a second merge.
+- Cache observing outcomes only for final `Rewalked`, non-error source and no typed failure.
+  Successful unmodeled coverage is cacheable; all observing `KeptRaw`, failed/exhausted and partially
+  completed outcomes are not. Nonobserving insertion stays unchanged. Never resample the key at insertion.
+- On a hit, validate/adopt declaration dependencies and net writes once through the existing owner,
+  merge cloned facts once into the current observing capture, and let its normal drain return them.
+  Replay no diagnostics/events. Retaining walks remain nonmemoized; do not flip retain-checks,
+  suppression or observable counts. Native retries borrow immutable facts and keep existing rollback.
 
 Territory after step approval: `infer/{mod,tests}.rs`, `checker/{calls,expr,context,mod}.rs` and focused
 tests. No type/binder/query/relation, class construction, publication policy or shared projection edits.
 Direct tests must pin fact sets for annotated/omitted/unrelated equal-effective binders, nested
 object/array/parenthesized/rest routes, two equal contributions, role fallback, failed preparation,
-selected/rejected/nested/repeated calls, memo refusal without diagnostic retention, and native retries.
+selected/rejected/nested/repeated calls, cold/warm fact equality with nonempty sibling facts, distinct
+original nodes/universes under equal effective contexts, declaration invalidation and exactly-once
+write adoption, failure/recovery, retaining-walk exclusion, and native retries. The existing scaling
+bounds must pass unchanged; another failure stops implementation rather than relaxing key authority.
 The three `inference_single_{scalar_roles,nested_position,consumed_context}.ts` fixtures carry 27 exact
 strict-tsc markers. Keep all 26 publication fixtures, 116 owner records, 1,200 differential inputs,
 repro and official regression gates. Unchanged broader fixing/variance truth remains backlog 122.
