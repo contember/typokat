@@ -183,6 +183,13 @@ M2 follows [ADR-0032](../decisions/0032-own-semantic-assignment-work-by-source-a
 expression result, assigned source and declared-target transfer are distinct; keep non-union declared
 surfaces and whole-source union coverage. Exhaustion is not successful reset. Flow discharge is
 query-local; no duplicate semantic walk, durable provisional answer or whole-Pass snapshot.
+The current bounded contract is `m2-min-current-contract.md`: seven declared-target transfer rows and
+one compound-result row, all reproduced on `028486f4…`. `flow_target_reduction.ts:15` consumes an
+already-published exact declaration and needs no future-local producer. Preserve all mixed-fixture
+assertions and existing 51/76 dispositions. `assignment_operation_result_modes.ts` pins arithmetic,
+string concatenation and logical result boundaries before implementation. Carry reduction exhaustion
+through the existing flow resolver and identifier adapter; never cache failed child or parent results.
+No new RHS traversal, declaration scheduling, loop solver or post-publication flow repair is authorized.
 
 R2b follows [ADR-0033](../decisions/0033-separate-contextual-row-views-from-symbolic-signatures.md):
 positional body views do not replace source binders/signatures. Any participant write, including

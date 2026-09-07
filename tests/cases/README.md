@@ -94,6 +94,8 @@ and equal upper-bound mode retention, including exact reads and mutable-copy wri
 returned callbacks and object/tuple wrappers; valid reads and invalid writes occupy separate rows.
 `recursive_constraint_seed_identity.ts` pins finite self/mutual fallback shapes, exact rejected seeds,
 recursive defaults, class partial recovery and reverse-dependent candidate revalidation.
+`assignment_operation_result_modes.ts` separates arithmetic/concatenation results from exact RHS
+contributions while retaining the existing logical-assignment result boundaries.
 
 ADR-0036 narrows the class migration, not the bounded field const feature. The B44 class controls
 remain required. `b123_class_contextual_publication/` retains disabled future assertions for
