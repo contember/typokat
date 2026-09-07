@@ -99,6 +99,9 @@ union/intersection orders, direct versus retained/erased references, and still-i
 recovery through full function and partial constructor inference, with clean reads on separate rows.
 `assignment_operation_result_modes.ts` separates arithmetic/concatenation results from exact RHS
 contributions while retaining the existing logical-assignment result boundaries.
+`assignment_boolean_union_modes.ts` expands semantic boolean members inside declared unions while
+preserving fresh/regular source modes; `assignment_excess_diagnostic_ownership.ts` pins one primary
+assignment diagnostic without losing independent RHS or missing-property errors.
 
 ADR-0036 narrows the class migration, not the bounded field const feature. The B44 class controls
 remain required. `b123_class_contextual_publication/` retains disabled future assertions for

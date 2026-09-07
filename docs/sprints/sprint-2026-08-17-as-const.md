@@ -197,6 +197,12 @@ before native retry or exhaustion, and always restore loop provisional/depth sta
 endpoints through the coordinator even for non-union recovery or identity. Arithmetic compound reads
 use the target's pre-RHS flow position exactly once; extract result classification without enabling
 deferred compound diagnostics. Existing identifier demand reporting remains the sole failure owner.
+M2 candidate `0e83daab…` fixes the eight required rows and four neighbors, but independent review is
+NO-GO: boolean constituents inside unions lose exact false/true recovery, and correct object narrowing
+exposes an old excess/missing-property double report. Repair both at their current owners; the two
+`assignment_{boolean_union_modes,excess_diagnostic_ownership}.ts` fixtures pin 14 strict-tsc markers,
+clean reads, broad/fresh controls and independent RHS errors. Do not weaken reduction or suppress
+committed diagnostics. The typed flow transaction/loop cleanup review found no additional defect.
 
 R2b follows [ADR-0033](../decisions/0033-separate-contextual-row-views-from-symbolic-signatures.md):
 positional body views do not replace source binders/signatures. Any participant write, including
