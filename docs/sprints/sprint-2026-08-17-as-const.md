@@ -155,8 +155,25 @@ creating new nested TypeIds until a stabilization budget expires. All 35 depth r
 rows remain in the current 165-record baseline. The new `recursive_constraint_seed_identity.ts` has
 eight strict-tsc markers and finite recovery/default/reverse-dependency controls. Keep original seeds
 separate from completed fallback results; do not restore global one-pass fixing or change query budgets.
-Implement only after R1c acceptance and a concrete request-local completion contract; no R1b planner,
-sorted free-parameter scheduler, shared substitution callback or backlog-120 construction-order work.
+The next unit is explicitly narrowed to the settled direct forms in
+`recursive-fallback-completion-design.md`, not an all-37 completion claim. Implement only after R1c
+acceptance; no R1b planner, shared substitution callback or semantic-access interpreter is authorized.
+
+- Decide admission once from the original request: direct binders, ordered tuple/array/readonly
+  accesses, single-free-active-binder structural constraints, and closed/settled earlier defaults.
+  Free-parameter summaries establish membership only, not traversal order. Keep nested binders shielded.
+- Full/partial owners use request-local `Unseen`, `Completing(seed)`, `Complete(result)` states.
+  Recursive access reads the original seed; dependencies complete before original-candidate validation;
+  completed access returns the identical TypeId without another substitution/demand/allocation.
+- Preserve full no-candidate unknown seed semantics, partial absence, original defaults, fresh exemptions,
+  violations, native P/R callers, transaction rollback and typed real exhaustion. Reverse-dependent
+  child recovery must stay exact. Do not feed a completed fallback into its own construction again.
+- Requests needing unsettled conditional/callable/retained-alias access keep the existing full/partial
+  policy unchanged. This is preflight admission, not error-triggered fallback or a new unsupported
+  notice. Their TK2589 rows remain blockers, not accepted compatibility or successful recovery.
+- Territory: existing fixers in `infer/mod.rs` and `infer/tests.rs`. Pin numeric identity/re-access,
+  both tuple orders and the counterexamples against frozen baselines. Classify all 37 rows after the
+  stable repair; record which remain unchanged. Do not label this subset the complete recursive fix.
 
 M2 follows [ADR-0032](../decisions/0032-own-semantic-assignment-work-by-source-and-query-environment.md):
 expression result, assigned source and declared-target transfer are distinct; keep non-union declared
