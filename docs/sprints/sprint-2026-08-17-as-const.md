@@ -149,6 +149,15 @@ bounded spec, independent review and exact regression disposition before impleme
 | 6 | R2b: eight newly exposed official rest-body property errors; preserve symbolic generic signatures, arity and readonly constraints under ADR-0033 |
 | 7 | Reconcile mixed/deferred fixtures, literal-tag guards and frozen inventory; full-diff review, unchanged-tree closure gates and lifecycle updates |
 
+Recursive preparation is complete, not implementation: `recursive-fallback-current-report.md` traces
+the same feedback defect in full/partial fixers. Each substitutes through its previous derived fallback,
+creating new nested TypeIds until a stabilization budget expires. All 35 depth rows and two lost-error
+rows remain in the current 165-record baseline. The new `recursive_constraint_seed_identity.ts` has
+eight strict-tsc markers and finite recovery/default/reverse-dependency controls. Keep original seeds
+separate from completed fallback results; do not restore global one-pass fixing or change query budgets.
+Implement only after R1c acceptance and a concrete request-local completion contract; no R1b planner,
+sorted free-parameter scheduler, shared substitution callback or backlog-120 construction-order work.
+
 M2 follows [ADR-0032](../decisions/0032-own-semantic-assignment-work-by-source-and-query-environment.md):
 expression result, assigned source and declared-target transfer are distinct; keep non-union declared
 surfaces and whole-source union coverage. Exhaustion is not successful reset. Flow discharge is

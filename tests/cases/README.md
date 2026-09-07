@@ -92,6 +92,8 @@ phases and callback-return mapper authorities. They do not approve the rejected 
 and equal upper-bound mode retention, including exact reads and mutable-copy writes together.
 `inference_returned_callback_parameter_context.ts` keeps parameter P distinct from return R inside
 returned callbacks and object/tuple wrappers; valid reads and invalid writes occupy separate rows.
+`recursive_constraint_seed_identity.ts` pins finite self/mutual fallback shapes, exact rejected seeds,
+recursive defaults, class partial recovery and reverse-dependent candidate revalidation.
 
 ADR-0036 narrows the class migration, not the bounded field const feature. The B44 class controls
 remain required. `b123_class_contextual_publication/` retains disabled future assertions for
