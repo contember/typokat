@@ -279,6 +279,11 @@ The nested fixture now has 20 strict-tsc markers, including both permutations of
 wrong-extra array elements with the same aggregate TypeId. `m2-literal-result-leader-expanded-spec-oracle.json`
 retains this oracle separately from the original 16-marker proof. Only the completed leased run counts;
 the first attempt timed out waiting for CPU before executing the oracle.
+→ [ADR-0041](../decisions/0041-retain-checked-literal-results-for-assignment-diagnostics.md) closes the
+local result, memo, literal-site and deferred failure contract with the independent review amendments.
+The group retains sibling diagnostics and exact failure sites through terminal failure, logical-left
+validation uses retained contributions, and all four context IDs participate in live root retention.
+The mechanical pending-effect root adapter in `checker/decls/mod.rs` is included in the fence.
 
 M3 preparation against frozen `0770a469…` reproduces all 38 original rows without fixture drift:
 18 flat defaults, four ready enum keys, eight collection references and eight local-class references.

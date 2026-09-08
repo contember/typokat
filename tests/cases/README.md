@@ -104,6 +104,8 @@ preserving fresh/regular source modes; `assignment_excess_diagnostic_ownership.t
 assignment diagnostic without losing independent RHS or missing-property errors.
 `assignment_nested_diagnostic_ownership.ts` pins literal-site primary selection through nested,
 optional, indexed and array containers, both sibling orders and independent RHS diagnostics.
+`assignment_logical_literal_sources.ts` keeps non-nullish/truthy contributions separate from complete
+checked operands and preserves lexical errors in an excluded logical value arm (two strict-tsc markers).
 `source_construction_admission_controls.ts` preserves five existing errors when future mutable copies,
 escapes, captures, conditional uses or overloads reject whole-owner registration. Rust admission tests
 must also assert that rejection; unchanged diagnostics alone cannot prove it.
