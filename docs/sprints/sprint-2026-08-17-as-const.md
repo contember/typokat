@@ -230,6 +230,15 @@ assertions to encode in the direct test cluster, not claims that tests already e
 | Ancestor caches | Success using pre-ready fields cannot promote its own or enclosing tuple/object relation into durable completed-callable caches |
 | Inspection | Rendering is inert; an unpermitted query retains its source request and cannot mint execution authority |
 | Transport/census | Equal applications hash equally; changed domain/registration/argument differs; substitution preserves identity and real outer edges; invalid fork/import domains fail |
+| M2 literal attempts | A late Source request after an invalid or unavailable child discards attempt decisions and restores overwritten query entries; complete retry over the same prepared group reports each surviving sibling once, while old snapshots still request |
+| M2 preparation and flow | Source after a prepared sibling or inside reduction/guard/nested loop rolls back the receiving frame, pending writes, provisional entries and depth; preserve original checked products, caller memo entries and source-walk/effect counts |
+| M2 retention and draining | Registered edges retained only through child contributions/context IDs/group evidence remain enumerated; a widened wrapper retains the current and remaining obligations/ticket without native fallback, record duplication or source replay |
+
+`registered-callable-u1-m2-bridge-delta.md` maps these additional assertions against frozen `8220…`.
+M2 adds 14 production native-control name occurrences but leaves the query/type/relate/snapshot
+definitions unchanged. Source control must stop and discard a retry attempt; terminal failures instead
+retain independently selected sibling diagnostics. Neither belongs in the other's failure representation.
+Reuse this mapping only after the rest-position repair's accepted diff confirms these seams unchanged.
 
 Predeclare `RegisteredCallable` as a new append-only tag and adjudicate each guarded production
 match, including rendering and reference traversal. The already-present `WideningLiteral` guard drift
