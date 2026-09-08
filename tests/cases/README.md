@@ -126,6 +126,7 @@ body/inferred-return views and checks repeated-tag filtering composed with direc
 and multiple rest values before fixed suffixes, including leading rests and nested member failures.
 `assignment_tuple_arity_diagnostic_targets.ts` preserves fixed-position excess diagnostics despite
 too many or too few tuple elements, alongside pure length errors and valid-length controls.
+This includes a known fixed prefix before a variadic segment when the required suffix is absent.
 
 The registered-callable protocol in [ADR-0040](../../docs/decisions/0040-complete-registered-callables-at-source-demand-boundaries.md)
 must close the following frozen 37-row construction cluster. Counts are prior mismatches, not a
