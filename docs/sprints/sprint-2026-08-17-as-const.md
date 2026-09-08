@@ -298,10 +298,26 @@ may supply these complete collections without another walk or a new declaration 
 The eight local-class member rows remain separate blockers: a ready ClassInstance ID is not a published
 member surface. No mutable draft read, early publication, lazy class query or deferred projection
 producer is authorized by the collection repair. This is not the conservative ADR-0038 context gap.
+The user separately approved the bounded capability in `m3-class-reference-design.md`: a complete
+immutable class-member selector carried by existing deferred indexing, with distinct preserve versus
+shallow-literal-regularization result operations. Its meaning is resolved by the existing coordinator
+after publication; ordinary indexing keeps its operation and lexical Body checks retain access errors.
+Independent step review and leader mode/identity fixtures precede implementation. This approval adds
+no mutable draft lookup, extra source walk, finisher selection stage or general class scheduling.
 
 R2b follows [ADR-0033](../decisions/0033-separate-contextual-row-views-from-symbolic-signatures.md):
 positional body views do not replace source binders/signatures. Any participant write, including
 captured/dead/later writes, disables correlation; unrelated/shadowed writes do not.
+Frozen `0770a469…` preparation verifies all four full local fixtures: 23 required diagnostics are
+present, alongside 32 surplus instances on 30 lines. Only eight outer write-fixture relations have
+the accepted backlog-69 disposition; completion therefore removes 24 local surplus instances, not
+only the nine body-property instances. The official file adds eight required surplus-property removals.
+`r2b-current-preparation.md` maps four coordinated steps: authenticated canonical write finalization,
+symbolic signature/body-view separation, invocation-scoped CFG row state, and whole-row relation.
+Existing structural facts are not yet a resolved write census. Runtime `var` initializers that reuse
+parameter bindings must also count. Keep exact `T[i]` identity separate from bound-column body demand;
+no `T[i] -> BoundRows[i]` exact memo. Entry and nested contextual memo admission must cover row state.
+The current shared class-ready rest projection stays query-free and keeps its existing opaque boundaries.
 
 The retained official regression set is four files, not permission to rebaseline:
 
