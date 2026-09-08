@@ -320,6 +320,12 @@ distinct from inferred shaping. Authenticate a ready key separately from direct 
 member existence; retain indexed-access failure ownership and one lexical key walk. Ready tuple/array
 lookup unwraps only the collection and returns its child ID unchanged. Query-free annotation reservation
 may supply these complete collections without another walk or a new declaration schedule.
+The same default-authority repair must remove seven official TK2322 records: ordinary ratchet
+`literalTypesAndTypeAssertions.ts:12/13`, plus syntax-transition cases
+`literalTypesAndDestructuring.ts:5/6` and `controlFlowBindingElement.ts:5/17/28` (stripped source lines).
+Keep the latter file's three nested-binding incompletes and source effects. The ten-case early screen
+and targeted strict oracles are retained in `as-const-official-transition-current-triage.*`; these are
+additional existing-owner checks, not general never-return or nested-binding scope expansion.
 The eight local-class member rows remain separate blockers: a ready ClassInstance ID is not a published
 member surface. No mutable draft read, early publication, lazy class query or deferred projection
 producer is authorized by the collection repair. This is not the conservative ADR-0038 context gap.
@@ -476,6 +482,10 @@ The retained official regression set is four files, not permission to rebaseline
 6. Audit all ten retained prospective `syntax:as-const` official transitions individually before
    removing that gate. Keep excluded child forms explicitly nonclean; save only reviewed scoreboard
    movements. The frozen `m4-official-gate-*` screen is evidence, not closure.
+   The authenticated `8220…` early screen (`as-const-official-transition-current-triage.*`) has eight
+   prospective unsupported cases and two in-scope cases with diagnostics; none is clean and no
+   reference diagnostic identity is lost. New `variadicTuples1.ts:363:13 TK2345` remains under causal
+   review before any 71/69 disposition. Final-binary replay and per-identity acceptance remain required.
 7. Integrate only reviewed files while preserving unrelated WIP. Update coverage, divergence and
    surface/fixture indexes, completion manifest and roadmap. Complete `A-satisfies-as-const`, close
    backlog 44, stamp OUTCOME and archive this sprint only after all gates pass. Backlog 123 stays open.
