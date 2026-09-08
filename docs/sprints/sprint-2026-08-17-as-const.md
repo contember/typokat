@@ -267,6 +267,14 @@ recursive excess candidates from one outer relation drops correct nested/sibling
 array nesting, both sibling orders and independent RHS errors. Primary selection must remain at the
 relevant literal site; do not restore redundant parent reports, inspect only the first failure chain,
 or delete already committed diagnostics. Boolean reduction and flow transactions are unchanged.
+The next attempt stopped with test-only changes: raw/contextual array inference merges checked
+element types before the diagnostic owner receives them. Swapping valid-extra and wrong-extra
+elements preserves the root TypeId but changes the required diagnostic sites. The source-loss test
+passes; the two semantic tests remain RED (`m2-nested-product-handoff.md`). The user explicitly approved
+extending the existing literal-inference result and its bounded raw/contextual/memo plumbing to retain
+already-checked site identities. Settle that local product and literal-site primary/residual decisions
+together, then independently review before implementation. No global table, second initializer walk,
+ordinary-to-satisfies policy switch or ADR-0040 work follows from this approval.
 
 M3 preparation against frozen `0770a469…` reproduces all 38 original rows without fixture drift:
 18 flat defaults, four ready enum keys, eight collection references and eight local-class references.
