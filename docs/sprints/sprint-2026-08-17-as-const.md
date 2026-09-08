@@ -305,6 +305,12 @@ rest-aware `tuple_context_element`. `assignment_tuple_rest_diagnostic_positions.
 zero/one/multiple/leading-rest controls and isolated invalid rest/suffix values, including nested members.
 Repair the consumer's positional mapping while retaining original slot count and unsupported accounting.
 Re-review only this changed mechanism and preserve the authenticated passing transport/failure proof.
+The rest-position followup `c9e5a28f…` closes that witness but remains NO-GO: the shared contextual
+helper rejects total arity before selecting known fixed positions, losing TK2353 for long/short fixed
+tuple literals. `assignment_tuple_arity_diagnostic_targets.ts` pins both losses, pure arity failures and
+clean controls. Diagnostic preparation must retain unambiguous fixed targets even when the parent
+rejects length; preserve the corrected rest/suffix mapping and original AST slot count. The two-file
+repair packet is leader-authenticated at 2,087 entries; prior mechanism review remains applicable.
 The official comparison's two changes are strict-oracle progress: `contextualTypeWithTuple.ts` gains
 the expected TK2741 instead of TK2322; `wideningTuples4.ts` gains its second strict-required TK2322.
 The latter remains a non-strict scoreboard FP, not a strict false positive or permission to bulk-save.

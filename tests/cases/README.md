@@ -124,6 +124,8 @@ non-heritage class SCC whose unrelated back-reference must not block selected-fi
 body/inferred-return views and checks repeated-tag filtering composed with direct payload narrowing.
 `assignment_tuple_rest_diagnostic_positions.ts` pins rest-aware literal-child targets for zero, one
 and multiple rest values before fixed suffixes, including leading rests and nested member failures.
+`assignment_tuple_arity_diagnostic_targets.ts` preserves fixed-position excess diagnostics despite
+too many or too few tuple elements, alongside pure length errors and valid-length controls.
 
 The registered-callable protocol in [ADR-0040](../../docs/decisions/0040-complete-registered-callables-at-source-demand-boundaries.md)
 must close the following frozen 37-row construction cluster. Counts are prior mismatches, not a
