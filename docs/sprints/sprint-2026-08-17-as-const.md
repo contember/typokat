@@ -284,6 +284,22 @@ local result, memo, literal-site and deferred failure contract with the independ
 The group retains sibling diagnostics and exact failure sites through terminal failure, logical-left
 validation uses retained contributions, and all four context IDs participate in live root retention.
 The mechanical pending-effect root adapter in `checker/decls/mod.rs` is included in the fence.
+The final ADR-0041 candidate is frozen at `8220a7a168a235b836b34a020cd389335c00f89c4fc249881ec93b5357895749`.
+Leader authentication independently verified 2,086 source entries, 35 artifacts, the nine-file unit
+and twelve-file cumulative forward/reverse reconstructions. Leader narrow runs passed 48 assignment,
+10 literal-result and seven initializer-context tests, plus 44 M2 and 62 native source markers.
+Complete saved records preserve all 1,200 generated outputs, 604 publication probes and 116 owner
+records. Candidate full gates retain four inherited failures and 161 ordinary mismatch records.
+Independent cumulative M2 review returned NO-GO for one new rest/suffix-position regression:
+the literal-site consumer indexes fixed tuple elements directly instead of using the producer's
+rest-aware `tuple_context_element`. `assignment_tuple_rest_diagnostic_positions.ts` pins clean
+zero/one/multiple/leading-rest controls and isolated invalid rest/suffix values, including nested members.
+Repair the consumer's positional mapping while retaining original slot count and unsupported accounting.
+Re-review only this changed mechanism and preserve the authenticated passing transport/failure proof.
+The official comparison's two changes are strict-oracle progress: `contextualTypeWithTuple.ts` gains
+the expected TK2741 instead of TK2322; `wideningTuples4.ts` gains its second strict-required TK2322.
+The latter remains a non-strict scoreboard FP, not a strict false positive or permission to bulk-save.
+Leader receipts use `m2-literal-result-leader-*`; review uses `m2-literal-result-independent-final-*`.
 
 M3 preparation against frozen `0770a469…` reproduces all 38 original rows without fixture drift:
 18 flat defaults, four ready enum keys, eight collection references and eight local-class references.
@@ -347,8 +363,9 @@ Leader acceptance assertions for these seams:
   Inspect complete constraints/defaults/receiver and source binders; derive rows from the prepared
   descriptor, never stale Store bounds. Reuse bound-preserving whole-function substitution before
   established return-R shaping; no callback-binder instantiation or persistent constraint rewrite.
-- Body/source identity: a member demand followed by `return payload` preserves the symbolic source
-  return. Genuine branch narrowing remains observable. Demand bound columns before/after exact `T[i]`
+- Body/source identity: parameter descriptors/storage remain symbolic `T[i]`; admitted body references
+  and inferred returns use their oracle-observed broad bound view independently of member-demand order.
+  Genuine branch narrowing remains observable. Demand bound columns before/after exact `T[i]`
   without any exact column overlay; actual substituted `["a", 1][1]` still evaluates to exact `1`.
   Protect the ordinary indexed coordinator route before expanding tuple-union evaluation.
 - Memo and invocation: test lookup and insertion refusal at entering raw/contextual walks and their
@@ -371,6 +388,14 @@ Leader acceptance assertions for these seams:
 
 These are unexecuted proof requirements. Implementation, independent adversarial review and the
 required contextual/inference differential gates remain pending; step GO is not implementation GO.
+Targeted TypeScript/compiler-API followup (`r2b-return-oracle-followup*`) corrected the step review's
+unverified symbolic-return claim: parameter `T[1]` stays symbolic, but the body reference and inferred
+return are broad even without preceding member access. The body/CFG adapter supplies that expression
+view before existing return aggregation; literal finalization does not perform bound projection.
+The new `contextual_rest_body_result_identity.ts` specification pins broad returns, exact explicit
+parameter specialization and repeated-tag/direct-narrowing composition. Its third row uses an object
+payload: boolean/undefined third alternatives permit extra inverse narrowing in tsc and cannot witness
+the bounded no-inverse-guard assertion. This does not broaden ADR-0033 to general inverse correlation.
 
 The retained official regression set is four files, not permission to rebaseline:
 
@@ -452,6 +477,8 @@ Record a fair source-size comparison at closure: TypeScript
 [#29435](https://github.com/microsoft/TypeScript/pull/29435) has six production files `+164/-111`.
 Separate typokat semantic/model changes, fixtures, generated output and gate costs; state the bounded
 surface exclusions rather than claiming full upstream parity.
+The leader re-verified both upstream file inventories through GitHub; retained file SHAs and grouped
+counts are in `as-const-leader-upstream-size-reference.json`. Typokat's final comparison remains pending.
 
 ## Run log
 
