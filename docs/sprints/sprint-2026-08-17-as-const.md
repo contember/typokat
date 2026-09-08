@@ -250,6 +250,50 @@ snapshot and transport code but is not U1 acceptance. Its explicit outer-savepoi
 not prove automatic receiving-query rollback; actual propagation and the remaining lifecycle proofs
 continue in the implementation owner.
 
+#### Field-publication authority within U1
+
+The dependency-only safety graph is not an operator-aware recipe and cannot certify a constructed
+field's semantic value. Keep that authority in ADR-0040's canonical checker construction owner.
+The bounded resolution and independent conditional GO are retained in
+`registered-callable-field-authority-resolution.md` and `field-authority-independent-step-review.md`.
+The following contract incorporates all four review amendments; no further design round is required.
+
+- The private checker authority retains an opaque completed or failed field terminal. Its complete
+  application, original/applied binder bijection, field key, Store universe, value/layout or typed
+  failure, and dependencies come from that field frame's terminal transition. U5 supplies the sole
+  production issuer, using the existing constructor/reducer once. No public/from-TypeId factory,
+  deserializer, caller-supplied expected value or source-permit-as-success-proof may mint a terminal.
+- The coordinator validates a proposal against that independently retained terminal: exact identities,
+  value/layout or failure evidence, and authenticated dependencies. Its checked product has private
+  construction and retains every receiving context identity. There is no source callback, second
+  recipe evaluator, early field construction or assignability substitute for exact equality.
+- Types stores immutable fields through a non-Clone, domain-bound trusted-host writer. Read-only
+  snapshots/domain Arcs cannot recover a writer. The private checker commit wrapper is the sole
+  production caller and requires the checked product; neutral wire data is not self-authenticating.
+- Commit compares every checked Store, alias/class publication and callable-snapshot identity with the
+  current receiving context and aggregate publication head. Stale products require pure revalidation
+  of the retained terminal, never source execution. Writers from different domains serialize against
+  that same head; stale writers cannot overwrite another domain or branch history. Old snapshots stay
+  valid read-only query inputs. Duplicate completed/failed field commits remain errors.
+- Failed-terminal validation checks ownership, key, bijection, universe and exact failure evidence.
+  It does not require a successful root or clean dependencies when the authenticated dependency failure
+  is its cause. Malformed authentication still rejects publication. Preserve failure TypeIds and
+  completed siblings; failure cannot authorize a descriptor.
+- Alias safety obtains the actual body and formal binding from the published alias surface, not a
+  supplied body edge. The existing dependency worklist follows that body and every original argument,
+  including erased arguments, under an environment-sensitive, explicitly bounded traversal. Growing
+  recursive environments retain typed cycle/budget failure; neither visited-ID reuse nor erasure may
+  drop dependencies. Do not materialize substitutions or demand other fields during root validation.
+- The production descriptor constructor runs only after all required terminals are complete and
+  exactly aligned. Validation/commit rechecks this; a matching wrong FunctionType does not justify
+  wrong field facts, and missing/failed slots never receive placeholders.
+- U1 seals explicit independent model facts through a cfg(test)-only issuer and tests number/string,
+  both array/tuple contradictions with the same dependency graph, applied bounds/defaults/parameters,
+  failed terminals and stale/multi-domain commits through the real coordinator. These are publication
+  integrity proofs, not lexical execution proofs. U5 must prove the actual issuer, operator/binder
+  execution and exactly-once construction through CheckerSession. Fork-origin and distinct
+  outer-application binder ownership remain separate mandatory U1 repairs.
+
 Predeclare `RegisteredCallable` as a new append-only tag and adjudicate each guarded production
 match, including rendering and reference traversal. The already-present `WideningLiteral` guard drift
 is a separate baseline obligation, not permission to rebaseline both tags blindly. Source requests
