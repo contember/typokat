@@ -122,6 +122,8 @@ mutable referenced children, and missing/private/protected errors in unused cons
 non-heritage class SCC whose unrelated back-reference must not block selected-field completion.
 `contextual_rest_body_result_identity.ts` separates symbolic parameter specialization from broad
 body/inferred-return views and checks repeated-tag filtering composed with direct payload narrowing.
+`assignment_tuple_rest_diagnostic_positions.ts` pins rest-aware literal-child targets for zero, one
+and multiple rest values before fixed suffixes, including leading rests and nested member failures.
 
 The registered-callable protocol in [ADR-0040](../../docs/decisions/0040-complete-registered-callables-at-source-demand-boundaries.md)
 must close the following frozen 37-row construction cluster. Counts are prior mismatches, not a
