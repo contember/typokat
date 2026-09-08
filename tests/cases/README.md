@@ -120,6 +120,8 @@ the separately approved deferred class-member capability: both declaration order
 mutable referenced children, and missing/private/protected errors in unused consumers.
 `class_member_selector_enum_and_scc.ts` adds five markers for canonical enum-member copies and a
 non-heritage class SCC whose unrelated back-reference must not block selected-field completion.
+`contextual_rest_body_result_identity.ts` separates symbolic parameter specialization from broad
+body/inferred-return views and checks repeated-tag filtering composed with direct payload narrowing.
 
 The registered-callable protocol in [ADR-0040](../../docs/decisions/0040-complete-registered-callables-at-source-demand-boundaries.md)
 must close the following frozen 37-row construction cluster. Counts are prior mismatches, not a
