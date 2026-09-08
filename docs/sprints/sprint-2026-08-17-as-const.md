@@ -233,12 +233,22 @@ assertions to encode in the direct test cluster, not claims that tests already e
 | M2 literal attempts | A late Source request after an invalid or unavailable child discards attempt decisions and restores overwritten query entries; complete retry over the same prepared group reports each surviving sibling once, while old snapshots still request |
 | M2 preparation and flow | Source after a prepared sibling or inside reduction/guard/nested loop rolls back the receiving frame, pending writes, provisional entries and depth; preserve original checked products, caller memo entries and source-walk/effect counts |
 | M2 retention and draining | Registered edges retained only through child contributions/context IDs/group evidence remain enumerated; a widened wrapper retains the current and remaining obligations/ticket without native fallback, record duplication or source replay |
+| Alias recipe authentication | A published alias whose actual body contains an unpublished class cannot be represented by a contradictory number body edge; real identity/top preflight must reject the recipe or expose the class dependency, including erased arguments |
+| Applied field validation | Closed number and `OuterArgument(0)` applied to number reject string return publication; bounds/defaults/parameter fields also match their actual applied roots. A matching wrong descriptor cannot legitimize bad field facts |
+| Shared-domain fork arguments | Sibling forks allocating different types at the same local index cannot transfer one sibling's registered application as if its argument belonged to the other. Retain valid shared-prefix and authenticated import controls |
+| Multiple outer applications | Two valid applications of one registration with an owned binder and different outer bounds coexist without binder collisions; each nested owned-bound read resolves to its own application, with old snapshots unchanged |
+| Failed-field census | Valid TypeIds retained only by cycle, invalid-node or registration-endpoint failures are enumerated at every field kind; budget-only failures are not a sufficient witness |
 
 `registered-callable-u1-m2-bridge-delta.md` maps these additional assertions against frozen `8220…`.
 M2 adds 14 production native-control name occurrences but leaves the query/type/relate/snapshot
 definitions unchanged. Source control must stop and discard a retry attempt; terminal failures instead
 retain independently selected sibling diagnostics. Neither belongs in the other's failure representation.
 Reuse this mapping only after the rest-position repair's accepted diff confirms these seams unchanged.
+These five model-boundary assertions additionally pin the independent findings against the first U1
+packet (`registered-callable-u1-model-independent-review.*`). That packet has implemented identity,
+snapshot and transport code but is not U1 acceptance. Its explicit outer-savepoint rollback test does
+not prove automatic receiving-query rollback; actual propagation and the remaining lifecycle proofs
+continue in the implementation owner.
 
 Predeclare `RegisteredCallable` as a new append-only tag and adjudicate each guarded production
 match, including rendering and reference traversal. The already-present `WideningLiteral` guard drift
