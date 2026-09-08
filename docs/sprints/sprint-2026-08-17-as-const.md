@@ -319,6 +319,17 @@ the expected TK2741 instead of TK2322; `wideningTuples4.ts` gains its second str
 The latter remains a non-strict scoreboard FP, not a strict false positive or permission to bulk-save.
 Leader receipts use `m2-literal-result-leader-*`; review uses `m2-literal-result-independent-final-*`.
 
+**Cumulative M2 accepted in isolation:** `dab3f74565a633186be7b95a3a47dff7ff897c6ee2a89893fb3dad42e51dc141`.
+The prescribed fixed-position repair passed leader mechanism verification; prior independent review
+remains applicable to unchanged mechanisms. Leader verified all 2,088 frozen source entries and both
+sparse patch reconstructions, ran 120 source markers and 71 focused checker tests, and authenticated
+the complete closure records: 1,128 checker passes, 1,200 generated and 604 publication outputs,
+116 owner records, 874 unchanged official rows, 161 inherited ordinary mismatches and exactly four
+inherited full-suite failure names. Formatting, all-target Clippy and repros pass. Receipt:
+`m2-fixed-arity-leader-closure.json`; final code and gates: `m2-fixed-arity-product-*`.
+This supersedes the M2 candidate NO-GOs above and authorizes U1. Remaining construction, M3, R2b,
+inventory/tag and integration obligations stay open; primary production integration remains pending.
+
 M3 preparation against frozen `0770a469…` reproduces all 38 original rows without fixture drift:
 18 flat defaults, four ready enum keys, eight collection references and eight local-class references.
 `m3-current-preparation.md` identifies the bounded existing owners. The 17 markers in
