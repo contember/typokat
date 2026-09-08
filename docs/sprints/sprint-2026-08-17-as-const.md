@@ -325,6 +325,53 @@ parameter bindings must also count. Keep exact `T[i]` identity separate from bou
 no `T[i] -> BoundRows[i]` exact memo. Entry and nested contextual memo admission must cover row state.
 The current shared class-ready rest projection stays query-free and keeps its existing opaque boundaries.
 
+Independent step review (`r2b-current-independent-step-review.md`) returned conditional GO after M2.
+Implement R2b as one bounded delivery in this order; steps 1–4 are disabled seams until step 5 passes:
+
+| Step / owner | Required proof before enablement |
+|---|---|
+| 1. Binder finalization | Canonical write and unavailable-coverage facts after authentication; declaration binding scope versus effective reference scope |
+| 2. Types and coordinator | Immutable descriptor transport; symbolic `T[i]` remains distinct from concrete bound-column demand |
+| 3. Common parameter producer and inference handoff | P-prepared constraints/defaults/receiver, retained source binders and actual parameter/return shape; one body-read adapter |
+| 4. Coordinator and Relater | Complete whole-row alternatives, aggregate arity/readonly, aligned indexed identities and bounded generic-domain proof |
+| 5. CFG and call/effect owners | Invocation isolation, direct narrowing composition, entry/ancestor memo admission, success-only row writes and diagnostic recovery |
+
+Leader acceptance assertions for these seams:
+
+- Census: include runtime `var` initializers and declaration-based iteration writes such as
+  `for (var payload of values)`, but not `var payload;`. Assert canonical symbols for switch
+  discriminants versus case bindings, loop sources versus heads, later shadows and captured writes.
+  Missing/foreign scope coverage cannot enable a group. Test structural facts directly where source
+  checking of loop/destructuring forms remains outside the existing checker subset.
+- Descriptor preparation: run the same contextual callback under two outer P maps and a distinct R.
+  Inspect complete constraints/defaults/receiver and source binders; derive rows from the prepared
+  descriptor, never stale Store bounds. Reuse bound-preserving whole-function substitution before
+  established return-R shaping; no callback-binder instantiation or persistent constraint rewrite.
+- Body/source identity: a member demand followed by `return payload` preserves the symbolic source
+  return. Genuine branch narrowing remains observable. Demand bound columns before/after exact `T[i]`
+  without any exact column overlay; actual substituted `["a", 1][1]` still evaluates to exact `1`.
+  Protect the ordinary indexed coordinator route before expanding tuple-union evaluation.
+- Memo and invocation: test lookup and insertion refusal at entering raw/contextual walks and their
+  object/array/call ancestors, including defaults/writes that disable correlation but retain body-view
+  dependencies. Distinct row state with identical AST/context/storage must be cold-equivalent. Nested
+  ordinary/contextual expression and block bodies isolate groups and restore caller flow memo,
+  provisional table and loop depth on ready, rejected, exhausted and native-retry outcomes.
+- Flow and relation: repeated tags retain every matching row; row guards preserve prior direct payload
+  narrowing and payload guards do not inversely select the tag. Cover switch/joins/early exits and
+  unfinished loop back edges. Zero/one/two/three fixed parameters must accept/reject/accept/reject;
+  preserve readonly rejection, complete alternatives and dependent receiver/return/descriptor exclusions.
+- Effects: successful selection, failed outer relation, rejected overloads, exhaustion and raw-memo
+  recovery preserve lexical event identity/order and one committed batch. Body diagnostics survive
+  outer incompatibility. Rejected-overload permutations and native retry retain identical results.
+- Exact source receipt: signature fixture lines 8/10 retain only `8:37 TK2345` / `10:37 TK2345`;
+  preserving a wrong same-line argument error does not pass. Remove all 24 local surplus instances and
+  the eight official instances, preserve 23 local required diagnostics and clean sites, and classify
+  the complete diagnostic/incomplete delta. The eight outer backlog-69 relations are the sole local
+  deferral. Retain class-ready fixed slots beside opaque rest without query or bound following.
+
+These are unexecuted proof requirements. Implementation, independent adversarial review and the
+required contextual/inference differential gates remain pending; step GO is not implementation GO.
+
 The retained official regression set is four files, not permission to rebaseline:
 
 - `dependentDestructuredVariables.ts`: new TK2339 at 205/208/237×2/240×2/324/327.
