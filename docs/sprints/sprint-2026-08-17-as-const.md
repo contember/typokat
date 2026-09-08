@@ -298,12 +298,18 @@ may supply these complete collections without another walk or a new declaration 
 The eight local-class member rows remain separate blockers: a ready ClassInstance ID is not a published
 member surface. No mutable draft read, early publication, lazy class query or deferred projection
 producer is authorized by the collection repair. This is not the conservative ADR-0038 context gap.
-The user separately approved the bounded capability in `m3-class-reference-design.md`: a complete
-immutable class-member selector carried by existing deferred indexing, with distinct preserve versus
-shallow-literal-regularization result operations. Its meaning is resolved by the existing coordinator
-after publication; ordinary indexing keeps its operation and lexical Body checks retain access errors.
-Independent step review and leader mode/identity fixtures precede implementation. This approval adds
-no mutable draft lookup, extra source walk, finisher selection stage or general class scheduling.
+The separately user-approved capability is accepted in
+[ADR-0042](../decisions/0042-qualify-deferred-class-member-results.md). Independent step review returned
+conditional GO; the ADR incorporates both identity shortcuts, qualified outer completion and explicit
+cycle/budget responsibility. Implementation and direct model/query proof remain pending after M2.
+The two `class_member_selector_{modes,lexical_checks}.ts` fixtures separately pin 13 strict-tsc
+markers and clean reads/writes in `m3-class-selector-leader-spec-oracle.json`. They include an
+already-ready earlier-field receiver without initialization/assertion recovery and retain ordinary
+indexed object-reference controls. Scalar preserve-versus-regularize identity still requires direct
+model/query tests; source-level copy behavior alone cannot prove that distinction.
+`class_member_selector_enum_and_scc.ts` adds five strict-tsc markers and clean exact reads, authenticated
+in `m3-class-selector-leader-enum-scc-oracle.json`. This closes the step review's source-level class-mode
+witness; the ADR's exact-ID, identity, completion and transactional proof requirements remain unrun.
 
 R2b follows [ADR-0033](../decisions/0033-separate-contextual-row-views-from-symbolic-signatures.md):
 positional body views do not replace source binders/signatures. Any participant write, including

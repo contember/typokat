@@ -115,6 +115,11 @@ demanding-first default controls. A nested provisional default is not the final 
 `class_ready_collection_references.ts` preserves referenced child identity through ready collection
 lookup; `enum_ready_key_result_identity.ts` checks exact results of ready direct-root enum accesses.
 Their 17 markers are additional M3 controls, not permission to broaden class publication readiness.
+`class_member_selector_modes.ts` and `class_member_selector_lexical_checks.ts` pin 13 markers for
+the separately approved deferred class-member capability: both declaration orders, literal copies,
+mutable referenced children, and missing/private/protected errors in unused consumers.
+`class_member_selector_enum_and_scc.ts` adds five markers for canonical enum-member copies and a
+non-heritage class SCC whose unrelated back-reference must not block selected-field completion.
 
 The registered-callable protocol in [ADR-0040](../../docs/decisions/0040-complete-registered-callables-at-source-demand-boundaries.md)
 must close the following frozen 37-row construction cluster. Counts are prior mismatches, not a

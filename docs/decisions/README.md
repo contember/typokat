@@ -57,3 +57,4 @@ a commit message suffices.
 - [`0039`](0039-own-inference-modes-and-context-mappers-at-native-call-boundaries.md) — replace inferred observation transport with native phase-correct mode preparation and explicit contextual P/R environments — accepted (2026-09-07)
 - [`0040`](0040-complete-registered-callables-at-source-demand-boundaries.md) — complete registered callables through source-owned field demands, immutable snapshots and retained semantic decisions — accepted (2026-09-08)
 - [`0041`](0041-retain-checked-literal-results-for-assignment-diagnostics.md) — retain checked literal-site sources and decide assignment diagnostics with lossless failure aggregates — accepted (2026-09-08)
+- [`0042`](0042-qualify-deferred-class-member-results.md) — qualify immutable class-member selectors and complete literal-mode results through existing post-publication queries — accepted (2026-09-08)
