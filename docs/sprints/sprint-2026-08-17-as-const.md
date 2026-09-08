@@ -275,6 +275,10 @@ extending the existing literal-inference result and its bounded raw/contextual/m
 already-checked site identities. Settle that local product and literal-site primary/residual decisions
 together, then independently review before implementation. No global table, second initializer walk,
 ordinary-to-satisfies policy switch or ADR-0040 work follows from this approval.
+The nested fixture now has 20 strict-tsc markers, including both permutations of valid-extra and
+wrong-extra array elements with the same aggregate TypeId. `m2-literal-result-leader-expanded-spec-oracle.json`
+retains this oracle separately from the original 16-marker proof. Only the completed leased run counts;
+the first attempt timed out waiting for CPU before executing the oracle.
 
 M3 preparation against frozen `0770a469…` reproduces all 38 original rows without fixture drift:
 18 flat defaults, four ready enum keys, eight collection references and eight local-class references.

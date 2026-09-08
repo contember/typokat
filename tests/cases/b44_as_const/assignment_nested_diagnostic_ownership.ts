@@ -16,6 +16,8 @@ siblingOwnershipTarget = { left: { extra: true }, right: { extra: true } }; // e
 
 declare let arrayOwnershipTarget: { value: number }[];
 arrayOwnershipTarget = [{ extra: true }, { value: "wrong" }]; // error[TK2353] | error[TK2322]
+arrayOwnershipTarget = [{ value: 1, extra: true }, { value: "wrong", extra: true }]; // error[TK2353] | error[TK2322]
+arrayOwnershipTarget = [{ value: "wrong", extra: true }, { value: 1, extra: true }]; // error[TK2322] | error[TK2353]
 
 declare function nestedOwnershipNumber(value: number): number;
 siblingOwnershipTarget = { left: { extra: nestedOwnershipNumber("wrong") }, right: { extra: true } }; // error[TK2353] | error[TK2345] | error[TK2353]
