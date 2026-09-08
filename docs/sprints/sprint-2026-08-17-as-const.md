@@ -484,8 +484,14 @@ The retained official regression set is four files, not permission to rebaseline
    movements. The frozen `m4-official-gate-*` screen is evidence, not closure.
    The authenticated `8220…` early screen (`as-const-official-transition-current-triage.*`) has eight
    prospective unsupported cases and two in-scope cases with diagnostics; none is clean and no
-   reference diagnostic identity is lost. New `variadicTuples1.ts:363:13 TK2345` remains under causal
-   review before any 71/69 disposition. Final-binary replay and per-identity acceptance remain required.
+   reference diagnostic identity is lost. Leader explicitly defers new
+   `variadicTuples1.ts:363:13 TK2345` to
+   [71](../backlog/71-expression-inference-fn-tail.md#spread-evidence-and-contextual-callbacks), with 69
+   coordination: the six-variant causal packet isolates skipped spread evidence, while identical
+   non-spread headers pass all five staged binaries. Introduction is publication → native R1c;
+   this is not inherited diagnostic parity. Evidence: `as-const-variadic-transition-causal-*`.
+   Preserve the spread incomplete and all other identities; final-binary replay and per-identity
+   scoreboard acceptance remain required.
 7. Integrate only reviewed files while preserving unrelated WIP. Update coverage, divergence and
    surface/fixture indexes, completion manifest and roadmap. Complete `A-satisfies-as-const`, close
    backlog 44, stamp OUTCOME and archive this sprint only after all gates pass. Backlog 123 stays open.

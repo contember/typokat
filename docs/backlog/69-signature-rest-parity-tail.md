@@ -49,6 +49,11 @@ remain required R2b repairs. Preserve the six correct recovered body diagnostics
 14:29, 18:29, 31:29 and 35:11, plus the clean direct-narrowing control at line 36. Do not remove
 contextual checking to clear outer errors, or disable the mixed fixture wholesale.
 
+The newly exposed `variadicTuples1.ts:363:13 TK2345` is owned primarily by
+[71's spread-evidence repair](71-expression-inference-fn-tail.md#spread-evidence-and-contextual-callbacks).
+Its identical embedded-rest header works with explicit scalar inputs; coordinate future rest inference
+with that operand owner rather than treating every generic callback as this item's gap.
+
 ## Approach / acceptance
 
 Extend rest-shape inference to flatten embedded tuple rest patterns in both call-site

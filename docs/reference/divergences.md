@@ -116,7 +116,11 @@ and validated the same way.
 - **Spread call arguments remain explicitly unavailable (over-report / OOS).** The checker records
   `call/call-arguments/spread-argument` rather than dropping traversal or inventing an argument
   vector. Official `partiallyNamedTuples3.ts` therefore remains unsupported after its tuple label
-  becomes transparent; backlog `71` owns spread traversal.
+  becomes transparent; backlog `71` owns spread traversal. Missing spread evidence can also produce a
+  contextual callback TK2345 in `variadicTuples1.ts:363:13`, alongside its spread incomplete at 363:6.
+  The identical header accepts explicit arguments; the exact new over-report is deferred under
+  [71](../backlog/71-expression-inference-fn-tail.md#spread-evidence-and-contextual-callbacks), with 69
+  coordination, rather than classifying all generic callbacks as unsupported.
   <!-- div: id=calls/spread-argument-oos dir=over scope=b-iterability owner=../backlog/71-expression-inference-fn-tail.md witness=../../tooling/official-suite/scoreboard.txt -->
 - **A fresh literal with both a wrong known property and an excess property
   over-reports.** typokat preserves the independent assignability and freshness

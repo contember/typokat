@@ -58,6 +58,38 @@ The forward local-function call found by the same review shipped in the
 The shipped surface-accounting inventory prevents new silent traversal gaps; this item owns these
 concrete known families.
 
+## Spread evidence and contextual callbacks
+
+The bounded as-const sprint explicitly defers the new `variadicTuples1.ts:363:13 TK2345`
+(official directive-stripped source) to this item, coordinated with
+[69](69-signature-rest-parity-tail.md). The call also retains its spread incomplete at 363:6.
+This is a new diagnostic identity from native contextual inference, not inherited diagnostic parity.
+
+Minimal strict TypeScript 6.0.3-clean reproduction:
+
+```ts
+declare const sa: string[];
+declare function call<T extends unknown[], R>(...args: [...T, (...args: T) => R]): [T, R];
+call(...sa, (...x) => 42);
+```
+
+The argument collector records the unavailable spread but supplies no candidate evidence from it.
+Native contextual inference then retains the callback's symbolic `T`, while completed applicability
+uses `unknown[]`, producing TK2345. A ready `[string, string]` spread has the same gap. Supplying
+the two arguments explicitly, explicitly instantiating the fixed tuple, and using a scalar generic
+callback with fixed-rest context are clean controls. The missing dependency is spread evidence;
+generic callbacks as a whole are not excluded.
+
+Staged evidence places introduction between accepted publication `d1dab67b…` and native R1c
+`028486f4…`; both later M2 candidates preserve it. The exact disposition does not waive bounded R2b,
+M3, source-construction diagnostics, other identities in the mixed official file, or final scoreboard
+review. Keep the spread incomplete visible until its real owner supports the operand.
+
+Acceptance: visit/check the spread operand, preserve its aggregate cardinality and ordinary inference
+evidence, and make both spread variants strict-clean while retaining the three clean controls and
+independent negative diagnostics. Do not repair this by manufacturing contextual evidence or deleting
+the callback diagnostic after reporting.
+
 ## Touch points
 
 `crates/typokat-check/src/check/checker/expr.rs`, `crates/typokat-check/src/check/checker/statements.rs`,
