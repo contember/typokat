@@ -1,4 +1,306 @@
 use super::*;
+
+#[test]
+fn native_boundaries_equal_upper_inputs_preserve_ordinary_mode_and_occurrence_order() {
+    let mut interner = Interner::with_intrinsics();
+    let binder = TypeParamId(100);
+    let parameter = interner.intern_type_param(binder, "T");
+    let callback = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: vec![ParameterType::required("value", parameter)],
+        ret: interner.well_known().void,
+    });
+    let ordinary = interner.intern_ordinary_literal(LiteralValue::String("read".into()));
+    let regular = interner.regularize_literal_type(ordinary);
+    for source in [ordinary, regular] {
+        for bound in [regular, interner.well_known().string] {
+            for reverse in [false, true] {
+                for constraint in [None, Some(interner.well_known().string)] {
+                    let mut candidates = vec![
+                        CallSiteCandidate {
+                            ty: source,
+                            original_target: parameter,
+                            source: CallSiteSource::Argument {
+                                index: 0,
+                                occurrence: 0,
+                            },
+                            fresh: false,
+                            optional_undefined_fallback: false,
+                        },
+                        CallSiteCandidate {
+                            ty: bound,
+                            original_target: callback,
+                            source: CallSiteSource::Argument {
+                                index: 1,
+                                occurrence: 0,
+                            },
+                            fresh: true,
+                            optional_undefined_fallback: false,
+                        },
+                    ];
+                    if reverse {
+                        candidates.reverse();
+                    }
+                    let before = candidates.clone();
+                    let mut preparation = CallInferencePreparation::default();
+                    preparation.fixed.insert(binder);
+                    preparation.top_level.insert(binder, false);
+                    preparation.upper_inputs.insert((1, binder));
+                    let mut queries = SemanticQueryState::default();
+                    let published = PublishedClasses::empty();
+                    let compatible = is_assignable_type_attempt(
+                        &mut interner,
+                        &mut 101,
+                        &published,
+                        &mut queries,
+                        source,
+                        bound,
+                    );
+                    assert!(matches!(
+                        compatible,
+                        SemanticQueryAttempt::Complete(DemandOutcome::Ready(true))
+                    ));
+                    let result = fix_call_site_candidates_for_param_attempt(
+                        &mut interner,
+                        &mut 101,
+                        &published,
+                        &mut queries,
+                        &candidates,
+                        BinderFixingPolicy {
+                            binder,
+                            constraint,
+                            preserve_unwidened: false,
+                            purpose: SignatureInferencePurpose::FinalCall {
+                                retained_return: parameter,
+                                preparation: &preparation,
+                            },
+                        },
+                    );
+                    let expected = if constraint.is_some() {
+                        regular
+                    } else {
+                        source
+                    };
+                    assert!(
+                        matches!(result, SemanticQueryAttempt::Complete(DemandOutcome::Ready(Some(value))) if value == expected)
+                    );
+                    assert_eq!(candidates, before);
+                    assert_eq!(candidates.len(), 2);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn native_modes_freeze_before_rest_echo_without_removing_occurrences() {
+    let mut interner = Interner::with_intrinsics();
+    let binder = TypeParamId(100);
+    let parameter = interner.intern_type_param(binder, "T");
+    let array = interner.intern_array(parameter);
+    let callback = interner.intern_function(crate::types::repr::FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: vec![ParameterType::rest("values", array)],
+        ret: interner.well_known().void,
+    });
+    let ordinary =
+        interner.intern_ordinary_literal(crate::types::repr::LiteralValue::String("read".into()));
+    let regular = interner.regularize_literal_type(ordinary);
+    let published = PublishedClasses::empty();
+    for (source, expected) in [(ordinary, interner.well_known().string), (regular, regular)] {
+        let candidates = vec![
+            CallSiteCandidate {
+                ty: source,
+                original_target: parameter,
+                source: CallSiteSource::Argument {
+                    index: 0,
+                    occurrence: 0,
+                },
+                fresh: false,
+                optional_undefined_fallback: false,
+            },
+            CallSiteCandidate {
+                ty: interner.well_known().never,
+                original_target: callback,
+                source: CallSiteSource::Argument {
+                    index: 1,
+                    occurrence: 0,
+                },
+                fresh: true,
+                optional_undefined_fallback: false,
+            },
+        ];
+        let before = candidates.clone();
+        let mut preparation = CallInferencePreparation::default();
+        preparation.fixed.insert(binder);
+        preparation.top_level.insert(binder, true);
+        assert!(!type_parameter_at_top_level(
+            interner.store(),
+            callback,
+            binder
+        ));
+        let result = fix_call_site_candidates_for_param_attempt(
+            &mut interner,
+            &mut 101,
+            &published,
+            &mut SemanticQueryState::default(),
+            &candidates,
+            BinderFixingPolicy {
+                binder,
+                constraint: None,
+                preserve_unwidened: false,
+                purpose: SignatureInferencePurpose::FinalCall {
+                    retained_return: parameter,
+                    preparation: &preparation,
+                },
+            },
+        );
+        let SemanticQueryAttempt::Complete(DemandOutcome::Ready(result)) = result else {
+            panic!("ready selection expected");
+        };
+        assert_eq!(result, Some(expected));
+        assert_eq!(candidates, before);
+        assert_eq!(candidates.len(), 2);
+    }
+}
+
+#[test]
+fn native_boundaries_conflicting_upper_inputs_still_use_baseline_selection() {
+    let mut interner = Interner::with_intrinsics();
+    let binder = TypeParamId(100);
+    let parameter = interner.intern_type_param(binder, "T");
+    let read = interner.intern_ordinary_literal(LiteralValue::String("read".into()));
+    let regular_read = interner.regularize_literal_type(read);
+    let write = interner.intern_literal(LiteralValue::String("write".into()));
+    let conflict = interner.union(vec![read, write]);
+    for bounds in [[regular_read, write], [write, regular_read]] {
+        let candidates: Vec<_> = [read, bounds[0], bounds[1]]
+            .into_iter()
+            .enumerate()
+            .map(|(index, ty)| CallSiteCandidate {
+                ty,
+                original_target: parameter,
+                source: CallSiteSource::Argument {
+                    index,
+                    occurrence: 0,
+                },
+                fresh: false,
+                optional_undefined_fallback: false,
+            })
+            .collect();
+        let before = candidates.clone();
+        let mut preparation = CallInferencePreparation::default();
+        preparation.fixed.insert(binder);
+        preparation.top_level.insert(binder, false);
+        preparation.upper_inputs.extend([(1, binder), (2, binder)]);
+        let mut queries = SemanticQueryState::default();
+        let published = PublishedClasses::empty();
+        let incompatible = is_assignable_type_attempt(
+            &mut interner,
+            &mut 101,
+            &published,
+            &mut queries,
+            read,
+            write,
+        );
+        assert!(matches!(
+            incompatible,
+            SemanticQueryAttempt::Complete(DemandOutcome::Ready(false))
+        ));
+        let result = fix_call_site_candidates_for_param_attempt(
+            &mut interner,
+            &mut 101,
+            &published,
+            &mut queries,
+            &candidates,
+            BinderFixingPolicy {
+                binder,
+                constraint: None,
+                preserve_unwidened: true,
+                purpose: SignatureInferencePurpose::FinalCall {
+                    retained_return: parameter,
+                    preparation: &preparation,
+                },
+            },
+        );
+        assert!(
+            matches!(result, SemanticQueryAttempt::Complete(DemandOutcome::Ready(Some(value))) if value == conflict)
+        );
+        for target in [regular_read, write] {
+            let rejected = is_assignable_type_attempt(
+                &mut interner,
+                &mut 101,
+                &published,
+                &mut queries,
+                conflict,
+                target,
+            );
+            assert!(matches!(
+                rejected,
+                SemanticQueryAttempt::Complete(DemandOutcome::Ready(false))
+            ));
+        }
+        assert_eq!(candidates, before);
+        assert_eq!(candidates.len(), 3);
+    }
+}
+
+#[test]
+fn native_duplicate_modes_are_prepared_before_union_in_both_orders() {
+    let mut interner = Interner::with_intrinsics();
+    let binder = TypeParamId(100);
+    let parameter = interner.intern_type_param(binder, "T");
+    let retained_return = interner.intern_array(parameter);
+    let ordinary =
+        interner.intern_ordinary_literal(crate::types::repr::LiteralValue::String("read".into()));
+    let regular = interner.regularize_literal_type(ordinary);
+    for sources in [[ordinary, regular], [regular, ordinary]] {
+        let candidates: Vec<_> = sources
+            .into_iter()
+            .enumerate()
+            .map(|(index, ty)| CallSiteCandidate {
+                ty,
+                original_target: parameter,
+                source: CallSiteSource::Argument {
+                    index,
+                    occurrence: 0,
+                },
+                fresh: false,
+                optional_undefined_fallback: false,
+            })
+            .collect();
+        let preparation = CallInferencePreparation::default();
+        let result = fix_call_site_candidates_for_param_attempt(
+            &mut interner,
+            &mut 101,
+            &PublishedClasses::empty(),
+            &mut SemanticQueryState::default(),
+            &candidates,
+            BinderFixingPolicy {
+                binder,
+                constraint: None,
+                preserve_unwidened: false,
+                purpose: SignatureInferencePurpose::FinalCall {
+                    retained_return,
+                    preparation: &preparation,
+                },
+            },
+        );
+        let SemanticQueryAttempt::Complete(DemandOutcome::Ready(result)) = result else {
+            panic!("ready selection expected");
+        };
+        assert_eq!(result, Some(interner.well_known().string));
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|candidate| candidate.ty)
+                .collect::<Vec<_>>(),
+            sources
+        );
+    }
+}
 use crate::types::repr::{
     DeclaredRecipeNode, EnumId, EnumMemberFact, EnumMemberId, EnumMemberType, EnumNumber, EnumType,
     EnumValue, FunctionType, LiteralValue, ObjectType, ParameterType, PropertyType, TupleRestType,
@@ -229,6 +531,7 @@ fn infer_type_arguments_from_params(
         &published,
         &mut queries,
         SignatureInferenceRequest {
+            purpose: SignatureInferencePurpose::ClassApplication,
             type_params: &type_params,
             params,
             args,
@@ -474,8 +777,7 @@ fn infers_from_scalar_argument() {
     let mut interner = Interner::with_intrinsics();
     let wk = interner.well_known();
     let t = interner.intern_type_param(TypeParamId(0), "T");
-    // The argument `5` is a literal type.
-    let five = interner.intern_literal(LiteralValue::Number(5.0));
+    let five = interner.intern_ordinary_literal(LiteralValue::Number(5.0));
     let mut next_type_param = 1;
 
     let map = infer_type_arguments(
@@ -490,6 +792,96 @@ fn infers_from_scalar_argument() {
         map.get(&TypeParamId(0)).copied(),
         Some(wk.number),
         "T inferred from `5` widens to number"
+    );
+}
+
+#[test]
+fn m1_regular_candidate_dominates_same_value_widening_in_either_source_order() {
+    let mut interner = Interner::with_intrinsics();
+    let t_id = TypeParamId(0);
+    let t = interner.intern_type_param(t_id, "T");
+    let regular = interner.intern_literal(LiteralValue::Number(5.0));
+    let widening = interner.intern_ordinary_literal(LiteralValue::Number(5.0));
+    for args in [[regular, widening], [widening, regular]] {
+        let mut next = 1;
+        let map = infer_type_arguments(&mut interner, &mut next, &[t_id], &[t, t], &args, &[]);
+        assert_eq!(map.get(&t_id), Some(&regular));
+    }
+    let mut next = 1;
+    let map = infer_type_arguments(&mut interner, &mut next, &[t_id], &[t], &[regular], &[]);
+    assert_eq!(map.get(&t_id), Some(&regular));
+}
+
+#[test]
+fn r1a_primitive_constraint_regularizes_every_multi_candidate_terminal() {
+    for (first, second) in [
+        (
+            LiteralValue::String("a".to_owned()),
+            LiteralValue::String("b".to_owned()),
+        ),
+        (LiteralValue::Number(1.0), LiteralValue::Number(2.0)),
+    ] {
+        let mut interner = Interner::with_intrinsics();
+        let parameter = TypeParamId(0);
+        let target = interner.intern_type_param(parameter, "T");
+        let constraint = interner.intern_intrinsic(first.base_kind());
+        interner.set_type_param_constraint(parameter, constraint);
+        let exact_first = interner.intern_literal(first.clone());
+        let exact_second = interner.intern_literal(second.clone());
+        let ordinary_first = interner.intern_ordinary_literal(first);
+        let ordinary_second = interner.intern_ordinary_literal(second);
+        let exact_union = interner.union(vec![exact_first, exact_second]);
+        let ordinary_union = interner.union(vec![ordinary_first, ordinary_second]);
+        let incompatible = interner.intern_literal(LiteralValue::Boolean(true));
+        for (sources, expected) in [
+            ([ordinary_first, ordinary_first], exact_first),
+            ([ordinary_first, ordinary_second], exact_union),
+            ([exact_first, ordinary_second], exact_union),
+            ([ordinary_first, exact_second], exact_union),
+            ([ordinary_first, ordinary_union], exact_union),
+            ([ordinary_union, ordinary_first], exact_union),
+            ([ordinary_first, incompatible], exact_first),
+        ] {
+            let mut next = 1;
+            let result = infer_type_arguments(
+                &mut interner,
+                &mut next,
+                &[parameter],
+                &[target, target],
+                &sources,
+                &[],
+            );
+            assert_eq!(
+                result.get(&parameter),
+                Some(&expected),
+                "sources: {sources:?}"
+            );
+            assert_eq!(interner.widen_literal_type(expected), expected);
+        }
+    }
+}
+
+#[test]
+fn r1a_unconstrained_multi_candidate_modes_remain_widenable() {
+    let mut interner = Interner::with_intrinsics();
+    let parameter = TypeParamId(0);
+    let target = interner.intern_type_param(parameter, "T");
+    let first = interner.intern_ordinary_literal(LiteralValue::String("a".to_owned()));
+    let second = interner.intern_ordinary_literal(LiteralValue::String("b".to_owned()));
+    let expected = interner.union(vec![first, second]);
+    let mut next = 1;
+    let result = infer_type_arguments(
+        &mut interner,
+        &mut next,
+        &[parameter],
+        &[target, target],
+        &[first, second],
+        &[],
+    );
+    assert_eq!(result.get(&parameter), Some(&expected));
+    assert_eq!(
+        interner.widen_literal_type(expected),
+        interner.well_known().string
     );
 }
 
@@ -1348,8 +1740,8 @@ fn infers_each_parameter_independently() {
     let wk = interner.well_known();
     let a = interner.intern_type_param(TypeParamId(0), "A");
     let b = interner.intern_type_param(TypeParamId(1), "B");
-    let one = interner.intern_literal(LiteralValue::Number(1.0));
-    let x = interner.intern_literal(LiteralValue::String("x".to_string()));
+    let one = interner.intern_ordinary_literal(LiteralValue::Number(1.0));
+    let x = interner.intern_ordinary_literal(LiteralValue::String("x".to_string()));
     let mut next_type_param = 2;
 
     let map = infer_type_arguments(
@@ -1611,8 +2003,8 @@ fn incompatible_multi_source_candidates_fix_to_first_prepared() {
     let mut interner = Interner::with_intrinsics();
     let wk = interner.well_known();
     let t = interner.intern_type_param(TypeParamId(0), "T");
-    let one = interner.intern_literal(LiteralValue::Number(1.0));
-    let s = interner.intern_literal(LiteralValue::String("s".to_string()));
+    let one = interner.intern_ordinary_literal(LiteralValue::Number(1.0));
+    let s = interner.intern_ordinary_literal(LiteralValue::String("s".to_string()));
     let mut next_type_param = 1;
 
     let map = infer_type_arguments(
@@ -1852,7 +2244,7 @@ fn nullish_candidates_do_not_launder_enum_provenance() {
         )],
         false,
     );
-    let raw = interner.intern_literal(LiteralValue::Number(99.0));
+    let raw = interner.intern_ordinary_literal(LiteralValue::Number(99.0));
     let matching_raw = interner.intern_literal(LiteralValue::Number(1.0));
     let first_null = interner.union(vec![first[0], wk.null]);
     let second_null = interner.union(vec![second[0], wk.null]);
@@ -2253,6 +2645,7 @@ fn primitive_constraint_preserves_literal() {
     );
 
     // `<U>` (unconstrained): widened.
+    let x = interner.intern_ordinary_literal(LiteralValue::String("x".to_string()));
     let u = interner.intern_type_param(TypeParamId(1), "U");
     let mut next_type_param = 2;
     let map = infer_type_arguments(
@@ -2528,4 +2921,338 @@ fn self_referential_types_terminate() {
         map.is_empty(),
         "no type params → empty map, and no infinite loop"
     );
+}
+
+fn fix_declared_params(
+    interner: &mut Interner,
+    type_params: &[GenericTypeParam],
+    fixed: FxHashMap<TypeParamId, TypeId>,
+) -> FixedSignatureParams {
+    let published = PublishedClasses::empty();
+    let mut queries = SemanticQueryState::default();
+    let mut next_type_param = 1_000;
+    match fix_signature_params(
+        interner,
+        &mut next_type_param,
+        &published,
+        &mut queries,
+        type_params,
+        fixed,
+        &FxHashSet::default(),
+    ) {
+        DemandOutcome::Ready(fixed) => fixed,
+        DemandOutcome::Exhausted(exhaustion) => {
+            panic!("fixing unexpectedly exhausted: {exhaustion:?}")
+        }
+    }
+}
+
+/// `<U extends T, T extends string>` with `U = "child"`, `T = 1`: `T` fixes first, so `U`
+/// is checked against the clamped `string` instead of the raw candidate `1`.
+#[test]
+fn reverse_dependent_constraint_fixes_the_mentioned_parameter_first() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let (u, t) = (TypeParamId(0), TypeParamId(1));
+    let t_ty = interner.intern_type_param(t, "T");
+    let child = interner.intern_literal(LiteralValue::String("child".into()));
+    let one = interner.intern_literal(LiteralValue::Number(1.0));
+    let type_params = [
+        GenericTypeParam {
+            id: u,
+            constraint: Some(t_ty),
+            default: None,
+        },
+        GenericTypeParam {
+            id: t,
+            constraint: Some(wk.string),
+            default: None,
+        },
+    ];
+
+    let fixed = fix_declared_params(
+        &mut interner,
+        &type_params,
+        FxHashMap::from_iter([(u, child), (t, one)]),
+    );
+
+    assert_eq!(fixed.arguments.get(&t).copied(), Some(wk.string));
+    assert_eq!(fixed.arguments.get(&u).copied(), Some(child));
+    assert_eq!(fixed.constraint_violations, FxHashSet::from_iter([t]));
+}
+
+/// `<T = U, U extends string>` without candidates: the default demands `U` before `T`.
+#[test]
+fn default_mentioning_a_later_parameter_observes_its_final_binding() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let (t, u) = (TypeParamId(0), TypeParamId(1));
+    let u_ty = interner.intern_type_param(u, "U");
+    let type_params = [
+        GenericTypeParam {
+            id: t,
+            constraint: None,
+            default: Some(u_ty),
+        },
+        GenericTypeParam {
+            id: u,
+            constraint: Some(wk.string),
+            default: None,
+        },
+    ];
+
+    let fixed = fix_declared_params(&mut interner, &type_params, FxHashMap::default());
+
+    assert_eq!(fixed.arguments.get(&t).copied(), Some(wk.string));
+    assert_eq!(fixed.arguments.get(&u).copied(), Some(wk.string));
+    assert!(fixed.constraint_violations.is_empty());
+}
+
+/// `<T extends { next: T }>` without a candidate fixes once to the constraint with one
+/// symbolic layer; no budget exhaustion.
+#[test]
+fn self_cyclic_constraint_without_candidate_keeps_one_symbolic_layer() {
+    let mut interner = Interner::with_intrinsics();
+    let t = TypeParamId(0);
+    let t_ty = interner.intern_type_param(t, "T");
+    let constraint = interner.reserve_object();
+    interner.fill_object(
+        constraint,
+        ObjectType {
+            properties: vec![prop("next", t_ty)],
+            ..Default::default()
+        },
+    );
+    let type_params = [GenericTypeParam {
+        id: t,
+        constraint: Some(constraint),
+        default: None,
+    }];
+
+    let fixed = fix_declared_params(&mut interner, &type_params, FxHashMap::default());
+
+    assert_eq!(fixed.arguments.get(&t).copied(), Some(constraint));
+    let next = interner
+        .store()
+        .object_type(constraint)
+        .map(|object| object.properties[0].ty);
+    assert_eq!(
+        next,
+        Some(t_ty),
+        "the fallback keeps `T` symbolic under `next`"
+    );
+    assert!(fixed.constraint_violations.is_empty());
+}
+
+/// `<B extends { c: C }, C extends { b: B }>` with rejected `number` candidates: `C` fixes
+/// against the raw `B`, `B` against the fixed `C`; both violations are retained.
+#[test]
+fn mutual_cyclic_constraints_with_rejected_candidates_fix_without_exhaustion() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let (b, c) = (TypeParamId(0), TypeParamId(1));
+    let b_ty = interner.intern_type_param(b, "B");
+    let c_ty = interner.intern_type_param(c, "C");
+    let has_c = interner.reserve_object();
+    interner.fill_object(
+        has_c,
+        ObjectType {
+            properties: vec![prop("c", c_ty)],
+            ..Default::default()
+        },
+    );
+    let has_b = interner.reserve_object();
+    interner.fill_object(
+        has_b,
+        ObjectType {
+            properties: vec![prop("b", b_ty)],
+            ..Default::default()
+        },
+    );
+    let type_params = [
+        GenericTypeParam {
+            id: b,
+            constraint: Some(has_c),
+            default: None,
+        },
+        GenericTypeParam {
+            id: c,
+            constraint: Some(has_b),
+            default: None,
+        },
+    ];
+
+    let fixed = fix_declared_params(
+        &mut interner,
+        &type_params,
+        FxHashMap::from_iter([(b, wk.number), (c, wk.number)]),
+    );
+
+    assert_eq!(fixed.constraint_violations, FxHashSet::from_iter([b, c]));
+    let first_property = |ty: TypeId| {
+        interner
+            .store()
+            .object_type(ty)
+            .map(|object| object.properties[0].ty)
+    };
+    let fixed_c = fixed.arguments.get(&c).copied().unwrap_or(wk.never);
+    let fixed_b = fixed.arguments.get(&b).copied().unwrap_or(wk.never);
+    assert_eq!(
+        first_property(fixed_c),
+        Some(wk.number),
+        "`C = {{ b: number }}`"
+    );
+    assert_eq!(
+        first_property(fixed_b),
+        Some(fixed_c),
+        "`B = {{ c: C }}` over the fixed `C`"
+    );
+
+    let output = crate::check::test_support::check_source(
+        r#"
+declare const seeds: [number, number];
+declare function graph<B extends { c: C }, C extends { b: B }>(values: [B, C]): [B, C];
+const result = graph(seeds);
+"#,
+    );
+    assert!(output.parse_errors.is_empty(), "{:?}", output.parse_errors);
+    assert_eq!(
+        output
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>(),
+        ["TK2345"]
+    );
+    assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+}
+
+fn fix_present_params(
+    interner: &mut Interner,
+    type_params: &[GenericTypeParam],
+    fixed: FxHashMap<TypeParamId, TypeId>,
+    resolve_defaults: bool,
+) -> Vec<(TypeParamId, TypeId)> {
+    let published = PublishedClasses::empty();
+    let mut queries = SemanticQueryState::default();
+    let mut next_type_param = 1_000;
+    match fix_present_signature_params_attempt(
+        interner,
+        &mut next_type_param,
+        &published,
+        &mut queries,
+        type_params,
+        fixed,
+        PresentFixingPolicy {
+            fresh_exempt: &FxHashSet::default(),
+            resolve_defaults,
+        },
+    ) {
+        SemanticQueryAttempt::Complete(DemandOutcome::Ready(ordered)) => ordered,
+        SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(exhaustion)) => {
+            panic!("partial fixing unexpectedly exhausted: {exhaustion:?}")
+        }
+        SemanticQueryAttempt::NeedsNativeIdentities(_) => {
+            unreachable!("native identity demands require the project-local Pass boundary")
+        }
+    }
+}
+
+/// `<T extends { a: string }, U = T>` with only `T` inferred: the contextual preview resolves
+/// `U` through the fixed `T`, so a callback parameter typed `U` sees `{ a: string }`.
+#[test]
+fn contextual_preview_resolves_a_candidate_less_default_from_fixed_binders() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let (t, u) = (TypeParamId(0), TypeParamId(1));
+    let t_ty = interner.intern_type_param(t, "T");
+    let shape = interner.reserve_object();
+    interner.fill_object(
+        shape,
+        ObjectType {
+            properties: vec![prop("a", wk.string)],
+            ..Default::default()
+        },
+    );
+    let type_params = [
+        GenericTypeParam {
+            id: t,
+            constraint: Some(shape),
+            default: None,
+        },
+        GenericTypeParam {
+            id: u,
+            constraint: None,
+            default: Some(t_ty),
+        },
+    ];
+
+    let preview = fix_present_params(
+        &mut interner,
+        &type_params,
+        FxHashMap::from_iter([(t, shape)]),
+        true,
+    );
+    assert_eq!(preview, vec![(t, shape), (u, shape)]);
+
+    let application = fix_present_params(
+        &mut interner,
+        &type_params,
+        FxHashMap::from_iter([(t, shape)]),
+        false,
+    );
+    assert_eq!(
+        application,
+        vec![(t, shape)],
+        "non-preview callers keep defaults unresolved"
+    );
+
+    let clean = crate::check::test_support::check_source(
+        r#"
+declare function pd<T extends { a: string }, U = T>(t: T, cb: (u: U) => void): void;
+pd({ a: "x" }, (u) => { const ok: string = u.a; });
+"#,
+    );
+    assert!(clean.parse_errors.is_empty(), "{:?}", clean.parse_errors);
+    assert!(clean.diagnostics.is_empty(), "{:?}", clean.diagnostics);
+    assert!(clean.incomplete.is_empty(), "{:?}", clean.incomplete);
+
+    let source = r#"
+declare function pd<T extends { a: string }, U = T>(t: T, cb: (u: U) => void): void;
+pd({ a: "x" }, (u) => { const bad: number = u.a; });
+"#;
+    let wrong = crate::check::test_support::check_source(source);
+    assert_eq!(
+        wrong
+            .diagnostics
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), &source[diagnostic.span.range()]))
+            .collect::<Vec<_>>(),
+        [("TK2322", "bad")]
+    );
+    assert!(wrong.incomplete.is_empty(), "{:?}", wrong.incomplete);
+}
+
+/// `<T, U = T>` with no candidate for `T`: the default mentions an unfixed binder, so `U`
+/// stays symbolic (absent from the partial result) instead of leaking a raw `T`.
+#[test]
+fn contextual_preview_keeps_a_default_over_unfixed_binders_symbolic() {
+    let mut interner = Interner::with_intrinsics();
+    let (t, u) = (TypeParamId(0), TypeParamId(1));
+    let t_ty = interner.intern_type_param(t, "T");
+    let type_params = [
+        GenericTypeParam {
+            id: t,
+            constraint: None,
+            default: None,
+        },
+        GenericTypeParam {
+            id: u,
+            constraint: None,
+            default: Some(t_ty),
+        },
+    ];
+
+    let preview = fix_present_params(&mut interner, &type_params, FxHashMap::default(), true);
+    assert!(preview.is_empty(), "{preview:?}");
 }

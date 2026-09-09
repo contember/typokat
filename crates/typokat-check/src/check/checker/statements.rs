@@ -2,7 +2,7 @@
 
 use super::assignment::binding_decl_id;
 use super::assignment::declared_from_init;
-use super::calls::{widen, FunctionReservation};
+use super::calls::FunctionReservation;
 use super::context::*;
 use super::function_groups::{
     FunctionGroupBodyCompletion, FunctionGroupIdentity, FunctionGroupUnavailableCause,
@@ -19,12 +19,12 @@ use crate::span::Span;
 use crate::types::repr::{FunctionType, LiteralValue, ObjectType, TypeTag};
 use crate::types::store::{Store, TypeId};
 use oxc_ast::ast::{
-    BindingIdentifier, BindingPattern, BindingProperty, BlockStatement, Declaration,
-    ExportDefaultDeclarationKind, Expression, ForInStatement, ForOfStatement, ForStatement,
-    ForStatementInit, ForStatementLeft, Function, ObjectPattern, ObjectPropertyKind, Statement,
-    TSLiteral, TSModuleDeclaration, TSModuleDeclarationBody, TSModuleDeclarationName, TSType,
-    TSTypeName, TryStatement, UnaryOperator, VariableDeclaration, VariableDeclarationKind,
-    VariableDeclarator,
+    AssignmentPattern, BindingIdentifier, BindingPattern, BindingProperty, BlockStatement,
+    Declaration, ExportDefaultDeclarationKind, Expression, ForInStatement, ForOfStatement,
+    ForStatement, ForStatementInit, ForStatementLeft, Function, ObjectPattern, ObjectPropertyKind,
+    Statement, TSLiteral, TSModuleDeclaration, TSModuleDeclarationBody, TSModuleDeclarationName,
+    TSSignature, TSType, TSTypeName, TryStatement, UnaryOperator, VariableDeclaration,
+    VariableDeclarationKind, VariableDeclarator,
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_span::GetSpan;
@@ -38,15 +38,59 @@ enum StatementListMode<'a> {
 }
 
 #[derive(Clone, Copy)]
-pub(in crate::check::checker) enum ReturnCheckPolicy {
-    Inferred,
+pub(in crate::check::checker) enum ReturnCheckPolicy<'a> {
+    Inferred {
+        context: Option<TypeId>,
+        preparation: Option<&'a super::expr::InitializerContextSlot>,
+    },
     Declared(TypeId),
-    SatisfiesUnannotated(TypeId),
+    SatisfiesUnannotated {
+        context: TypeId,
+        preparation: Option<&'a super::expr::InitializerContextSlot>,
+    },
 }
 
-impl ReturnCheckPolicy {
+impl ReturnCheckPolicy<'_> {
+    pub(in crate::check::checker) fn inferred(context: Option<TypeId>) -> Self {
+        Self::Inferred {
+            context,
+            preparation: None,
+        }
+    }
+
+    pub(in crate::check::checker) fn satisfies_unannotated(context: TypeId) -> Self {
+        Self::SatisfiesUnannotated {
+            context,
+            preparation: None,
+        }
+    }
+
+    pub(in crate::check::checker) fn context(self) -> Option<TypeId> {
+        match self {
+            Self::Inferred { context, .. } => context,
+            Self::Declared(context) | Self::SatisfiesUnannotated { context, .. } => Some(context),
+        }
+    }
+
+    pub(in crate::check::checker) fn with_preparation(
+        self,
+        slot: &super::expr::InitializerContextSlot,
+    ) -> ReturnCheckPolicy<'_> {
+        match self {
+            Self::Inferred { context, .. } => ReturnCheckPolicy::Inferred {
+                context,
+                preparation: Some(slot),
+            },
+            Self::SatisfiesUnannotated { context, .. } => ReturnCheckPolicy::SatisfiesUnannotated {
+                context,
+                preparation: Some(slot),
+            },
+            Self::Declared(context) => ReturnCheckPolicy::Declared(context),
+        }
+    }
+
     pub(in crate::check::checker) fn ordinary(declared: Option<TypeId>) -> Self {
-        declared.map_or(Self::Inferred, Self::Declared)
+        declared.map_or(Self::inferred(None), Self::Declared)
     }
 }
 
@@ -54,6 +98,31 @@ impl ReturnCheckPolicy {
 enum VarAnnotationReservation {
     QueryFree,
     Full,
+}
+
+/// Whether the flat binding source carries annotation authority (defaults are checked
+/// against it) or is inferred (defaults contribute to the published leaf).
+#[derive(Clone, Copy)]
+enum FlatBindingSource {
+    Annotated(TypeId),
+    Inferred(TypeId),
+}
+
+impl FlatBindingSource {
+    fn ty(self) -> TypeId {
+        match self {
+            Self::Annotated(ty) | Self::Inferred(ty) => ty,
+        }
+    }
+}
+
+fn effect_record_count<Ticket: Copy>(effects: &CheckerEffects<Ticket>) -> usize {
+    effects.records.len()
+        + effects
+            .nested
+            .iter()
+            .map(effect_record_count)
+            .sum::<usize>()
 }
 
 #[derive(Copy, Clone)]
@@ -251,7 +320,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         self.check_statement_list_with_surfaces_mode(
             scope,
             body,
-            ReturnCheckPolicy::Inferred,
+            ReturnCheckPolicy::inferred(None),
             &mut no_return,
             surfaces,
             StatementListMode::Ambient,
@@ -1101,8 +1170,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
     }
 
-    /// Check `return expr` against the declared return type, or fold the value return's
-    /// widened type into the running inferred-return union. Bare `return;` contributes none.
+    // Keep value-return modes intact until the body publication boundary.
     fn check_return(
         &mut self,
         scope: ScopeId,
@@ -1138,31 +1206,41 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     kind: ObligationKind::Assignment,
                 });
             }
-            // No annotation: the inferred return type is the union of every value
-            // return's widened type, independent of visitation order (`union` canonicalizes
-            // its member set). Stopping at the first return would drop `string | number`
-            // down to whichever return was seen first.
-            ReturnCheckPolicy::Inferred => {
-                let Some((src, _)) = self.infer_expr(scope, arg) else {
-                    return;
-                };
-                let widened = widen(self.interner, src);
-                *inferred = Some(match *inferred {
-                    Some(existing) => self.interner.union(vec![existing, widened]),
-                    None => widened,
-                });
-            }
-            ReturnCheckPolicy::SatisfiesUnannotated(tgt) => {
-                let check_mark = self.satisfies_check_mark();
-                let Some((src, _)) = self.infer_initializer_with_provenance(
+            ReturnCheckPolicy::Inferred {
+                context,
+                preparation,
+            } => {
+                let local = super::expr::InitializerContextSlot::new(context);
+                let Some(value) = self.infer_initializer_with_context_slot(
                     scope,
                     arg,
-                    Some(tgt),
+                    preparation.unwrap_or(&local),
+                    super::expr::ContextualLiteralProvenance::Existing,
+                ) else {
+                    return;
+                };
+                let src = value.source;
+                *inferred = Some(match *inferred {
+                    Some(existing) => self.interner.union(vec![existing, src]),
+                    None => src,
+                });
+            }
+            ReturnCheckPolicy::SatisfiesUnannotated {
+                context: tgt,
+                preparation,
+            } => {
+                let check_mark = self.satisfies_check_mark();
+                let local = super::expr::InitializerContextSlot::new(Some(tgt));
+                let Some(value) = self.infer_initializer_with_context_slot(
+                    scope,
+                    arg,
+                    preparation.unwrap_or(&local),
                     super::expr::ContextualLiteralProvenance::Satisfies,
                 ) else {
                     return;
                 };
                 self.truncate_satisfies_checks(check_mark);
+                let src = value.source;
                 *inferred = Some(match *inferred {
                     Some(existing) => self.interner.union(vec![existing, src]),
                     None => src,
@@ -1522,7 +1600,15 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
 
             if flat_object_binding_pattern(object) {
-                if let Some(source) = annotation.or(initializer.map(|(ty, _)| ty)) {
+                let source = annotation.or(initializer.map(|(ty, _)| ty));
+                let source = match source {
+                    Some(ty) if declarator.type_annotation.is_some() => {
+                        Some(FlatBindingSource::Annotated(ty))
+                    }
+                    Some(ty) => Some(FlatBindingSource::Inferred(ty)),
+                    None => None,
+                };
+                if let Some(source) = source {
                     self.publish_flat_object_binding(scope, kind, object, source);
                 }
             } else {
@@ -1873,7 +1959,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         scope: ScopeId,
         kind: VariableDeclarationKind,
         object: &ObjectPattern<'_>,
-        source: TypeId,
+        source: FlatBindingSource,
     ) {
         let mut blocked = false;
         for (property_index, property) in object.properties.iter().enumerate() {
@@ -1949,13 +2035,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         kind: VariableDeclarationKind,
         property: &BindingProperty<'_>,
         storage: ValueStorageId,
-        source: TypeId,
+        source: FlatBindingSource,
         default_references_later: bool,
     ) -> Option<ObjectBindingPropertyProjection> {
         let Some(name) = property.key.static_name().map(|name| name.into_owned()) else {
             return Some(ObjectBindingPropertyProjection::Missing);
         };
-        let source = match self.demand_composite_apparent_type(source) {
+        let annotated = matches!(source, FlatBindingSource::Annotated(_));
+        let source = match self.demand_composite_apparent_type(source.ty()) {
             DemandOutcome::Ready(source) => source,
             DemandOutcome::Exhausted(exhaustion) => {
                 self.own_type_demand(
@@ -1996,13 +2083,18 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         };
 
         if let BindingPattern::AssignmentPattern(assignment) = &property.value {
-            leaf_type = self.strip_binding_undefined(leaf_type);
-            self.check_annotated_initializer(
-                scope,
-                Some(leaf_type),
-                &assignment.right,
-                Span::from_oxc(assignment.right.span()),
-            );
+            let present = self.strip_binding_undefined(leaf_type);
+            if annotated {
+                leaf_type = present;
+                self.check_annotated_initializer(
+                    scope,
+                    Some(present),
+                    &assignment.right,
+                    Span::from_oxc(assignment.right.span()),
+                );
+            } else {
+                leaf_type = self.combine_flat_binding_default(scope, kind, present, assignment);
+            }
         }
 
         let binding = match &property.value {
@@ -2102,6 +2194,44 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             &assignment.right,
             Span::from_oxc(assignment.right.span()),
         );
+    }
+
+    /// An unannotated default contributes its own type: `union(source minus undefined,
+    /// default)` under the ordinary declaration widening, with no assignment obligation.
+    /// A default the checker cannot type (no type or the error type) keeps the source
+    /// leaf, and the position never stays silent.
+    fn combine_flat_binding_default(
+        &mut self,
+        scope: ScopeId,
+        kind: VariableDeclarationKind,
+        present: TypeId,
+        assignment: &AssignmentPattern<'_>,
+    ) -> TypeId {
+        let well_known = self.interner.well_known();
+        let context = (present != well_known.never).then_some(present);
+        let recorded_before = self.recorded_effect_count();
+        let default_type = self
+            .infer_initializer(scope, &assignment.right, context)
+            .map(|(ty, _)| ty)
+            .filter(|ty| *ty != well_known.error);
+        let Some(default_type) = default_type else {
+            if self.recorded_effect_count() == recorded_before {
+                self.record_incomplete(
+                    "bind/binding-pattern/assignment-pattern",
+                    Span::from_oxc(assignment.span),
+                    "object binding default expression not typed",
+                );
+            }
+            return present;
+        };
+        let combined = self.interner.union(vec![present, default_type]);
+        declared_from_init(self.interner, kind, combined)
+    }
+
+    /// Records (diagnostics and incompletes, nested owners included) held by the
+    /// current lexical owner frame.
+    fn recorded_effect_count(&self) -> usize {
+        self.effect_stack.last().map_or(0, effect_record_count)
     }
 
     fn strip_binding_undefined(&mut self, ty: TypeId) -> TypeId {
@@ -2499,6 +2629,33 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 };
                 Some(self.interner.intern_literal(value))
             }
+            TSType::TSTypeLiteral(literal) => {
+                let mut properties = Vec::with_capacity(literal.members.len());
+                for member in &literal.members {
+                    let TSSignature::TSPropertySignature(signature) = member else {
+                        return None;
+                    };
+                    if signature.computed {
+                        return None;
+                    }
+                    let name = signature.key.static_name()?.into_owned();
+                    let annotation = signature.type_annotation.as_ref()?;
+                    let mut ty = self.query_free_annotation_type(&annotation.type_annotation)?;
+                    if signature.optional {
+                        ty = self
+                            .interner
+                            .union(vec![ty, self.interner.well_known().undefined]);
+                    }
+                    let mut property = crate::types::repr::PropertyType::public(name, ty);
+                    property.optional = signature.optional;
+                    property.readonly = signature.readonly;
+                    properties.push(property);
+                }
+                Some(self.interner.intern_object(ObjectType {
+                    properties,
+                    ..Default::default()
+                }))
+            }
             _ => None,
         }
     }
@@ -2607,7 +2764,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         ty: TypeId,
     ) {
         let previous = self.decl_types.get(decl_id);
-        self.publish_copied_decl_type(decl_id, ty);
+        self.decl_types.set(decl_id, ty);
         if previous == Some(ty) {
             return;
         }
@@ -4378,7 +4535,7 @@ class C {
     }
 
     #[test]
-    fn ordinary_object_callback_source_keeps_uncontextual_parameter_type() {
+    fn ordinary_object_callback_source_keeps_contextual_parameter_and_actual_return_type() {
         let source = r#"
 const value: { callback: (value: number) => number } = {
   callback: value => "bad",
@@ -4392,7 +4549,7 @@ const value: { callback: (value: number) => number } = {
         assert_eq!(diagnostic.code, DiagnosticCode::TK2322);
         assert!(diagnostic
             .message
-            .contains("{ callback: (value: any) => string }"));
+            .contains("{ callback: (value: number) => string }"));
     }
 
     #[test]

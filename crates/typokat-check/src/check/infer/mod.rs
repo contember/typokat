@@ -104,6 +104,7 @@ type CallSiteCandidates = FxHashMap<crate::types::repr::TypeParamId, Vec<CallSit
 
 #[derive(Clone, Copy)]
 pub(crate) struct SignatureInferenceRequest<'a> {
+    pub(crate) purpose: SignatureInferencePurpose<'a>,
     pub(crate) type_params: &'a [GenericTypeParam],
     pub(crate) params: &'a [ParameterType],
     pub(crate) args: &'a [TypeId],
@@ -112,7 +113,40 @@ pub(crate) struct SignatureInferenceRequest<'a> {
     pub(crate) receiver: Option<(TypeId, TypeId)>,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum SignatureInferencePurpose<'a> {
+    ClassApplication,
+    ContextualPreview {
+        retained_return: TypeId,
+        preparation: &'a CallInferencePreparation,
+    },
+    FinalCall {
+        retained_return: TypeId,
+        preparation: &'a CallInferencePreparation,
+    },
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct CallInferencePreparation {
+    pub(crate) fixed: FxHashSet<TypeParamId>,
+    pub(crate) legacy: FxHashSet<TypeParamId>,
+    pub(crate) top_level: FxHashMap<TypeParamId, bool>,
+    pub(crate) upper_inputs: FxHashSet<(usize, TypeParamId)>,
+    pub(crate) annotation_inputs: FxHashSet<(usize, TypeParamId)>,
+    pub(crate) deferred_arguments: FxHashSet<usize>,
+    pub(crate) independent_inputs: Vec<IndependentInferenceInput>,
+}
+
+#[derive(Clone)]
+pub(crate) struct IndependentInferenceInput {
+    pub(crate) argument: usize,
+    pub(crate) source: TypeId,
+    pub(crate) target: TypeId,
+    pub(crate) original_target: TypeId,
+}
+
 struct CandidateCollectionRequest<'a> {
+    preview: Option<&'a CallInferencePreparation>,
     active_params: Option<&'a FxHashSet<TypeParamId>>,
     params: &'a [ParameterType],
     args: &'a [TypeId],
@@ -135,6 +169,7 @@ pub(crate) struct SignatureInferenceResult<T> {
     pub(crate) arguments: T,
     pub(crate) exhaustion: Option<Exhaustion>,
     pub(crate) constraint_violations: FxHashSet<TypeParamId>,
+    pub(crate) top_level: FxHashMap<TypeParamId, bool>,
 }
 
 type PartialSignatureInferenceAttempt =
@@ -153,6 +188,7 @@ struct CandidateCollectionResult {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 struct CallSiteCandidate {
     ty: TypeId,
+    original_target: TypeId,
     source: CallSiteSource,
     fresh: bool,
     optional_undefined_fallback: bool,
@@ -181,8 +217,22 @@ enum CallSiteSource {
 
 struct CandidateContribution {
     source: CallSiteSource,
+    upper_bound: bool,
     fresh: bool,
     candidates: Vec<TypeId>,
+}
+
+struct CandidateFixingPolicy<'a> {
+    constraints: &'a FxHashMap<TypeParamId, Option<TypeId>>,
+    preserve_unwidened: &'a FxHashSet<TypeParamId>,
+    purpose: SignatureInferencePurpose<'a>,
+}
+
+struct BinderFixingPolicy<'a> {
+    constraint: Option<TypeId>,
+    preserve_unwidened: bool,
+    binder: TypeParamId,
+    purpose: SignatureInferencePurpose<'a>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -397,6 +447,7 @@ fn infer_signature_type_arguments<L: PublishedClassLookup + ?Sized>(
     return_context: Option<(TypeId, TypeId)>,
 ) -> SemanticQueryAttempt<DemandOutcome<SignatureInferenceResult<FxHashMap<TypeParamId, TypeId>>>> {
     let SignatureInferenceRequest {
+        purpose,
         type_params,
         params,
         args,
@@ -412,6 +463,12 @@ fn infer_signature_type_arguments<L: PublishedClassLookup + ?Sized>(
         published,
         queries,
         CandidateCollectionRequest {
+            preview: match purpose {
+                SignatureInferencePurpose::ContextualPreview { preparation, .. } => {
+                    Some(preparation)
+                }
+                _ => None,
+            },
             active_params: Some(&active_params),
             params,
             args,
@@ -428,6 +485,7 @@ fn infer_signature_type_arguments<L: PublishedClassLookup + ?Sized>(
     };
     let mut candidates = collection.candidates;
     let preserve_unwidened = prune_optional_undefined_fallbacks(&mut candidates);
+    let top_level = candidate_top_levels(interner.store(), &candidates);
     let exempt = fresh_exempt_params(&candidates);
     let ordinary_bound: FxHashSet<_> = candidates.keys().copied().collect();
     let constraints: FxHashMap<TypeParamId, Option<TypeId>> = type_params
@@ -440,8 +498,11 @@ fn infer_signature_type_arguments<L: PublishedClassLookup + ?Sized>(
         published,
         queries,
         candidates,
-        &constraints,
-        &preserve_unwidened,
+        CandidateFixingPolicy {
+            constraints: &constraints,
+            preserve_unwidened: &preserve_unwidened,
+            purpose,
+        },
     ) {
         SemanticQueryAttempt::Complete(DemandOutcome::Ready(fixed)) => fixed,
         SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(exhaustion)) => {
@@ -506,6 +567,7 @@ fn infer_signature_type_arguments<L: PublishedClassLookup + ?Sized>(
             arguments: fixed.arguments,
             exhaustion: collection.exhaustion,
             constraint_violations: fixed.constraint_violations,
+            top_level,
         }),
         DemandOutcome::Exhausted(exhaustion) => DemandOutcome::Exhausted(exhaustion),
     })
@@ -555,8 +617,11 @@ fn apply_return_context_candidates_attempt<L: PublishedClassLookup + ?Sized>(
         published,
         queries,
         contextual.candidates,
-        request.constraints,
-        &FxHashSet::default(),
+        CandidateFixingPolicy {
+            constraints: request.constraints,
+            preserve_unwidened: &FxHashSet::default(),
+            purpose: SignatureInferencePurpose::ClassApplication,
+        },
     ) {
         SemanticQueryAttempt::Complete(DemandOutcome::Ready(contextual))
             if !contextual.is_empty() =>
@@ -816,6 +881,7 @@ fn collect_return_context_candidates_query_attempt<L: PublishedClassLookup + ?Si
             |occurrence| CallSiteSource::ReturnContext { occurrence },
             false,
             false,
+            target,
         );
     }
     SemanticQueryAttempt::Complete(CandidateCollectionResult {
@@ -876,6 +942,7 @@ pub(in crate::check) fn infer_partial_signature_type_arguments_from_params_attem
     request: SignatureInferenceRequest<'_>,
 ) -> PartialSignatureInferenceAttempt {
     let SignatureInferenceRequest {
+        purpose,
         type_params,
         params,
         args,
@@ -891,6 +958,12 @@ pub(in crate::check) fn infer_partial_signature_type_arguments_from_params_attem
         published,
         queries,
         CandidateCollectionRequest {
+            preview: match purpose {
+                SignatureInferencePurpose::ContextualPreview { preparation, .. } => {
+                    Some(preparation)
+                }
+                _ => None,
+            },
             active_params: Some(&active_params),
             params,
             args,
@@ -907,6 +980,7 @@ pub(in crate::check) fn infer_partial_signature_type_arguments_from_params_attem
     };
     let mut candidates = collection.candidates;
     let preserve_unwidened = prune_optional_undefined_fallbacks(&mut candidates);
+    let top_level = candidate_top_levels(interner.store(), &candidates);
     let exempt = fresh_exempt_params(&candidates);
     let constraints: FxHashMap<TypeParamId, Option<TypeId>> = type_params
         .iter()
@@ -918,8 +992,11 @@ pub(in crate::check) fn infer_partial_signature_type_arguments_from_params_attem
         published,
         queries,
         candidates,
-        &constraints,
-        &preserve_unwidened,
+        CandidateFixingPolicy {
+            constraints: &constraints,
+            preserve_unwidened: &preserve_unwidened,
+            purpose,
+        },
     ) {
         SemanticQueryAttempt::Complete(DemandOutcome::Ready(fixed)) => fixed,
         SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(exhaustion)) => {
@@ -938,7 +1015,14 @@ pub(in crate::check) fn infer_partial_signature_type_arguments_from_params_attem
         queries,
         type_params,
         fixed,
-        &exempt,
+        PresentFixingPolicy {
+            fresh_exempt: &exempt,
+            // The contextual preview stands in for the full fixer, which resolves defaults.
+            resolve_defaults: matches!(
+                purpose,
+                SignatureInferencePurpose::ContextualPreview { .. }
+            ),
+        },
     ) {
         SemanticQueryAttempt::Complete(outcome) => outcome,
         SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
@@ -956,6 +1040,7 @@ pub(in crate::check) fn infer_partial_signature_type_arguments_from_params_attem
             arguments,
             exhaustion: collection.exhaustion,
             constraint_violations: FxHashSet::default(),
+            top_level,
         }),
         DemandOutcome::Exhausted(exhaustion) => DemandOutcome::Exhausted(exhaustion),
     })
@@ -969,6 +1054,7 @@ fn collect_call_site_candidates_query_attempt<L: PublishedClassLookup + ?Sized>(
     request: CandidateCollectionRequest<'_>,
 ) -> SemanticQueryAttempt<CandidateCollectionResult> {
     let CandidateCollectionRequest {
+        preview,
         active_params,
         params,
         args,
@@ -985,6 +1071,9 @@ fn collect_call_site_candidates_query_attempt<L: PublishedClassLookup + ?Sized>(
     let mut first_exhaustion = None;
     let targets = inference_argument_targets(interner, params, args);
     for (index, (&arg, param)) in args.iter().zip(&targets).enumerate() {
+        if preview.is_some_and(|preparation| preparation.deferred_arguments.contains(&index)) {
+            continue;
+        }
         let Some(param) = *param else {
             continue;
         };
@@ -1014,7 +1103,44 @@ fn collect_call_site_candidates_query_attempt<L: PublishedClassLookup + ?Sized>(
             |occurrence| CallSiteSource::Argument { index, occurrence },
             is_fresh,
             optional_undefined_fallback[index],
+            param,
         );
+    }
+    if let Some(preparation) = preview {
+        for input in &preparation.independent_inputs {
+            let mut local = Candidates::default();
+            let outcome = match infer_types_for_active_params_attempt(
+                SemanticQueryCoordinator::new(interner, published, queries, next_type_param),
+                input.source,
+                input.target,
+                &mut local,
+                active_params,
+            ) {
+                SemanticQueryAttempt::Complete(outcome) => outcome,
+                SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+                    return SemanticQueryAttempt::NeedsNativeIdentities(demands)
+                }
+            };
+            match outcome {
+                DemandOutcome::Exhausted(exhaustion) => {
+                    first_exhaustion.get_or_insert(exhaustion);
+                }
+                DemandOutcome::Ready(()) => record_call_site_candidates(
+                    &mut candidates,
+                    local,
+                    |occurrence| CallSiteSource::Argument {
+                        index: input.argument,
+                        occurrence,
+                    },
+                    fresh_args.get(input.argument).copied().unwrap_or(false),
+                    optional_undefined_fallback
+                        .get(input.argument)
+                        .copied()
+                        .unwrap_or(false),
+                    input.original_target,
+                ),
+            }
+        }
     }
     if let Some((rest_ty, rest_start)) = direct_rest_type_param(interner, params) {
         if rest_start <= args.len() {
@@ -1046,6 +1172,7 @@ fn collect_call_site_candidates_query_attempt<L: PublishedClassLookup + ?Sized>(
                     },
                     is_fresh,
                     false,
+                    rest_ty,
                 );
             }
         }
@@ -1073,6 +1200,7 @@ fn collect_call_site_candidates_query_attempt<L: PublishedClassLookup + ?Sized>(
                 |occurrence| CallSiteSource::Receiver { occurrence },
                 false,
                 false,
+                target,
             );
         }
     }
@@ -1137,6 +1265,7 @@ fn collect_call_site_candidates(
         &published,
         &mut queries,
         CandidateCollectionRequest {
+            preview: None,
             active_params: None,
             params,
             args,
@@ -1154,6 +1283,7 @@ fn record_call_site_candidates(
     source: impl Fn(usize) -> CallSiteSource,
     fresh: bool,
     optional_undefined_fallback: bool,
+    original_target: TypeId,
 ) {
     for (param_id, cands) in local {
         candidates
@@ -1165,6 +1295,7 @@ fn record_call_site_candidates(
                     .enumerate()
                     .map(|(occurrence, ty)| CallSiteCandidate {
                         ty,
+                        original_target,
                         source: source(occurrence),
                         fresh,
                         optional_undefined_fallback,
@@ -1190,6 +1321,190 @@ fn prune_optional_undefined_fallbacks(
         }
     }
     preserve_unwidened
+}
+
+fn candidate_top_levels(
+    store: &Store,
+    candidates: &CallSiteCandidates,
+) -> FxHashMap<TypeParamId, bool> {
+    candidates
+        .iter()
+        .map(|(&binder, values)| {
+            (
+                binder,
+                values.iter().all(|candidate| {
+                    type_parameter_at_top_level(store, candidate.original_target, binder)
+                }),
+            )
+        })
+        .collect()
+}
+
+fn type_parameter_at_top_level(store: &Store, root: TypeId, binder: TypeParamId) -> bool {
+    let mut pending = vec![root];
+    let mut visited = FxHashSet::default();
+    while let Some(ty) = pending.pop() {
+        if !visited.insert(ty) {
+            continue;
+        }
+        if store
+            .type_param(ty)
+            .is_some_and(|parameter| parameter.id == binder)
+        {
+            return true;
+        }
+        if let Some(members) = store
+            .union_members(ty)
+            .or_else(|| store.intersection_members(ty))
+        {
+            pending.extend_from_slice(members);
+        }
+    }
+    false
+}
+
+#[derive(Clone, Copy)]
+enum ScalarCandidateMode {
+    Preserve,
+    Regularize,
+    Widen,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InferencePosition {
+    Output,
+    CallbackInput,
+    Mixed,
+    Opaque,
+}
+
+pub(crate) fn inference_position(
+    interner: &mut Interner,
+    root: TypeId,
+    binder: TypeParamId,
+) -> InferencePosition {
+    let mut pending = vec![(root, false)];
+    let mut visited = FxHashSet::default();
+    let mut output = false;
+    let mut input = false;
+    while let Some((ty, negative)) = pending.pop() {
+        if !visited.insert((ty, negative))
+            || !crate::types::substitute::derived_free_params(interner, ty).contains(&binder)
+        {
+            continue;
+        }
+        let store = interner.store();
+        if store
+            .type_param(ty)
+            .is_some_and(|parameter| parameter.id == binder)
+        {
+            if negative {
+                input = true;
+            } else {
+                output = true;
+            }
+        } else if let Some(members) = store
+            .union_members(ty)
+            .or_else(|| store.intersection_members(ty))
+        {
+            pending.extend(members.iter().map(|&member| (member, negative)));
+        } else if let Some(operand) = store.readonly_operand(ty) {
+            pending.push((operand, negative));
+        } else if let Some(array) = store.array_type(ty) {
+            pending.push((array.element, negative));
+        } else if let Some(tuple) = store.tuple_type(ty) {
+            pending.extend(tuple.elements.iter().map(|&element| (element, negative)));
+            if let Some(rest) = tuple.rest {
+                pending.push((rest.ty, negative));
+            }
+        } else if let Some(function) = store.function_type(ty) {
+            pending.extend(
+                function
+                    .params
+                    .iter()
+                    .map(|parameter| (parameter.ty, !negative)),
+            );
+            if let Some(receiver) = function.receiver {
+                pending.push((receiver, !negative));
+            }
+            pending.push((function.ret, negative));
+        } else if let Some(object) = store.object_type(ty) {
+            pending.extend(
+                object
+                    .properties
+                    .iter()
+                    .map(|property| (property.ty, negative)),
+            );
+            if !object.call_signatures.is_empty()
+                || !object.construct_signatures.is_empty()
+                || object.string_index.is_some()
+                || object.number_index.is_some()
+            {
+                return InferencePosition::Opaque;
+            }
+        } else {
+            return InferencePosition::Opaque;
+        }
+    }
+    match (output, input) {
+        (true, true) => InferencePosition::Mixed,
+        (false, true) => InferencePosition::CallbackInput,
+        _ => InferencePosition::Output,
+    }
+}
+
+fn scalar_candidate_mode(
+    interner: &mut Interner,
+    queries: &SemanticQueryState,
+    binder: TypeParamId,
+    purpose: SignatureInferencePurpose<'_>,
+    constraint: Option<TypeId>,
+    cands: &[CallSiteCandidate],
+    preserve_unwidened: bool,
+) -> Option<ScalarCandidateMode> {
+    let (retained_return, preparation, final_call) = match purpose {
+        SignatureInferencePurpose::ClassApplication => return None,
+        SignatureInferencePurpose::ContextualPreview {
+            retained_return,
+            preparation,
+        } => (retained_return, preparation, false),
+        SignatureInferencePurpose::FinalCall {
+            retained_return,
+            preparation,
+        } => (retained_return, preparation, true),
+    };
+    if preparation.legacy.contains(&binder)
+        || matches!(interner.store().tag(retained_return), TypeTag::Conditional)
+        || cands.iter().any(|candidate| {
+            candidate.ty != interner.well_known().never
+                && !is_primitive_like(interner.store(), candidate.ty)
+        })
+    {
+        return None;
+    }
+    if constraint_preserves_literals(interner, queries, constraint) {
+        return Some(ScalarCandidateMode::Regularize);
+    }
+    if preserve_unwidened {
+        return Some(ScalarCandidateMode::Preserve);
+    }
+    let fixed = preparation.fixed.contains(&binder);
+    let top_level = if final_call && fixed {
+        preparation.top_level.get(&binder).copied()?
+    } else {
+        cands.iter().all(|candidate| {
+            type_parameter_at_top_level(interner.store(), candidate.original_target, binder)
+        })
+    };
+    Some(
+        if top_level
+            && (fixed || !type_parameter_at_top_level(interner.store(), retained_return, binder))
+        {
+            ScalarCandidateMode::Widen
+        } else {
+            ScalarCandidateMode::Preserve
+        },
+    )
 }
 
 fn fresh_exempt_params(candidates: &CallSiteCandidates) -> FxHashSet<TypeParamId> {
@@ -1302,20 +1617,23 @@ fn fix_call_site_candidates_attempt<L: PublishedClassLookup + ?Sized>(
     published: &L,
     queries: &mut SemanticQueryState,
     candidates: CallSiteCandidates,
-    constraints: &FxHashMap<TypeParamId, Option<TypeId>>,
-    preserve_unwidened: &FxHashSet<TypeParamId>,
+    policy: CandidateFixingPolicy<'_>,
 ) -> SemanticQueryAttempt<DemandOutcome<FxHashMap<crate::types::repr::TypeParamId, TypeId>>> {
     let mut map = FxHashMap::default();
     for (param, cands) in candidates {
-        let constraint = constraints.get(&param).copied().flatten();
+        let constraint = policy.constraints.get(&param).copied().flatten();
         let fixed = match fix_call_site_candidates_for_param_attempt(
             interner,
             next_type_param,
             published,
             queries,
-            constraint,
             &cands,
-            preserve_unwidened.contains(&param),
+            BinderFixingPolicy {
+                constraint,
+                preserve_unwidened: policy.preserve_unwidened.contains(&param),
+                binder: param,
+                purpose: policy.purpose,
+            },
         ) {
             SemanticQueryAttempt::Complete(DemandOutcome::Ready(fixed)) => fixed,
             SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(exhaustion)) => {
@@ -1337,19 +1655,68 @@ fn fix_call_site_candidates_for_param_attempt<L: PublishedClassLookup + ?Sized>(
     next_type_param: &mut u32,
     published: &L,
     queries: &mut SemanticQueryState,
-    constraint: Option<TypeId>,
     cands: &[CallSiteCandidate],
-    preserve_unwidened: bool,
+    policy: BinderFixingPolicy<'_>,
 ) -> SemanticQueryAttempt<DemandOutcome<Option<TypeId>>> {
-    let contributions = candidate_contributions(cands);
+    let BinderFixingPolicy {
+        constraint,
+        preserve_unwidened,
+        binder,
+        purpose,
+    } = policy;
+    let native_mode = scalar_candidate_mode(
+        interner,
+        queries,
+        binder,
+        purpose,
+        constraint,
+        cands,
+        preserve_unwidened,
+    );
+    let prepared;
+    let cands = if let Some(mode) = native_mode {
+        prepared = cands
+            .iter()
+            .map(|candidate| CallSiteCandidate {
+                ty: match mode {
+                    ScalarCandidateMode::Preserve => candidate.ty,
+                    ScalarCandidateMode::Regularize => {
+                        interner.regularize_literal_type(candidate.ty)
+                    }
+                    ScalarCandidateMode::Widen => widen(interner, candidate.ty),
+                },
+                ..*candidate
+            })
+            .collect::<Vec<_>>();
+        prepared.as_slice()
+    } else {
+        cands
+    };
+    let mut contributions = candidate_contributions(cands);
+    if native_mode.is_some() {
+        if let SignatureInferencePurpose::FinalCall { preparation, .. }
+        | SignatureInferencePurpose::ContextualPreview { preparation, .. } = purpose
+        {
+            for contribution in &mut contributions {
+                if let CallSiteSource::Argument { index, .. } = contribution.source {
+                    contribution.upper_bound = preparation.upper_inputs.contains(&(index, binder))
+                        && !preparation.annotation_inputs.contains(&(index, binder));
+                }
+            }
+        }
+    }
     let mut iter = contributions.iter();
     let Some(first) = iter.next() else {
         return SemanticQueryAttempt::Complete(DemandOutcome::Ready(None));
     };
-    let primitive_constraint = constraint.is_some_and(|ty| {
-        is_primitive_ish(interner.store(), ty) || queries.is_native_primitive_surface(ty)
-    });
+    let primitive_constraint = constraint_preserves_literals(interner, queries, constraint);
     if contributions.len() == 1 {
+        if native_mode.is_some() {
+            return SemanticQueryAttempt::Complete(DemandOutcome::Ready(Some(raw_candidate_set(
+                interner,
+                first.candidates.iter().copied(),
+            ))));
+        }
         if preserve_unwidened && cands.len() == 1 && !cands[0].fresh {
             return SemanticQueryAttempt::Complete(DemandOutcome::Ready(Some(raw_candidate_set(
                 interner,
@@ -1365,22 +1732,25 @@ fn fix_call_site_candidates_for_param_attempt<L: PublishedClassLookup + ?Sized>(
     }
 
     let mut current = raw_candidate_set(interner, first.candidates.iter().copied());
-    let mut current_prepared = fix_candidate_set(
+    let mut current_prepared = candidate_selection_view(
         interner,
         queries,
         constraint,
         first.candidates.iter().copied(),
+        native_mode.is_some(),
     );
     let mut preserve_current = primitive_constraint || first.candidates.len() > 1;
     let mut current_fresh = first.fresh;
+    let mut ordinary_selected = !first.upper_bound;
 
     for contribution in iter {
         let next = raw_candidate_set(interner, contribution.candidates.iter().copied());
-        let next_prepared = fix_candidate_set(
+        let next_prepared = candidate_selection_view(
             interner,
             queries,
             constraint,
             contribution.candidates.iter().copied(),
+            native_mode.is_some(),
         );
 
         let next_to_current = match is_assignable_type_attempt(
@@ -1399,7 +1769,50 @@ fn fix_call_site_candidates_for_param_attempt<L: PublishedClassLookup + ?Sized>(
                 return SemanticQueryAttempt::NeedsNativeIdentities(demands);
             }
         };
+        let current_to_next = if !next_to_current || ordinary_selected && contribution.upper_bound {
+            match is_assignable_type_attempt(
+                interner,
+                next_type_param,
+                published,
+                queries,
+                current,
+                next,
+            ) {
+                SemanticQueryAttempt::Complete(DemandOutcome::Ready(assignable)) => assignable,
+                SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(exhaustion)) => {
+                    return SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(exhaustion));
+                }
+                SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+                    return SemanticQueryAttempt::NeedsNativeIdentities(demands);
+                }
+            }
+        } else {
+            false
+        };
+        if ordinary_selected && contribution.upper_bound && current_to_next {
+            continue;
+        }
+        if !ordinary_selected && !contribution.upper_bound && next_to_current {
+            current = next;
+            current_prepared = next_prepared;
+            preserve_current = primitive_constraint || contribution.candidates.len() > 1;
+            current_fresh = contribution.fresh;
+            ordinary_selected = true;
+            continue;
+        }
         if next_to_current {
+            if interner.store().regular_literal_type(current)
+                == interner.store().regular_literal_type(next)
+            {
+                current = interner.union(vec![current, next]);
+                current_prepared = candidate_selection_view(
+                    interner,
+                    queries,
+                    constraint,
+                    std::iter::once(current),
+                    native_mode.is_some(),
+                );
+            }
             if current_fresh
                 && !contribution.fresh
                 && should_prefer_nonfresh_structural(interner.store(), current, next)
@@ -1408,25 +1821,10 @@ fn fix_call_site_candidates_for_param_attempt<L: PublishedClassLookup + ?Sized>(
                 current_prepared = next_prepared;
                 preserve_current = primitive_constraint || contribution.candidates.len() > 1;
                 current_fresh = false;
+                ordinary_selected = !contribution.upper_bound;
             }
             continue;
         }
-        let current_to_next = match is_assignable_type_attempt(
-            interner,
-            next_type_param,
-            published,
-            queries,
-            current,
-            next,
-        ) {
-            SemanticQueryAttempt::Complete(DemandOutcome::Ready(assignable)) => assignable,
-            SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(exhaustion)) => {
-                return SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(exhaustion));
-            }
-            SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
-                return SemanticQueryAttempt::NeedsNativeIdentities(demands);
-            }
-        };
         if current_to_next {
             if !current_fresh
                 && contribution.fresh
@@ -1438,6 +1836,7 @@ fn fix_call_site_candidates_for_param_attempt<L: PublishedClassLookup + ?Sized>(
             current_prepared = next_prepared;
             preserve_current = primitive_constraint || contribution.candidates.len() > 1;
             current_fresh = contribution.fresh;
+            ordinary_selected = !contribution.upper_bound;
             continue;
         }
 
@@ -1446,6 +1845,7 @@ fn fix_call_site_candidates_for_param_attempt<L: PublishedClassLookup + ?Sized>(
             current_prepared = interner.union(vec![current_prepared, next_prepared]);
             preserve_current = true;
             current_fresh = current_fresh && contribution.fresh;
+            ordinary_selected = ordinary_selected && !contribution.upper_bound;
             continue;
         }
 
@@ -1455,6 +1855,7 @@ fn fix_call_site_candidates_for_param_attempt<L: PublishedClassLookup + ?Sized>(
                 merge_same_primitive_family(interner, current_prepared, next_prepared, family);
             preserve_current = true;
             current_fresh = current_fresh && contribution.fresh;
+            ordinary_selected = ordinary_selected && !contribution.upper_bound;
             continue;
         }
 
@@ -1469,17 +1870,26 @@ fn fix_call_site_candidates_for_param_attempt<L: PublishedClassLookup + ?Sized>(
             current_prepared = interner.union(vec![current_prepared, next_prepared]);
             preserve_current = true;
             current_fresh = true;
+            ordinary_selected = ordinary_selected && !contribution.upper_bound;
             continue;
         }
 
-        return SemanticQueryAttempt::Complete(DemandOutcome::Ready(Some(if preserve_current {
-            current
-        } else {
-            current_prepared
-        })));
+        return SemanticQueryAttempt::Complete(DemandOutcome::Ready(Some(
+            if native_mode.is_some() || preserve_current && !primitive_constraint {
+                current
+            } else {
+                current_prepared
+            },
+        )));
     }
 
-    SemanticQueryAttempt::Complete(DemandOutcome::Ready(Some(current)))
+    SemanticQueryAttempt::Complete(DemandOutcome::Ready(Some(
+        if primitive_constraint && native_mode.is_none() {
+            current_prepared
+        } else {
+            current
+        },
+    )))
 }
 
 fn candidate_contributions(cands: &[CallSiteCandidate]) -> Vec<CandidateContribution> {
@@ -1492,6 +1902,7 @@ fn candidate_contributions(cands: &[CallSiteCandidate]) -> Vec<CandidateContribu
         }
         groups.push(CandidateContribution {
             source: cand.source,
+            upper_bound: false,
             fresh: cand.fresh,
             candidates: vec![cand.ty],
         });
@@ -1503,22 +1914,44 @@ fn raw_candidate_set(interner: &mut Interner, cands: impl Iterator<Item = TypeId
     interner.union(cands.collect())
 }
 
+fn candidate_selection_view(
+    interner: &mut Interner,
+    queries: &SemanticQueryState,
+    constraint: Option<TypeId>,
+    cands: impl Iterator<Item = TypeId>,
+    native: bool,
+) -> TypeId {
+    if native {
+        raw_candidate_set(interner, cands)
+    } else {
+        fix_candidate_set(interner, queries, constraint, cands)
+    }
+}
+
 fn fix_candidate_set(
     interner: &mut Interner,
     queries: &SemanticQueryState,
     constraint: Option<TypeId>,
     cands: impl Iterator<Item = TypeId>,
 ) -> TypeId {
-    let prepared: Vec<TypeId> = if constraint.is_some_and(|ty| {
+    let candidate = interner.union(cands.collect());
+    if constraint_preserves_literals(interner, queries, constraint) {
+        interner.regularize_literal_type(candidate)
+    } else {
+        widen(interner, candidate)
+    }
+}
+
+fn constraint_preserves_literals(
+    interner: &Interner,
+    queries: &SemanticQueryState,
+    constraint: Option<TypeId>,
+) -> bool {
+    constraint.is_some_and(|ty| {
         is_primitive_ish(interner.store(), ty)
             || queries.is_native_primitive_surface(ty)
             || interner.store().tag(ty) == TypeTag::Keyof
-    }) {
-        cands.collect()
-    } else {
-        cands.map(|c| widen(interner, c)).collect()
-    };
-    interner.union(prepared)
+    })
 }
 
 fn is_assignable_type_attempt<L: PublishedClassLookup + ?Sized>(
@@ -1619,6 +2052,7 @@ fn same_primitive_family(store: &Store, left: TypeId, right: TypeId) -> Option<P
 }
 
 fn enum_provenance(store: &Store, ty: TypeId) -> EnumProvenance {
+    let ty = store.regular_literal_type(ty);
     match store.tag(ty) {
         TypeTag::Enum => store.enum_type(ty).map_or(EnumProvenance::Mixed, |family| {
             EnumProvenance::One(family.id)
@@ -1677,6 +2111,7 @@ fn is_primitive_like(store: &Store, ty: TypeId) -> bool {
 }
 
 fn primitive_families(store: &Store, ty: TypeId) -> Option<Vec<PrimitiveFamily>> {
+    let ty = store.regular_literal_type(ty);
     match store.tag(ty) {
         TypeTag::Literal => {
             let lit = store.literal_value(ty)?;
@@ -1775,7 +2210,11 @@ fn primitive_base(interner: &Interner, family: PrimitiveFamily) -> TypeId {
 
 fn is_primitive_ish(store: &Store, ty: TypeId) -> bool {
     match store.tag(ty) {
-        TypeTag::Literal | TypeTag::Template | TypeTag::Enum | TypeTag::EnumMember => true,
+        TypeTag::Literal
+        | TypeTag::WideningLiteral
+        | TypeTag::Template
+        | TypeTag::Enum
+        | TypeTag::EnumMember => true,
         TypeTag::Intrinsic => matches!(
             store.intrinsic_kind(ty),
             Some(
@@ -1794,29 +2233,83 @@ fn is_primitive_ish(store: &Store, ty: TypeId) -> bool {
     }
 }
 
-/// Complete a partially-fixed map to cover **every** declared type parameter,
-/// applying each parameter's **constraint** (M24) and default. Processing parameters
-/// in declared order builds the map incrementally, so a constraint/default that
-/// references an earlier parameter (`<T, U extends T = T>`) is substituted with that
-/// parameter's already-fixed argument. For each parameter:
-///
-///  - **a candidate landed** → keep it, unless it **violates** the (substituted)
-///    constraint, in which case **clamp to the constraint** (so the ordinary argument
-///    check then reports `TK2345` against the constraint, matching tsc — the failure
-///    surfaces there, never as `TK2344` on the inference path). The one exemption is
-///    a parameter in `fresh_exempt` — **every** candidate it received came from a
-///    fresh object/array literal argument (review F4: per-argument provenance),
-///    which tsc contextually retypes against the constraint (a pass that is out of
-///    scope, documented deferral), so clamping it would over-report; a parameter
-///    with **any** non-fresh candidate (a typed value — primitive OR structural,
-///    which tsc cannot reshape) clamps normally;
-///  - **no candidate** → use the (substituted) declaration **default** when present,
-///    otherwise fall back to the (substituted) **constraint** or **`unknown`** (the
-///    sound M10 fallback — `unknown` cannot mask a downstream error the way `any`
-///    would).
-///
-/// An **unconstrained** parameter is unchanged from the M10 behaviour (candidate as-is,
-/// or `unknown`), so existing generic inference is untouched.
+/// Declaration-ordered post-order over constraint/default mentions: dependencies fix first,
+/// each parameter once; a cyclic mention sees its raw candidate or the symbolic parameter.
+fn demanded_fixing_order(interner: &mut Interner, type_params: &[GenericTypeParam]) -> Vec<usize> {
+    let mut order = Vec::with_capacity(type_params.len());
+    let mut active = vec![false; type_params.len()];
+    let mut done = vec![false; type_params.len()];
+    for index in 0..type_params.len() {
+        push_demanded_param(
+            interner,
+            type_params,
+            index,
+            &mut active,
+            &mut done,
+            &mut order,
+        );
+    }
+    order
+}
+
+fn push_demanded_param(
+    interner: &mut Interner,
+    type_params: &[GenericTypeParam],
+    index: usize,
+    active: &mut [bool],
+    done: &mut [bool],
+    order: &mut Vec<usize>,
+) {
+    if done[index] || active[index] {
+        return;
+    }
+    active[index] = true;
+    let type_param = &type_params[index];
+    for ty in type_param.constraint.into_iter().chain(type_param.default) {
+        for dependency in mentioned_declared_params(interner, type_params, ty) {
+            push_demanded_param(interner, type_params, dependency, active, done, order);
+        }
+    }
+    active[index] = false;
+    done[index] = true;
+    order.push(index);
+}
+
+/// Declared parameters `ty` mentions, in stored structural order (the order instantiation
+/// visits them); `derived_free_params` stays the membership authority for unreached mentions.
+fn mentioned_declared_params(
+    interner: &mut Interner,
+    type_params: &[GenericTypeParam],
+    ty: TypeId,
+) -> Vec<usize> {
+    let mut pending: Vec<usize> = substitute::derived_free_params(interner, ty)
+        .iter()
+        .filter_map(|mentioned| type_params.iter().position(|p| p.id == *mentioned))
+        .collect();
+    let mut ordered = Vec::with_capacity(pending.len());
+    let store = interner.store();
+    let mut stack = vec![ty];
+    let mut visited = FxHashSet::default();
+    while let Some(node) = stack.pop() {
+        if pending.is_empty() || !visited.insert(node) {
+            continue;
+        }
+        if let Some(param) = store.type_param(node) {
+            if let Some(found) = pending.iter().position(|&i| type_params[i].id == param.id) {
+                ordered.push(pending.swap_remove(found));
+            }
+            continue;
+        }
+        let mut children = Vec::new();
+        substitute::for_each_child(store, node, |child| children.push(child));
+        stack.extend(children.into_iter().rev());
+    }
+    pending.sort_unstable();
+    ordered.extend(pending);
+    ordered
+}
+
+/// Fix each parameter once, dependencies first, so reverse-dependent constraints see final bindings.
 fn fix_signature_params_attempt<L: PublishedClassLookup + ?Sized>(
     interner: &mut Interner,
     next_type_param: &mut u32,
@@ -1827,13 +2320,11 @@ fn fix_signature_params_attempt<L: PublishedClassLookup + ?Sized>(
     fresh_exempt: &FxHashSet<TypeParamId>,
 ) -> SemanticQueryAttempt<DemandOutcome<FixedSignatureParams>> {
     let wk = interner.well_known();
-    // Start from **all** collected candidates — this preserves bindings for parameters
-    // NOT in `type_params` (e.g. a derived generic class inheriting its base's
-    // constructor, whose parameter belongs to the *base*'s list); the constraint pass
-    // below only overrides the declared ones.
-    let mut map = fixed;
+    // Inherited constructor binders outside this signature retain their candidates.
+    let mut map = fixed.clone();
     let mut constraint_violations = FxHashSet::default();
-    for type_param in type_params {
+    for index in demanded_fixing_order(interner, type_params) {
+        let type_param = &type_params[index];
         let param = type_param.id;
         // The parameter's constraint, substituted with the arguments fixed so far
         // (releases the immutable borrow before the `&mut` substitute). `None` when the
@@ -1861,7 +2352,7 @@ fn fix_signature_params_attempt<L: PublishedClassLookup + ?Sized>(
         let constraint = constraint
             .filter(|&c| !crate::check::checker::eval::contains_deferred_keyof(interner, c));
 
-        let value = match map.get(&param).copied() {
+        let value = match fixed.get(&param).copied() {
             Some(candidate) => match constraint {
                 Some(c) => {
                     let satisfies = match SemanticQueryCoordinator::new(
@@ -1910,7 +2401,6 @@ fn fix_signature_params_attempt<L: PublishedClassLookup + ?Sized>(
         };
         map.insert(param, value);
     }
-
     SemanticQueryAttempt::Complete(DemandOutcome::Ready(FixedSignatureParams {
         arguments: map,
         constraint_violations,
@@ -1943,6 +2433,11 @@ fn fix_signature_params(
     }
 }
 
+struct PresentFixingPolicy<'a> {
+    fresh_exempt: &'a FxHashSet<TypeParamId>,
+    resolve_defaults: bool,
+}
+
 fn fix_present_signature_params_attempt<L: PublishedClassLookup + ?Sized>(
     interner: &mut Interner,
     next_type_param: &mut u32,
@@ -1950,11 +2445,26 @@ fn fix_present_signature_params_attempt<L: PublishedClassLookup + ?Sized>(
     queries: &mut SemanticQueryState,
     type_params: &[GenericTypeParam],
     mut fixed: FxHashMap<TypeParamId, TypeId>,
-    fresh_exempt: &FxHashSet<TypeParamId>,
+    policy: PresentFixingPolicy<'_>,
 ) -> SemanticQueryAttempt<DemandOutcome<Vec<(TypeParamId, TypeId)>>> {
-    let mut ordered = Vec::new();
-    for type_param in type_params {
-        let Some(candidate) = fixed.get(&type_param.id).copied() else {
+    let PresentFixingPolicy {
+        fresh_exempt,
+        resolve_defaults,
+    } = policy;
+    let candidates = fixed.clone();
+    for index in demanded_fixing_order(interner, type_params) {
+        let type_param = &type_params[index];
+        let Some(candidate) = candidates.get(&type_param.id).copied() else {
+            if let Some(default) = type_param.default.filter(|_| resolve_defaults) {
+                let mentions = mentioned_declared_params(interner, type_params, default);
+                if mentions
+                    .iter()
+                    .all(|&mention| fixed.contains_key(&type_params[mention].id))
+                {
+                    let resolved = substitute(interner, default, &fixed);
+                    fixed.insert(type_param.id, resolved);
+                }
+            }
             continue;
         };
         let constraint = match type_param.constraint {
@@ -2000,8 +2510,11 @@ fn fix_present_signature_params_attempt<L: PublishedClassLookup + ?Sized>(
             _ => candidate,
         };
         fixed.insert(type_param.id, selected);
-        ordered.push((type_param.id, selected));
     }
+    let ordered = type_params
+        .iter()
+        .filter_map(|type_param| Some((type_param.id, *fixed.get(&type_param.id)?)))
+        .collect();
     SemanticQueryAttempt::Complete(DemandOutcome::Ready(ordered))
 }
 
@@ -2065,6 +2578,7 @@ mod native_identity_attempt_tests {
             &published,
             &mut queries,
             SignatureInferenceRequest {
+                purpose: SignatureInferencePurpose::ClassApplication,
                 type_params: &type_params,
                 params: &params,
                 args: &args,
@@ -2095,6 +2609,7 @@ mod native_identity_attempt_tests {
         let before = queries.durable_lengths();
         let mut next_type_param = 99_111;
         let request = SignatureInferenceRequest {
+            purpose: SignatureInferencePurpose::ClassApplication,
             type_params: &type_params,
             params: &[],
             args: &[],
@@ -2146,6 +2661,7 @@ mod native_identity_attempt_tests {
         let fresh = [false];
         let fallbacks = [false];
         let request = SignatureInferenceRequest {
+            purpose: SignatureInferencePurpose::ClassApplication,
             type_params: &type_params,
             params: &params,
             args: &args,
@@ -2196,6 +2712,7 @@ mod native_identity_attempt_tests {
             &published,
             &mut queries,
             SignatureInferenceRequest {
+                purpose: SignatureInferencePurpose::ClassApplication,
                 type_params: &type_params,
                 params: &[],
                 args: &[],
@@ -2219,6 +2736,7 @@ mod native_identity_attempt_tests {
             &published,
             &mut queries,
             SignatureInferenceRequest {
+                purpose: SignatureInferencePurpose::ClassApplication,
                 type_params: &type_params,
                 params: &params,
                 args: &args,
@@ -2254,6 +2772,7 @@ mod native_identity_attempt_tests {
             &poisoned_published,
             &mut queries,
             SignatureInferenceRequest {
+                purpose: SignatureInferencePurpose::ClassApplication,
                 type_params: &constrained_type_params,
                 params: &params,
                 args: &args,

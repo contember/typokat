@@ -18,6 +18,7 @@ use std::hash::{Hash, Hasher};
 pub enum StructuralKey<'a> {
     Intrinsic(IntrinsicKind),
     Literal(&'a LiteralValue),
+    WideningLiteral(TypeId),
     /// One whole enum family. Stable identity and canonical facts are both part of
     /// the key so an identity can never silently acquire a different member set.
     Enum(&'a EnumType),
@@ -145,6 +146,10 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
         StructuralKey::Literal(value) => {
             TypeTag::Literal.hash_discriminant(&mut h);
             hash_literal(value, &mut h);
+        }
+        StructuralKey::WideningLiteral(regular) => {
+            TypeTag::WideningLiteral.hash_discriminant(&mut h);
+            regular.0.hash(&mut h);
         }
         StructuralKey::Enum(enum_type) => {
             TypeTag::Enum.hash_discriminant(&mut h);

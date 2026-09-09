@@ -847,6 +847,7 @@ fn walk_identity(
         match store.tag(ty) {
             TypeTag::Intrinsic
             | TypeTag::Literal
+            | TypeTag::WideningLiteral
             | TypeTag::Enum
             | TypeTag::EnumMember
             | TypeTag::TypeParam

@@ -263,10 +263,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     ) -> Option<EnumMemberEndpoint> {
         use oxc_ast::ast::Expression;
 
-        let object = match object {
-            Expression::ParenthesizedExpression(parenthesized) => &parenthesized.expression,
-            object => object,
-        };
+        let mut object = object;
+        while let Expression::ParenthesizedExpression(parenthesized) = object {
+            object = &parenthesized.expression;
+        }
         let Expression::Identifier(identifier) = object else {
             return None;
         };
@@ -284,6 +284,54 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
         let name = enum_static_key(&member.expression)?;
         self.enum_member_access_endpoint(scope, &member.object, name)
+    }
+
+    /// `Enum[key]` whose key identifier is already published as one string literal.
+    /// Root authentication stays with [`Self::enum_member_access_endpoint`]; the key
+    /// is read through the tracked declaration table, never inferred here.
+    pub(in crate::check::checker) fn enum_ready_key_expression_endpoint(
+        &self,
+        scope: ScopeId,
+        expression: &oxc_ast::ast::Expression<'_>,
+    ) -> Option<EnumMemberEndpoint> {
+        use oxc_ast::ast::Expression;
+
+        let mut expression = expression;
+        while let Expression::ParenthesizedExpression(parenthesized) = expression {
+            expression = &parenthesized.expression;
+        }
+        let Expression::ComputedMemberExpression(member) = expression else {
+            return None;
+        };
+        if member.optional {
+            return None;
+        }
+        let name = self.ready_enum_key_name(scope, &member.expression)?;
+        self.enum_member_access_endpoint(scope, &member.object, &name)
+    }
+
+    fn ready_enum_key_name(
+        &self,
+        scope: ScopeId,
+        key: &oxc_ast::ast::Expression<'_>,
+    ) -> Option<String> {
+        use oxc_ast::ast::Expression;
+
+        let mut key = key;
+        while let Expression::ParenthesizedExpression(parenthesized) = key {
+            key = &parenthesized.expression;
+        }
+        let Expression::Identifier(identifier) = key else {
+            return None;
+        };
+        let symbol = self.resolve_value_symbol(scope, identifier.name.as_str())?;
+        let storage = self.binder.symbols.get(symbol)?.value?;
+        let ty = self.decl_type(storage)?;
+        let store = self.interner.store();
+        match store.literal_value(store.regular_literal_type(ty)) {
+            Some(crate::types::repr::LiteralValue::String(name)) => Some(name.clone()),
+            _ => None,
+        }
     }
 
     pub(in crate::check::checker) fn direct_enum_value_expression(

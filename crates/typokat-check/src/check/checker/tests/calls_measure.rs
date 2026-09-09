@@ -91,7 +91,8 @@ fn measure_call_pipeline_fresh_literal_formula() {
     assert_eq!(measure.candidate_trials, 2);
     assert_eq!(measure.candidate_matches, 1);
     assert_eq!(measure.candidate_mismatches, 1);
-    assert_eq!(measure.generic_preliminary_inference_runs, 0);
+    // Every generic candidate now prepares independent inputs before contextual checking.
+    assert_eq!(measure.generic_preliminary_inference_runs, 3);
     assert_eq!(measure.generic_full_inference_runs, 3);
     // Backlog 95: the two overloads give the argument two distinct contextual targets,
     // so candidate inference walks it twice and the committed build's third walk repeats

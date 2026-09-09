@@ -1,8 +1,9 @@
 //! Interner-only capability used while class surfaces are constructed.
 
+use super::super::literal_publication::{finalize_literal_type, LiteralPublicationRole};
 use crate::types::repr::{
-    ClassId, ConditionalType, FunctionType, LiteralValue, MappedType, ObjectType, TemplateType,
-    TupleType, TypeParamId,
+    ClassId, ConditionalType, FunctionType, LiteralValue, MappedType, ObjectType, ParameterType,
+    TemplateType, TupleType, TypeParamId,
 };
 use crate::types::store::{Store, TypeId};
 use crate::types::{Interner, WellKnown};
@@ -29,6 +30,36 @@ impl<'a> SurfaceTypeFactory<'a> {
 
     pub(in crate::check::checker) fn intern_literal(&mut self, value: LiteralValue) -> TypeId {
         self.interner.intern_literal(value)
+    }
+
+    pub(in crate::check::checker) fn intern_ordinary_literal(
+        &mut self,
+        value: LiteralValue,
+    ) -> TypeId {
+        self.interner.intern_ordinary_literal(value)
+    }
+
+    pub(in crate::check::checker) fn finalize_literal_type(
+        &mut self,
+        source: TypeId,
+        context: Option<TypeId>,
+        role: LiteralPublicationRole,
+    ) -> TypeId {
+        finalize_literal_type(self.interner, source, context, role)
+    }
+
+    pub(in crate::check::checker) fn ready_contextual_parameter_target(
+        &mut self,
+        params: &[ParameterType],
+        index: usize,
+        parameter_count: usize,
+    ) -> Option<TypeId> {
+        super::super::signature_projection::ready_contextual_parameter_target(
+            self.interner,
+            params,
+            index,
+            parameter_count,
+        )
     }
 
     pub(in crate::check::checker) fn intern_type_param(

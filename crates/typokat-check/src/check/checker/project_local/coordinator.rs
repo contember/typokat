@@ -1248,6 +1248,7 @@ fn terminal_state_for_test(terminal: &ProductTerminal) -> ProjectLocalTerminalSt
 fn force_all_type_kind(interner: &Interner, ty: TypeId) -> ProjectLocalForceAllTypeKindForTest {
     let store = interner.store();
     match store.tag(ty) {
+        TypeTag::WideningLiteral => ProjectLocalForceAllTypeKindForTest::WideningLiteral,
         TypeTag::Intrinsic => ProjectLocalForceAllTypeKindForTest::Intrinsic(
             match store
                 .intrinsic_kind(ty)

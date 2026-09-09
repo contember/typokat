@@ -329,41 +329,7 @@ fn is_ecmascript_whitespace(character: char) -> bool {
     )
 }
 
-/// Widen a candidate: a literal widens to its base intrinsic (`5` → `number`);
-/// every other type passes through unchanged. Mirrors the checker's `widen` (kept
-/// local so the inference engine has no back-dependency on the checker module).
-pub(super) fn widen(interner: &Interner, ty: TypeId) -> TypeId {
-    match interner.store().literal_value(ty) {
-        Some(lit) => intrinsic_id(interner, lit.base_kind()),
-        None => ty,
-    }
-}
-
-/// Well-known id for an intrinsic kind (the literal-widening targets only need the
-/// three primitive bases, but the full mapping keeps the match exhaustive).
-fn intrinsic_id(interner: &Interner, kind: crate::types::repr::IntrinsicKind) -> TypeId {
-    use crate::types::repr::IntrinsicKind;
-    let wk = interner.well_known();
-    match kind {
-        IntrinsicKind::Error => wk.error,
-        IntrinsicKind::Any => wk.any,
-        IntrinsicKind::Unknown => wk.unknown,
-        IntrinsicKind::Never => wk.never,
-        IntrinsicKind::Void => wk.void,
-        IntrinsicKind::Null => wk.null,
-        IntrinsicKind::Undefined => wk.undefined,
-        IntrinsicKind::Boolean => wk.boolean,
-        IntrinsicKind::Number => wk.number,
-        IntrinsicKind::String => wk.string,
-        // M28 string-intrinsic markers.
-        IntrinsicKind::Uppercase => wk.uppercase,
-        IntrinsicKind::Lowercase => wk.lowercase,
-        IntrinsicKind::Capitalize => wk.capitalize,
-        IntrinsicKind::Uncapitalize => wk.uncapitalize,
-        IntrinsicKind::ThisType => wk.this_type,
-        IntrinsicKind::OmitThisParameter => wk.omit_this_parameter,
-        IntrinsicKind::Object => wk.object,
-        IntrinsicKind::BigInt => wk.bigint,
-        IntrinsicKind::Symbol => wk.symbol,
-    }
+/// Candidate fixing uses the same mode-aware boundary as declarations.
+pub(super) fn widen(interner: &mut Interner, ty: TypeId) -> TypeId {
+    interner.widen_literal_type(ty)
 }

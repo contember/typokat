@@ -482,7 +482,7 @@ declare let byKey: { [key: string]: Left };
 }
 
 #[test]
-fn deferred_assignment_targets_keep_rhs_only_traversal() {
+fn computed_assignment_walks_key_while_other_deferred_targets_walk_only_rhs() {
     let source = "\
 declare let values: { [key: string]: number };
 declare let first: number;
@@ -498,8 +498,269 @@ values[MissingComputedTarget] = MissingComputedRhs;
             .iter()
             .map(|diagnostic| &source[diagnostic.span.range()])
             .collect::<Vec<_>>(),
-        ["MissingComputedRhs", "MissingArrayRhs", "MissingObjectRhs",]
+        [
+            "MissingComputedTarget",
+            "MissingComputedRhs",
+            "MissingArrayRhs",
+            "MissingObjectRhs",
+        ]
     );
+    assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+}
+
+#[test]
+fn computed_readonly_assignment_uses_the_resolved_literal_key() {
+    let source = r#"
+const frozen = ({ value: 1 }) as const;
+frozen[("value")] = 1;
+frozen["value" as const] = 1;
+const key: "value" = "value";
+frozen[key] = 1;
+
+const tuple = [1, 2] as const;
+tuple["missing"] = 1;
+tuple[3] = 1;
+tuple[0] = 1;
+"#;
+    let output = check_source(source);
+    assert!(output.parse_errors.is_empty(), "{:?}", output.parse_errors);
+    assert_eq!(
+        output
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>(),
+        ["TK2540", "TK2540", "TK2540", "TK2540"]
+    );
+    assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+}
+
+#[test]
+fn const_provenance_crosses_satisfies_and_collapsed_conditional_flow() {
+    let source = r#"
+declare const condition: boolean;
+let assigned: 1 | 2 = 2;
+assigned = 1 as const;
+let throughSatisfies = assigned satisfies 1 | 2;
+throughSatisfies = 2;
+
+declare function exactOne(): 1;
+let collapsed = condition ? (1 as const) : exactOne();
+collapsed = 2;
+"#;
+    let output = check_source(source);
+    assert!(output.parse_errors.is_empty(), "{:?}", output.parse_errors);
+    assert_eq!(
+        output
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>(),
+        ["TK2322", "TK2322"]
+    );
+    assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+}
+
+#[test]
+fn direct_const_candidates_revalidate_reverse_dependent_constraints() {
+    let source = r#"
+declare function reversed<U extends T, T extends string>(child: U, base: T): [U, T];
+const result = reversed("child" as const, 1 as const);
+const child: "child" = result[0];
+const base: 1 = result[1];
+"#;
+    let output = check_source(source);
+    assert!(output.parse_errors.is_empty(), "{:?}", output.parse_errors);
+    assert_eq!(
+        output
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>(),
+        ["TK2345", "TK2322"]
+    );
+    assert_eq!(
+        output
+            .diagnostics
+            .iter()
+            .map(|diagnostic| &source[diagnostic.span.range()])
+            .collect::<Vec<_>>(),
+        ["1", "base"]
+    );
+    assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+}
+
+#[test]
+fn m1_published_and_contextual_literal_modes_reach_shared_inference() {
+    let source = r#"
+declare function identity<T>(value: T): T;
+declare function constrained<T extends string>(value: T): T;
+namespace Values { export const ordinary = "same"; export const exact: "same" = "same"; }
+class ValuesClass {
+  readonly ordinary = "same";
+  readonly exact: "same" = "same";
+  mutable = this.ordinary;
+}
+const instance = new ValuesClass();
+let ordinary = identity(Values.ordinary);
+ordinary = "different";
+let readonlyOrdinary = identity(instance.ordinary);
+readonlyOrdinary = "different";
+instance.mutable = "different";
+let exact = identity(Values.exact);
+exact = "different";
+let readonlyExact = identity(instance.exact);
+readonlyExact = "different";
+let constrainedExact = constrained("same");
+constrainedExact = "different";
+const callback: (value: 1) => void = value => {
+  let copy = identity(value);
+  copy = 2;
+};
+let ordinaryNegative = identity(-1);
+ordinaryNegative = -2;
+let exactNegative = identity(-1 as const);
+exactNegative = -2;
+"#;
+    let output = check_source(source);
+    assert!(output.parse_errors.is_empty(), "{:?}", output.parse_errors);
+    assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+    assert_eq!(
+        output
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>(),
+        ["TK2322"; 5]
+    );
+    assert_eq!(
+        output
+            .diagnostics
+            .iter()
+            .map(|diagnostic| &source[diagnostic.span.range()])
+            .collect::<Vec<_>>(),
+        ["\"different\"", "\"different\"", "\"different\"", "2", "-2"]
+    );
+}
+
+#[test]
+fn const_provenance_crosses_identifier_assignment_flow() {
+    let source = r#"
+let source = 1 as const;
+let target: 1 | 2 = 2;
+target = source;
+let copy = target;
+copy = 2;
+"#;
+    let output = check_source(source);
+    assert!(output.parse_errors.is_empty(), "{:?}", output.parse_errors);
+    assert_eq!(
+        output
+            .diagnostics
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), &source[diagnostic.span.range()]))
+            .collect::<Vec<_>>(),
+        [("TK2322", "2")]
+    );
+    assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+}
+
+#[test]
+fn mixed_equal_conditional_keeps_the_const_endpoint() {
+    let source = r#"
+declare const condition: boolean;
+let value = condition ? (1 as const) : 1;
+value = 2;
+"#;
+    let output = check_source(source);
+    assert!(output.parse_errors.is_empty(), "{:?}", output.parse_errors);
+    assert_eq!(
+        output
+            .diagnostics
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), &source[diagnostic.span.range()]))
+            .collect::<Vec<_>>(),
+        [("TK2322", "2")]
+    );
+    assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+}
+
+#[test]
+fn contextual_return_does_not_widen_a_direct_const_inference_candidate() {
+    let source = r#"
+declare function identity<T>(value: T): T;
+const exact: 1 = identity(1 as const);
+"#;
+    let output = check_source(source);
+    assert!(output.parse_errors.is_empty(), "{:?}", output.parse_errors);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+}
+
+#[test]
+fn class_const_initializer_resolves_a_literal_typed_computed_key() {
+    let source = r#"
+declare const source: { value: 1 };
+const key: "value" = "value";
+class Example {
+  field = ({ member: source[key] }) as const;
+}
+declare const example: Example;
+const exact: 1 = example.field.member;
+"#;
+    let output = check_source(source);
+    assert!(output.parse_errors.is_empty(), "{:?}", output.parse_errors);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+}
+
+#[test]
+fn logical_const_provenance_follows_reachable_value_endpoints() {
+    let source = r#"
+declare const condition: boolean;
+let dynamicAnd = condition && (1 as const);
+dynamicAnd = 2;
+let dynamicOr = condition || (1 as const);
+dynamicOr = 2;
+let falseAnd = false && (1 as const);
+falseAnd = true;
+let falseOr = false || (1 as const);
+falseOr = 2;
+let trueOr = true || (1 as const);
+trueOr = false;
+let nullish = null ?? (1 as const);
+nullish = 2;
+let present = 1 ?? (2 as const);
+present = 3;
+"#;
+    let output = check_source(source);
+    assert!(output.parse_errors.is_empty(), "{:?}", output.parse_errors);
+    assert_eq!(
+        output
+            .diagnostics
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), &source[diagnostic.span.range()]))
+            .collect::<Vec<_>>(),
+        [
+            ("TK2322", "2"),
+            ("TK2322", "2"),
+            ("TK2322", "2"),
+            ("TK2322", "2"),
+        ]
+    );
+    assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+}
+
+#[test]
+fn compound_assignment_does_not_inherit_rhs_const_provenance() {
+    let source = r#"
+let sink = 0;
+let result = (sink += 1 as const);
+result = 2;
+"#;
+    let output = check_source(source);
+    assert!(output.parse_errors.is_empty(), "{:?}", output.parse_errors);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
     assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
 }
 

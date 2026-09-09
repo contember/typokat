@@ -72,11 +72,13 @@ mod indexed_access;
 pub mod lexical_events;
 mod lexical_events_user;
 mod library_identities;
+mod literal_publication;
 mod namespace_values;
 mod narrowing;
 pub mod project_local;
 pub(in crate::check) mod project_local_semantics;
 pub mod reporting_record;
+mod signature_projection;
 mod statements;
 mod type_groups;
 
@@ -4397,6 +4399,288 @@ fn evaluate_assign_obligation<Ticket: Copy + PartialEq + UserReportingOwner>(
     }
 }
 
+fn evaluate_literal_site_attempt<Ticket: Copy + PartialEq>(
+    pass: &mut Pass<'_, '_, Ticket>,
+    site: &context::LiteralAssignmentSite,
+    native_site: &mut Option<AssignObligation>,
+) -> crate::check::query::SemanticQueryAttempt<context::LiteralGroupOutcome> {
+    use crate::check::query::SemanticQueryAttempt;
+    use context::*;
+    let mut diagnostics = Vec::new();
+    let mut failures = Vec::new();
+    let mut unavailable_sites = Vec::new();
+    let mut invalid_child = false;
+    let mut unavailable = site.unavailable;
+    for child in &site.children {
+        match evaluate_literal_site_attempt(pass, child, native_site) {
+            SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+                return SemanticQueryAttempt::NeedsNativeIdentities(demands)
+            }
+            SemanticQueryAttempt::Complete(outcome) => match outcome {
+                LiteralGroupOutcome::Decided(LiteralDecision::Valid) => {}
+                LiteralGroupOutcome::Decided(LiteralDecision::Invalid(child)) => {
+                    invalid_child = true;
+                    diagnostics.extend(child);
+                }
+                LiteralGroupOutcome::Unavailable {
+                    diagnostics: child,
+                    sites,
+                } => {
+                    unavailable = true;
+                    diagnostics.extend(child);
+                    unavailable_sites.extend(sites);
+                }
+                LiteralGroupOutcome::Exhausted {
+                    diagnostics: child,
+                    failures: child_failures,
+                    unavailable_sites: sites,
+                } => {
+                    diagnostics.extend(child);
+                    failures.extend(child_failures);
+                    unavailable_sites.extend(sites);
+                }
+            },
+        }
+    }
+    let relation = pass.with_semantic_query(|query| {
+        query.is_assignable_attempt(site.residual.src, site.residual.tgt)
+    });
+    let relation = match relation {
+        SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+            *native_site = Some(site.residual.clone());
+            return SemanticQueryAttempt::NeedsNativeIdentities(demands);
+        }
+        SemanticQueryAttempt::Complete(outcome) => outcome,
+    };
+    let blocked = invalid_child || unavailable || !failures.is_empty();
+    match relation {
+        RelationOutcome::Exhausted(exhaustion) => {
+            if site.preparation_failure.as_ref() != Some(&exhaustion) {
+                failures.push(LiteralQueryFailure {
+                    obligation: site.residual.clone(),
+                    exhaustion,
+                });
+            }
+        }
+        outcome if !blocked => {
+            if !site.decomposed {
+                diagnostics.extend(site.excess.iter().cloned());
+                if let RelationOutcome::No(chain) = outcome {
+                    diagnostics.push(emit_obligation_failure(
+                        pass.interner.store(),
+                        &site.residual,
+                        chain.head(),
+                    ));
+                }
+            } else {
+                match outcome {
+                    RelationOutcome::Yes => diagnostics.extend(site.excess.first().cloned()),
+                    RelationOutcome::No(chain) => {
+                        if site.missing_required && !site.excess.is_empty() {
+                            diagnostics.extend(site.excess.first().cloned());
+                        } else {
+                            diagnostics.push(emit_obligation_failure(
+                                pass.interner.store(),
+                                &site.residual,
+                                chain.head(),
+                            ));
+                        }
+                    }
+                    RelationOutcome::Exhausted(exhaustion) => failures.push(LiteralQueryFailure {
+                        obligation: site.residual.clone(),
+                        exhaustion,
+                    }),
+                }
+            }
+        }
+        RelationOutcome::Yes | RelationOutcome::No(_) => {}
+    }
+    SemanticQueryAttempt::Complete(if !failures.is_empty() {
+        LiteralGroupOutcome::Exhausted {
+            diagnostics,
+            failures,
+            unavailable_sites,
+        }
+    } else if unavailable {
+        LiteralGroupOutcome::Unavailable {
+            diagnostics,
+            sites: unavailable_sites,
+        }
+    } else if invalid_child || !diagnostics.is_empty() {
+        LiteralGroupOutcome::Decided(LiteralDecision::Invalid(diagnostics))
+    } else {
+        LiteralGroupOutcome::Decided(LiteralDecision::Valid)
+    })
+}
+
+fn evaluate_literal_assignment_attempt<Ticket: Copy + PartialEq>(
+    pass: &mut Pass<'_, '_, Ticket>,
+    group: &context::PreparedLiteralAssignment,
+    native_site: &mut Option<AssignObligation>,
+) -> crate::check::query::SemanticQueryAttempt<context::LiteralGroupOutcome> {
+    use crate::check::query::SemanticQueryAttempt;
+    use context::*;
+    pass.semantic_queries.savepoint();
+    let outcome = match evaluate_literal_site_attempt(pass, &group.root, native_site) {
+        SemanticQueryAttempt::Complete(outcome) => {
+            let outcome = match outcome {
+                LiteralGroupOutcome::Decided(decision) if !group.unavailable_sites.is_empty() => {
+                    let diagnostics = match decision {
+                        LiteralDecision::Valid => Vec::new(),
+                        LiteralDecision::Invalid(diagnostics) => diagnostics,
+                    };
+                    LiteralGroupOutcome::Unavailable {
+                        diagnostics,
+                        sites: group.unavailable_sites.clone(),
+                    }
+                }
+                LiteralGroupOutcome::Unavailable {
+                    diagnostics,
+                    mut sites,
+                } => {
+                    sites.extend(group.unavailable_sites.iter().cloned());
+                    LiteralGroupOutcome::Unavailable { diagnostics, sites }
+                }
+                LiteralGroupOutcome::Exhausted {
+                    diagnostics,
+                    failures,
+                    mut unavailable_sites,
+                } => {
+                    unavailable_sites.extend(group.unavailable_sites.iter().cloned());
+                    LiteralGroupOutcome::Exhausted {
+                        diagnostics,
+                        failures,
+                        unavailable_sites,
+                    }
+                }
+                outcome => outcome,
+            };
+            SemanticQueryAttempt::Complete(outcome)
+        }
+        native => native,
+    };
+    if matches!(
+        &outcome,
+        SemanticQueryAttempt::Complete(LiteralGroupOutcome::Decided(_))
+    ) {
+        pass.semantic_queries.commit();
+    } else {
+        pass.semantic_queries.rollback();
+    }
+    outcome
+}
+
+fn evaluate_literal_assignment<Ticket: Copy + PartialEq + UserReportingOwner>(
+    pass: &mut Pass<'_, '_, Ticket>,
+    effects: &mut CheckerEffects<Ticket>,
+    group: &context::PreparedLiteralAssignment,
+) {
+    use context::*;
+    let mut native_site = None;
+    let outcome = pass
+        .retry_native_identity_demands(|pass| {
+            evaluate_literal_assignment_attempt(pass, group, &mut native_site)
+        })
+        .unwrap_or_else(|()| {
+            let obligation = native_site.expect("native retry retains its requesting literal site");
+            let exhaustion = Exhaustion::EvaluationInvalidNode { ty: obligation.src };
+            LiteralGroupOutcome::Exhausted {
+                diagnostics: Vec::new(),
+                failures: vec![LiteralQueryFailure {
+                    obligation,
+                    exhaustion,
+                }],
+                unavailable_sites: Vec::new(),
+            }
+        });
+    let (diagnostics, failures, sites) = match outcome {
+        LiteralGroupOutcome::Decided(LiteralDecision::Valid) => {
+            (Vec::new(), Vec::new(), Vec::new())
+        }
+        LiteralGroupOutcome::Decided(LiteralDecision::Invalid(diagnostics)) => {
+            (diagnostics, Vec::new(), Vec::new())
+        }
+        LiteralGroupOutcome::Unavailable { diagnostics, sites } => (diagnostics, Vec::new(), sites),
+        LiteralGroupOutcome::Exhausted {
+            diagnostics,
+            failures,
+            unavailable_sites,
+        } => (diagnostics, failures, unavailable_sites),
+    };
+    for diagnostic in diagnostics {
+        pass.append_effect_diagnostic(effects, diagnostic);
+    }
+    for failure in failures {
+        report_literal_query_failure(pass, effects, &failure.obligation, failure.exhaustion);
+    }
+    for site in sites {
+        match site.evidence {
+            LiteralUnavailableEvidence::Demand(exhaustion) => {
+                let owned = CheckerEffects::new(effects.records.owner());
+                let owned = consume_relation_exhaustion(pass, owned, exhaustion, site.span);
+                effects.merge(owned);
+            }
+            LiteralUnavailableEvidence::SourceWalk => pass.append_effect_incomplete(
+                effects,
+                IncompleteSurface::new(
+                    "assignment/literal-source-unavailable",
+                    site.span,
+                    "literal child source was unavailable after its source walk",
+                ),
+            ),
+        }
+    }
+}
+
+fn report_literal_query_failure<Ticket: Copy + PartialEq + UserReportingOwner>(
+    pass: &mut Pass<'_, '_, Ticket>,
+    effects: &mut CheckerEffects<Ticket>,
+    obligation: &AssignObligation,
+    exhaustion: Exhaustion,
+) {
+    match exhaustion {
+        Exhaustion::EvaluationBudget
+        | Exhaustion::EvaluationCycle { .. }
+        | Exhaustion::AliasProjectionBudget => {
+            if effects.records.owner().user_ticket().is_ok() {
+                pass.append_effect_diagnostic(
+                    effects,
+                    Diagnostic::excessively_deep(obligation.src_span),
+                );
+            }
+        }
+        Exhaustion::ClassProjectionBudget => {
+            pass.append_effect_diagnostic(
+                effects,
+                emit_exhausted_obligation(pass.interner.store(), obligation),
+            );
+            pass.append_effect_incomplete(
+                effects,
+                IncompleteSurface::new(
+                    "relation/class-projection-budget",
+                    obligation.src_span,
+                    "class projection budget exhausted",
+                ),
+            );
+        }
+        Exhaustion::EvaluationInvalidNode { .. } => pass.append_effect_incomplete(
+            effects,
+            IncompleteSurface::new(
+                "semantic-query/invalid-evaluation-node",
+                obligation.src_span,
+                "semantic evaluation reached an invalid type node",
+            ),
+        ),
+        Exhaustion::ClassNotPublished { .. }
+        | Exhaustion::AliasNotPublished { .. }
+        | Exhaustion::AliasUnavailable { .. }
+        | Exhaustion::ClassHeritagePoison { .. }
+        | Exhaustion::ClassInitializerPoison { .. }
+        | Exhaustion::ClassSurfacePoison { .. }
+        | Exhaustion::ClassApplicationArguments(_) => {}
+    }
+}
+
 fn evaluate_satisfies_check<Ticket: Copy + PartialEq + UserReportingOwner>(
     pass: &mut Pass<'_, '_, Ticket>,
     effects: &mut CheckerEffects<Ticket>,
@@ -4506,6 +4790,9 @@ fn finish_semantic_effects<Ticket: Copy + PartialEq + UserReportingOwner>(
             match obligation {
                 DeferredRelationObligation::Assign(obligation) => {
                     evaluate_assign_obligation(pass, &mut effects, &obligation);
+                }
+                DeferredRelationObligation::LiteralAssignment(group) => {
+                    evaluate_literal_assignment(pass, &mut effects, &group)
                 }
                 DeferredRelationObligation::Satisfies(obligation) => {
                     evaluate_satisfies_check(pass, &mut effects, &obligation.root);
@@ -5181,6 +5468,16 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
             .push_obligation(DeferredRelationObligation::Assign(obligation));
     }
 
+    pub(in crate::check::checker) fn schedule_literal_assignment(
+        &mut self,
+        group: context::PreparedLiteralAssignment,
+    ) {
+        self.effect_stack
+            .last_mut()
+            .expect("literal assignment lexical owner")
+            .push_obligation(DeferredRelationObligation::LiteralAssignment(group));
+    }
+
     pub(in crate::check::checker) fn schedule_satisfies_obligation(
         &mut self,
         obligation: SatisfiesObligation,
@@ -5702,6 +5999,7 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
         effect_stack: Vec::new(),
         provisional_argument_effects: Vec::new(),
         argument_walk_depth: 0,
+        inference_environment: None,
         raw_argument_walk_memo: FxHashMap::default(),
         contextual_walk_memo: FxHashMap::default(),
         pending_effects,
@@ -5732,6 +6030,9 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
         class_application_parameters: LayeredMap::default(),
         staged_class_validation: None,
         retained_class_callables: BTreeMap::new(),
+        class_initializer_validation: BTreeMap::new(),
+        active_initializer_validation: None,
+        initializer_validation_failed: false,
         class_body_views: BTreeMap::new(),
         class_super_constructors: BTreeMap::new(),
         class_new_metadata: LayeredMap::default(),

@@ -1122,7 +1122,10 @@ fn activation_shape_keeps_cache_at_the_ready_final_arm_and_telemetry_test_only()
         "impl<'ast, Ticket: Copy + PartialEq> Deref",
     ));
     assert!(pass_fields.contains("eager_application_cache:FxHashMap<"));
-    assert!(!pass_fields.contains("Arc<"));
+    assert_eq!(pass_fields.matches("Arc<").count(), 1);
+    assert!(pass_fields.contains(
+        "inference_environment:Option<std::sync::Arc<super::calls::ContextualInferenceEnvironment>>,"
+    ));
     assert_test_guard_covers_every_occurrence(context, "EagerApplicationCacheMeasure");
     assert_test_guard_covers_every_occurrence(context, "eager_application_cache_measure");
     assert_test_guard_covers_every_occurrence(resolve, "record_eager_application_cache_measure");

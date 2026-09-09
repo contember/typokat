@@ -338,6 +338,7 @@ pub enum ProjectLocalForceAllAliasUnavailableForTest {
 #[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProjectLocalForceAllTypeKindForTest {
+    WideningLiteral,
     Intrinsic(ProjectLocalForceAllIntrinsicKindForTest),
     Literal(ProjectLocalForceAllLiteralKindForTest),
     Object,

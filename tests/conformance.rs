@@ -109,8 +109,8 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("b33_as_cast_assignability", true),
     // Backlog 44 `satisfies`: source-preserving contextual assignability.
     ("b44_satisfies", true),
-    // Backlog 44 `as const`: disabled RED acceptance spec. WU1 enables it after
-    // AST-directed const contexts land on ordinary and class-publication paths.
+    // Backlog 44 `as const`: a mixed flat corpus. Fully green fixtures are enabled through
+    // `ENABLED_FIXTURES`; the rest stay disabled with owners listed in tests/cases/README.md.
     ("b44_as_const", false),
     // Declaration-inventory sprint WU1: binding-pattern default expressions own
     // their nested callable/body events before semantic checking.
@@ -577,9 +577,104 @@ const ENABLED_FIXTURES: &[(&str, &str)] = &[
         "b43_namespaces_declaration_merging",
         "wu7_official_named_tuple.ts",
     ),
+    ("b44_as_const", "assignment_boolean_union_modes.ts"),
+    ("b44_as_const", "assignment_excess_diagnostic_ownership.ts"),
+    ("b44_as_const", "assignment_logical_literal_sources.ts"),
+    ("b44_as_const", "assignment_nested_diagnostic_ownership.ts"),
+    ("b44_as_const", "assignment_operation_result_modes.ts"),
+    ("b44_as_const", "assignment_target_surface_regressions.ts"),
+    (
+        "b44_as_const",
+        "assignment_tuple_arity_diagnostic_targets.ts",
+    ),
+    (
+        "b44_as_const",
+        "assignment_tuple_rest_diagnostic_positions.ts",
+    ),
+    ("b44_as_const", "bigint_operand_accounting.ts"),
+    ("b44_as_const", "binding_default_context_and_authority.ts"),
+    ("b44_as_const", "binding_default_mode_combination.ts"),
+    ("b44_as_const", "binding_default_widening.ts"),
+    ("b44_as_const", "class_publication.ts"),
+    ("b44_as_const", "class_reference_seeding.ts"),
+    ("b44_as_const", "collections_and_context.ts"),
+    ("b44_as_const", "computed_readonly_property.ts"),
+    ("b44_as_const", "constrained_candidate_modes.ts"),
+    ("b44_as_const", "constraint_instantiation_order_supplied.ts"),
+    ("b44_as_const", "contextual_arrow_checks.ts"),
+    ("b44_as_const", "contextual_container_literal_modes.ts"),
+    ("b44_as_const", "contextual_parameter_fixing.ts"),
+    ("b44_as_const", "contextual_parameter_provenance.ts"),
+    ("b44_as_const", "contextual_return_contexts.ts"),
+    ("b44_as_const", "contextual_return_literal_members.ts"),
+    ("b44_as_const", "declaration_flow_provenance.ts"),
+    ("b44_as_const", "enum_key_and_widening.ts"),
+    ("b44_as_const", "enum_operand_authentication.ts"),
+    ("b44_as_const", "enum_parentheses_class_members.ts"),
+    ("b44_as_const", "enum_ready_key_boundaries.ts"),
+    ("b44_as_const", "enum_ready_key_result_identity.ts"),
+    ("b44_as_const", "excluded_shapes.ts"),
+    ("b44_as_const", "generic_constraint_provenance.ts"),
+    ("b44_as_const", "generic_return_widening_policy.ts"),
+    (
+        "b44_as_const",
+        "inference_callback_return_context_boundaries.ts",
+    ),
+    ("b44_as_const", "inference_fixing_shell_boundaries.ts"),
+    ("b44_as_const", "inference_native_boundary_regressions.ts"),
+    (
+        "b44_as_const",
+        "inference_returned_callback_parameter_context.ts",
+    ),
+    (
+        "b44_as_const",
+        "inference_scalar_composition_regressions.ts",
+    ),
+    ("b44_as_const", "inference_single_consumed_context.ts"),
+    ("b44_as_const", "inference_single_nested_position.ts"),
+    ("b44_as_const", "inference_single_scalar_roles.ts"),
+    (
+        "b44_as_const",
+        "inference_wrapped_callback_return_context.ts",
+    ),
+    ("b44_as_const", "literal_identity_transport.ts"),
+    ("b44_as_const", "literal_retention.ts"),
+    ("b44_as_const", "mixed_literal_contributions.ts"),
+    ("b44_as_const", "mutable_assignment_target.ts"),
+    ("b44_as_const", "non_widening_provenance.ts"),
+    ("b44_as_const", "object_reference_boundary.ts"),
+    ("b44_as_const", "provenance_loop_and_candidate_order.ts"),
+    ("b44_as_const", "publication_class_conservative_external.ts"),
+    ("b44_as_const", "publication_class_conservative_self.ts"),
+    ("b44_as_const", "publication_class_context_controls.ts"),
+    ("b44_as_const", "publication_class_contextual_rest.ts"),
+    ("b44_as_const", "publication_class_lexical_source.ts"),
+    ("b44_as_const", "publication_class_opaque_rest_boundary.ts"),
+    ("b44_as_const", "publication_class_roles.ts"),
+    ("b44_as_const", "publication_class_scalar_satisfies.ts"),
+    ("b44_as_const", "publication_class_self_context_control.ts"),
+    ("b44_as_const", "publication_class_unused_union_rest.ts"),
+    ("b44_as_const", "publication_class_validation_authority.ts"),
+    ("b44_as_const", "publication_class_validation_boundaries.ts"),
+    ("b44_as_const", "publication_class_validation_failures.ts"),
+    ("b44_as_const", "publication_context_views.ts"),
+    ("b44_as_const", "publication_effective_context.ts"),
+    ("b44_as_const", "publication_enum_contexts.ts"),
+    ("b44_as_const", "publication_grouping.ts"),
+    ("b44_as_const", "publication_return_aggregation.ts"),
+    ("b44_as_const", "publication_union_sources.ts"),
+    ("b44_as_const", "published_producer_inference.ts"),
+    ("b44_as_const", "query_order_forward.ts"),
+    ("b44_as_const", "query_order_reverse.ts"),
+    ("b44_as_const", "recursive_constraint_fallbacks.ts"),
+    ("b44_as_const", "recursive_constraint_seed_identity.ts"),
+    ("b44_as_const", "recursive_default_preparation.ts"),
+    ("b44_as_const", "return_literal_contributions.ts"),
+    ("b44_as_const", "source_construction_admission_controls.ts"),
+    ("b44_as_const", "value_endpoint_widening.ts"),
 ];
 
-const FROZEN_INVENTORY_ORDER_FINGERPRINT: u64 = 0x0671da33f03f843d;
+const FROZEN_INVENTORY_ORDER_FINGERPRINT: u64 = 0x8c90dc11b9970a2c;
 
 /// An expectation parsed from a single inline marker.
 #[derive(Debug, Clone)]
@@ -796,9 +891,9 @@ fn conformance() -> Result<(), String> {
         assert_eq!(
             receipt,
             RunReceipt {
-                fixture_projects: 583,
-                source_files: 699,
-                repeated_executions: 583,
+                fixture_projects: 660,
+                source_files: 776,
+                repeated_executions: 660,
                 standalone_executions: 0,
             }
         );
@@ -839,10 +934,10 @@ fn conformance_full_repeated_standalone_parity() -> Result<(), String> {
         assert_eq!(
             receipt,
             RunReceipt {
-                fixture_projects: 583,
-                source_files: 699,
-                repeated_executions: 583,
-                standalone_executions: 583,
+                fixture_projects: 660,
+                source_files: 776,
+                repeated_executions: 660,
+                standalone_executions: 660,
             }
         );
         print_run_receipt(&receipt);
@@ -852,14 +947,14 @@ fn conformance_full_repeated_standalone_parity() -> Result<(), String> {
 #[test]
 fn conformance_inventory_matches_frozen_receipt() {
     let inventory = discover_enabled_inventory();
-    assert_eq!(inventory.projects.len(), 583);
-    assert_eq!(inventory.source_files, 699);
+    assert_eq!(inventory.projects.len(), 660);
+    assert_eq!(inventory.source_files, 776);
     assert_eq!(
         inventory.discovery,
         DiscoveryReceipt {
             whole_flat: (436, 436),
             whole_project: (74, 184),
-            selected_flat: (67, 67),
+            selected_flat: (144, 144),
             selected_project: (6, 12),
         }
     );
@@ -998,7 +1093,10 @@ fn focused_selector_rejects_disabled_and_unknown_inputs() {
     );
 
     let disabled_case = focused_selection_error(
-        select_focused_inventory(Some("b44_as_const/literal_retention.ts"), None),
+        select_focused_inventory(
+            Some("b44_as_const/contextual_rest_arity_boundaries.ts"),
+            None,
+        ),
         "case from a disabled corpus must fail",
     );
     assert!(

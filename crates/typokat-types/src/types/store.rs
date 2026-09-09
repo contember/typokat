@@ -478,6 +478,7 @@ impl Store {
 
     /// The `LiteralValue` of a literal type, or `None` if `id` is not a literal.
     pub fn literal_value(&self, id: TypeId) -> Option<&LiteralValue> {
+        let id = self.regular_literal_type(id);
         if self.tag(id) != TypeTag::Literal {
             return None;
         }
@@ -635,6 +636,7 @@ impl Store {
 
     /// The exact enum-member payload, or `None` for another tag.
     pub fn enum_member_type(&self, id: TypeId) -> Option<&EnumMemberType> {
+        let id = self.regular_literal_type(id);
         if self.tag(id) != TypeTag::EnumMember {
             return None;
         }
@@ -642,6 +644,14 @@ impl Store {
             .get(self.payload(id) as usize)?
             .terminal
             .as_ref()
+    }
+
+    pub fn widening_literal_operand(&self, id: TypeId) -> Option<TypeId> {
+        (self.tag(id) == TypeTag::WideningLiteral).then(|| TypeId(self.payload(id)))
+    }
+
+    pub fn regular_literal_type(&self, id: TypeId) -> TypeId {
+        self.widening_literal_operand(id).unwrap_or(id)
     }
 
     /// The canonical whole type for an enum declaration identity.
@@ -854,6 +864,10 @@ impl Store {
         let payload = self.literals.len() as u32;
         self.literals.push_local(value);
         self.push(TypeTag::Literal, flags, payload)
+    }
+
+    pub(super) fn push_widening_literal(&mut self, regular: TypeId) -> TypeId {
+        self.push(TypeTag::WideningLiteral, TypeFlags::EMPTY, regular.0)
     }
 
     /// Append an object row (object into the side-table, index into payload).

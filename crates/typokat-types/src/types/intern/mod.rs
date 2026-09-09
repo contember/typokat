@@ -5,12 +5,14 @@
 
 mod composites;
 mod declared;
+mod literal_modes;
 mod operators;
 mod references;
 #[cfg(test)]
 mod tests;
 
 pub use declared::DeclaredMaterializationError;
+pub use literal_modes::LiteralModeError;
 
 use crate::types::hash::{structural_hash, StructuralKey};
 use crate::types::repr::{
@@ -910,6 +912,7 @@ impl Interner {
     }
 
     pub fn reserved_enum_semantic_frontier(&self, id: TypeId) -> bool {
+        let id = self.store.regular_literal_type(id);
         self.pending_reserved_enum(id) || self.unavailable_reserved_enum_member(id)
     }
 
@@ -1219,9 +1222,9 @@ impl Interner {
     pub fn intern_literal(&mut self, value: LiteralValue) -> TypeId {
         let key = StructuralKey::Literal(&value);
         let hash = structural_hash(&key);
-        if let Some(existing) =
-            self.lookup(hash, |store, id| store.literal_value(id) == Some(&value))
-        {
+        if let Some(existing) = self.lookup(hash, |store, id| {
+            store.tag(id) == TypeTag::Literal && store.literal_value(id) == Some(&value)
+        }) {
             return existing;
         }
         let id = self.store.push_literal(value, TypeFlags::EMPTY);

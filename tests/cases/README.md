@@ -11,9 +11,9 @@ The ordinary gate is:
 cpu-lease run -n 2 -- cargo test --test conformance conformance -- --exact --nocapture
 ```
 
-It discovers 583 fixture projects / 699 source files, checks each project once through the repeated
-`CheckerSession` route, and prints receipt `583/699/583/0`
-(projects/sources/repeated/standalone). The latest closure run took 69.77 s under
+It discovers 660 fixture projects / 776 source files, checks each project once through the repeated
+`CheckerSession` route, and prints receipt `660/776/660/0`
+(projects/sources/repeated/standalone). The latest closure run took 15.30 s under
 `cpu-lease run -n 2 --`. The inventory and ordering authority is
 `cargo test --test conformance conformance_inventory_matches_frozen_receipt -- --exact --nocapture`;
 the ordinary command's printed receipt repeats the aggregate totals.
@@ -42,7 +42,7 @@ cpu-lease run -n 2 -- cargo test --test conformance \
   conformance_full_repeated_standalone_parity -- --ignored --exact --nocapture
 ```
 
-It prints receipt `583/699/583/583`; the latest closure run took 138.30 s. The separate
+It prints receipt `660/776/660/660`; the latest closure run took 25.54 s. The separate
 `.github/workflows/full-parity.yml` runs it weekly and on manual dispatch.
 
 This file is **test tooling**: how to write and read these fixtures. The substantive record of
@@ -127,6 +127,54 @@ and multiple rest values before fixed suffixes, including leading rests and nest
 `assignment_tuple_arity_diagnostic_targets.ts` preserves fixed-position excess diagnostics despite
 too many or too few tuple elements, alongside pure length errors and valid-length controls.
 This includes a known fixed prefix before a variadic segment when the required suffix is absent.
+
+`b44_as_const/` is a mixed corpus: the directory stays registered `false` in `MILESTONE_DIRS`, and
+77 of its 116 flat fixtures are enabled fixture by fixture through `ENABLED_FIXTURES`. A fixture is
+enabled only when every marker row and every clean row match; the 39 fixtures below keep at least
+one mismatching row and stay disabled under the listed owner. The disabled files are not part of the
+ordinary gate, but every marker in them remains part of the acceptance spec.
+
+| Disabled `b44_as_const/` fixture | Owner |
+|---|---|
+| `assignment_contextual_result.ts` | backlog `51`/`60`/`76` (ledgered flow/loop/initializer gaps) |
+| `assignment_semantic_reduction.ts` | backlog `51`/`60`/`76` (ledgered flow/loop/initializer gaps) |
+| `class_member_selector_enum_and_scc.ts` | backlog `123` (ADR-0042 local class member selection) |
+| `class_member_selector_lexical_checks.ts` | backlog `123` (ADR-0042 local class member selection) |
+| `class_member_selector_modes.ts` | backlog `123` (ADR-0042 local class member selection) |
+| `class_published_reference_surfaces.ts` | backlog `123` (ADR-0042 local class member selection) |
+| `class_ready_collection_references.ts` | backlog `124` (ready collection reference projection) |
+| `class_reference_publication_controls.ts` | backlog `123` (ADR-0042 local class member selection) |
+| `constraint_instantiation_order.ts` | backlog `120` (cyclic-constraint completion order; ADR-0040 execution) |
+| `constraint_return_construction_call.ts` | backlog `120` (cyclic-constraint completion order; ADR-0040 execution) |
+| `constraint_return_construction_relation.ts` | backlog `120` (cyclic-constraint completion order; ADR-0040 execution) |
+| `constraint_semantic_identity.ts` | backlog `120` (cyclic-constraint completion order; ADR-0040 execution) |
+| `constraint_union_construction.ts` | backlog `120` (cyclic-constraint completion order; ADR-0040 execution) |
+| `constraint_union_forward_demand.ts` | backlog `120` (cyclic-constraint completion order; ADR-0040 execution) |
+| `contextual_rest_arity_boundaries.ts` | backlog `69` (correlated rest-parameter row views, ADR-0033) |
+| `contextual_rest_body_result_identity.ts` | backlog `69` (correlated rest-parameter row views, ADR-0033) |
+| `contextual_rest_parameter_correlation.ts` | backlog `69` (correlated rest-parameter row views, ADR-0033) |
+| `contextual_rest_signature_identity.ts` | backlog `69` (correlated rest-parameter row views, ADR-0033) |
+| `contextual_rest_write_boundaries.ts` | backlog `69` (correlated rest-parameter row views, ADR-0033) |
+| `erased_constraint_supplied.ts` | backlog `120` (cyclic-constraint completion order; ADR-0040 execution) |
+| `flow_target_reduction.ts` | backlog `51`/`60`/`76` (ledgered flow/loop/initializer gaps) |
+| `inference_candidate_positions.ts` | backlog `51`/`60`/`76` (ledgered flow/loop/initializer gaps) |
+| `loop_query_local_discharge.ts` | backlog `51`/`60`/`76` (ledgered flow/loop/initializer gaps) |
+| `loop_semantic_dependencies.ts` | backlog `51`/`60`/`76` (ledgered flow/loop/initializer gaps) |
+| `recursive_constraint_use_order.ts` | backlog `120` (cyclic-constraint completion order; ADR-0040 execution) |
+| `recursive_constraint_use_order_supplied.ts` | backlog `120` (cyclic-constraint completion order; ADR-0040 execution) |
+| `source_construction_alias_call.ts` | backlog `120` (cyclic-constraint completion order; ADR-0040 execution) |
+| `source_construction_array_duplicate.ts` | backlog `120` (cyclic-constraint completion order; ADR-0040 execution) |
+| `source_construction_array_first.ts` | backlog `120` (cyclic-constraint completion order; ADR-0040 execution) |
+| `source_construction_array_reuse.ts` | backlog `120` (cyclic-constraint completion order; ADR-0040 execution) |
+| `source_construction_array_reverse.ts` | backlog `120` (cyclic-constraint completion order; ADR-0040 execution) |
+| `source_construction_bound_frontier.ts` | backlog `120` (cyclic-constraint completion order; ADR-0040 execution) |
+| `source_construction_callable_assignment.ts` | backlog `120` (cyclic-constraint completion order; ADR-0040 execution) |
+| `source_construction_copy.ts` | backlog `120` (cyclic-constraint completion order; ADR-0040 execution) |
+| `source_construction_forward_call.ts` | backlog `120` (cyclic-constraint completion order; ADR-0040 execution) |
+| `source_construction_header.ts` | backlog `120` (cyclic-constraint completion order; ADR-0040 execution) |
+| `source_construction_record_first.ts` | backlog `120` (cyclic-constraint completion order; ADR-0040 execution) |
+| `source_construction_return_parameter.ts` | backlog `120` (cyclic-constraint completion order; ADR-0040 execution) |
+| `source_construction_unknown_assignment.ts` | backlog `120` (cyclic-constraint completion order; ADR-0040 execution) |
 
 The registered-callable protocol in [ADR-0040](../../docs/decisions/0040-complete-registered-callables-at-source-demand-boundaries.md)
 must close the following frozen 37-row construction cluster. Counts are prior mismatches, not a
@@ -543,7 +591,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b33_as_cast_assignability/` | backlog `33` | `as` / angle-bracket assertions participate in normal assignment and call-argument assignability |
 | `b44_satisfies/` | backlog `44` | `satisfies` contextually checks one-way assignability while preserving the source type and exact diagnostic ownership |
 | `b123_class_contextual_publication/` | backlog `123` (disabled) | effective finite key contexts and self-dependent class contextual inference; preserves missing downstream write errors without weakening broad B44 positive controls |
-| `b44_as_const/` | backlog `44` (disabled in the committed registration) | bounded const contexts plus provenance/flow feasibility: mixed literal contributions, contextual parameter copies, declared-target reduction, invalid-write recovery, enum authentication, class reference publication, and candidate/back-edge controls; spread/elision remain `71`, computed keys/object methods/invalid operands remain `75` |
+| `b44_as_const/` | backlog `44` (mixed corpus: 77 flat fixtures enabled through `ENABLED_FIXTURES`, 39 disabled with owners `120`/`69`/`123`/`124`/`51`/`60`/`76`) | bounded const contexts plus provenance/flow feasibility: mixed literal contributions, contextual parameter copies, declared-target reduction, invalid-write recovery, enum authentication, class reference publication, and candidate/back-edge controls; spread/elision remain `71`, computed keys/object methods/invalid operands remain `75` |
 | `b84_binding_pattern_owners/` | declaration-inventory sprint WU1 | object, parameter, and catch binding-pattern default expressions preallocate their nested callable/body lexical owners before semantic checking |
 | `b84_interface_occurrence_owners/` | declaration-inventory sprint WU3a | function, arrow, block, and control-flow local interfaces receive exact header/heritage/member lexical owners while namespace/global controls keep their order |
 | `b84_declaration_inventory/` | declaration-inventory sprint WU3c | used and unused script/function/control-flow local interface, alias, class, and enum groups publish in binder fragment order; sibling shadowing stays distinct from same-scope merge |

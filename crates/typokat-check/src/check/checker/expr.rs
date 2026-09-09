@@ -1,6 +1,5 @@
 //! expr module (extracted from checker/mod.rs).
 
-use super::calls::widen;
 use super::classes::body::BodyMemberLookup;
 use super::context::*;
 use super::decls::EnumMemberEndpoint;
@@ -10,7 +9,7 @@ use crate::binder::bind::{ResolvedValueKind, ValueResolution};
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::SymbolId;
 use crate::check::flow::{narrow_by_truthiness, FlowNodeId};
-use crate::class_semantics::DemandOutcome;
+use crate::class_semantics::{DemandOutcome, Exhaustion};
 use crate::diagnostics::{render_type, Diagnostic};
 use crate::relate::RelationOutcome;
 use crate::span::Span;
@@ -23,12 +22,90 @@ use crate::types::{Interner, WellKnown};
 use oxc_ast::ast::{
     ArrayExpression, ArrayExpressionElement, ArrowFunctionExpression, BinaryExpression,
     BinaryOperator, ChainElement, ComputedMemberExpression, ConditionalExpression, Expression,
-    LogicalExpression, LogicalOperator, ObjectExpression, ObjectPropertyKind,
+    LogicalExpression, LogicalOperator, ObjectExpression, ObjectPropertyKind, PropertyKind,
     SimpleAssignmentTarget, StaticMemberExpression, TSType, TSTypeName, UnaryExpression,
     UnaryOperator,
 };
 use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::cell::Cell;
+
+#[cfg(test)]
+#[path = "tests/initializer_context.rs"]
+mod initializer_context_tests;
+
+#[cfg(test)]
+#[path = "tests/initializer_validation.rs"]
+mod initializer_validation_tests;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(in crate::check::checker) struct PreparedInitializerContext {
+    pub original_target: TypeId,
+    pub publication_context: TypeId,
+    pub shaping_context: TypeId,
+    pub contextual_this: Option<TypeId>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::check::checker) enum InitializerContextState {
+    Unprepared,
+    Absent,
+    Prepared(PreparedInitializerContext),
+    Failed { invalid_target: bool },
+}
+
+pub(in crate::check::checker) struct InitializerContextSlot {
+    original_target: Option<TypeId>,
+    pub state: Cell<InitializerContextState>,
+}
+
+impl InitializerContextSlot {
+    pub fn new(original_target: Option<TypeId>) -> Self {
+        Self {
+            original_target,
+            state: Cell::new(InitializerContextState::Unprepared),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(in crate::check::checker) struct InitializerValue {
+    pub source: TypeId,
+    pub span: Span,
+    pub context: Option<PreparedInitializerContext>,
+    pub checked: CheckedExpr,
+}
+
+impl InitializerValue {
+    fn tuple(self) -> (TypeId, Span) {
+        (self.source, self.span)
+    }
+
+    pub fn publication_context(&self) -> Option<TypeId> {
+        self.context.map(|context| context.publication_context)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ContextPreparationFailure {
+    Unavailable(ContextUnavailable),
+    Exhausted(Exhaustion),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ContextUnavailable {
+    InvalidTarget,
+    ConstraintCycle,
+}
+
+fn context_demand<T>(outcome: DemandOutcome<T>) -> Result<T, ContextPreparationFailure> {
+    match outcome {
+        DemandOutcome::Ready(value) => Ok(value),
+        DemandOutcome::Exhausted(exhaustion) => {
+            Err(ContextPreparationFailure::Exhausted(exhaustion))
+        }
+    }
+}
 
 /// Whether a contextual re-walk actually walked the expression again.
 ///
@@ -40,6 +117,18 @@ use rustc_hash::{FxHashMap, FxHashSet};
 pub(in crate::check::checker) enum ContextualRewalk {
     Rewalked,
     KeptRaw,
+    Failed,
+    RewalkedFailed,
+}
+
+impl ContextualRewalk {
+    pub(in crate::check::checker) fn was_rewalked(self) -> bool {
+        matches!(self, Self::Rewalked | Self::RewalkedFailed)
+    }
+
+    fn source_ready(self) -> bool {
+        matches!(self, Self::Rewalked | Self::KeptRaw)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,93 +177,163 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         scope: ScopeId,
         expr: &Expression<'_>,
     ) -> Option<(TypeId, Span)> {
+        self.infer_checked_expr(scope, expr)
+            .map(|value| value.tuple())
+    }
+
+    pub(in crate::check::checker) fn literal_result(
+        &self,
+        scope: ScopeId,
+        ty: TypeId,
+        span: Span,
+        kind: LiteralKind,
+        children: Vec<LiteralChild>,
+    ) -> CheckedExpr {
+        CheckedExpr {
+            ty,
+            span,
+            literal: Some(std::sync::Arc::new(LiteralSource {
+                module: self.current_module,
+                scope,
+                full_span: span,
+                context: None,
+                kind,
+                children: children.into(),
+            })),
+        }
+    }
+
+    fn checked_parenthesis(
+        &self,
+        scope: ScopeId,
+        full_span: Span,
+        child: CheckedExpr,
+    ) -> CheckedExpr {
+        let (ty, span) = child.tuple();
+        let mut value = self.literal_result(
+            scope,
+            ty,
+            full_span,
+            LiteralKind::Parenthesized,
+            vec![LiteralChild {
+                edge: LiteralEdge::Parenthesized,
+                full_span: child
+                    .literal
+                    .as_ref()
+                    .map_or(child.span, |site| site.full_span),
+                contribution: Some(ty),
+                checked: Some(child),
+                required: true,
+            }],
+        );
+        value.span = span;
+        value
+    }
+
+    pub(in crate::check::checker) fn infer_checked_expr(
+        &mut self,
+        scope: ScopeId,
+        expr: &Expression<'_>,
+    ) -> Option<CheckedExpr> {
         let well_known = self.interner.well_known();
-        match expr {
-            Expression::NumericLiteral(lit) => {
-                let id = self
-                    .interner
-                    .intern_literal(LiteralValue::Number(lit.value));
-                Some((id, Span::from_oxc(lit.span)))
-            }
-            Expression::StringLiteral(lit) => {
-                let id = self
-                    .interner
-                    .intern_literal(LiteralValue::String(lit.value.to_string()));
-                Some((id, Span::from_oxc(lit.span)))
-            }
-            Expression::BooleanLiteral(lit) => {
-                let id = self
-                    .interner
-                    .intern_literal(LiteralValue::Boolean(lit.value));
-                Some((id, Span::from_oxc(lit.span)))
-            }
-            Expression::NullLiteral(lit) => Some((well_known.null, Span::from_oxc(lit.span))),
-            Expression::ObjectExpression(obj) => {
-                let id = self.infer_object_literal(scope, obj);
-                Some((id, Span::from_oxc(obj.span)))
-            }
-            Expression::StaticMemberExpression(member) => self.infer_member_access(scope, member),
-            Expression::CallExpression(call) => self.infer_call(scope, call, None),
-            // M11: `new ClassName(args)` — check the constructor signature and yield the
-            // instance type.
-            Expression::NewExpression(new_expr) => self.infer_new(scope, new_expr),
-            // M11: `this` resolves to the current class member's instance type, set while
-            // checking a class member body ([`check_class`]). Outside any class member
-            // `current_this` is `None` → the error type (out of scope; no narrowing, no
-            // crash, and the error type suppresses cascade).
-            Expression::ThisExpression(this_expr) => {
-                let span = Span::from_oxc(this_expr.span);
-                Some((self.current_this.unwrap_or(well_known.error), span))
-            }
-            Expression::FunctionExpression(func) => {
-                // Generic function expressions scope type params to the body, but
-                // are not registered for explicit call-site type arguments.
-                let id = self.infer_function(scope, func);
-                Some((id, Span::from_oxc(func.span)))
-            }
-            Expression::ArrowFunctionExpression(arrow) => {
-                let id = self.infer_arrow(scope, arrow);
-                Some((id, Span::from_oxc(arrow.span)))
-            }
-            Expression::ParenthesizedExpression(paren) => self.infer_expr(scope, &paren.expression),
-            // An assignment expression can appear anywhere an expression can — a ternary
-            // arm, an array element, a condition, or another assignment's RHS. Reuse the
-            // one assignment checker (so the nested target is checked); its value type is
-            // the RHS (TS assignment-expression semantics).
-            Expression::AssignmentExpression(assign) => self.check_assignment(scope, assign),
-            Expression::TSAsExpression(assertion) => self.infer_assertion(
-                scope,
-                &assertion.expression,
-                &assertion.type_annotation,
-                Span::from_oxc(assertion.span),
-                AssertionSyntax::As,
-            ),
-            Expression::TSTypeAssertion(assertion) => self.infer_assertion(
-                scope,
-                &assertion.expression,
-                &assertion.type_annotation,
-                Span::from_oxc(assertion.span),
-                AssertionSyntax::Angle,
-            ),
-            Expression::Identifier(ident) => {
-                let span = Span::from_oxc(ident.span);
-                let name = ident.name.as_str();
-                match self.resolve_value_binding(scope, name) {
-                    ValueResolution::TypeOnlyNamespace { .. } => {
-                        self.emit_diagnostic(Diagnostic::cannot_use_namespace_as_value(
-                            span,
-                            ident.name.as_str(),
-                        ));
-                        Some((well_known.error, span))
-                    }
-                    ValueResolution::Resolved {
-                        symbol: _,
-                        kind: ResolvedValueKind::StandaloneNamespace { namespace, storage },
-                    } => {
-                        if !self.demand_project_local_value(storage) {
-                            return Some((well_known.error, span));
+        let mut literal = None;
+        let result = (|| {
+            match expr {
+                Expression::NumericLiteral(lit) => {
+                    let id = self
+                        .interner
+                        .intern_ordinary_literal(LiteralValue::Number(lit.value));
+                    Some((id, Span::from_oxc(lit.span)))
+                }
+                Expression::StringLiteral(lit) => {
+                    let id = self
+                        .interner
+                        .intern_ordinary_literal(LiteralValue::String(lit.value.to_string()));
+                    Some((id, Span::from_oxc(lit.span)))
+                }
+                Expression::BooleanLiteral(lit) => {
+                    let id = self
+                        .interner
+                        .intern_ordinary_literal(LiteralValue::Boolean(lit.value));
+                    Some((id, Span::from_oxc(lit.span)))
+                }
+                Expression::NullLiteral(lit) => Some((well_known.null, Span::from_oxc(lit.span))),
+                Expression::ObjectExpression(obj) => {
+                    let value = self.infer_object_literal(scope, obj);
+                    let tuple = value.tuple();
+                    literal = value.literal;
+                    Some(tuple)
+                }
+                Expression::StaticMemberExpression(member) => {
+                    self.infer_member_access(scope, member)
+                }
+                Expression::CallExpression(call) => self.infer_call(scope, call, None),
+                // M11: `new ClassName(args)` — check the constructor signature and yield the
+                // instance type.
+                Expression::NewExpression(new_expr) => self.infer_new(scope, new_expr),
+                // M11: `this` resolves to the current class member's instance type, set while
+                // checking a class member body ([`check_class`]). Outside any class member
+                // `current_this` is `None` → the error type (out of scope; no narrowing, no
+                // crash, and the error type suppresses cascade).
+                Expression::ThisExpression(this_expr) => {
+                    let span = Span::from_oxc(this_expr.span);
+                    Some((self.current_this.unwrap_or(well_known.error), span))
+                }
+                Expression::FunctionExpression(func) => {
+                    // Generic function expressions scope type params to the body, but
+                    // are not registered for explicit call-site type arguments.
+                    let id = self.infer_function(scope, func);
+                    Some((id, Span::from_oxc(func.span)))
+                }
+                Expression::ArrowFunctionExpression(arrow) => {
+                    let id = self.infer_arrow(scope, arrow);
+                    Some((id, Span::from_oxc(arrow.span)))
+                }
+                Expression::ParenthesizedExpression(paren) => {
+                    let child = self.infer_checked_expr(scope, &paren.expression)?;
+                    let value = self.checked_parenthesis(scope, Span::from_oxc(paren.span), child);
+                    let tuple = value.tuple();
+                    literal = value.literal;
+                    Some(tuple)
+                }
+                // An assignment expression can appear anywhere an expression can — a ternary
+                // arm, an array element, a condition, or another assignment's RHS. Reuse the
+                // one assignment checker (so the nested target is checked); its value type is
+                // the RHS (TS assignment-expression semantics).
+                Expression::AssignmentExpression(assign) => self.check_assignment(scope, assign),
+                Expression::TSAsExpression(assertion) => self.infer_assertion(
+                    scope,
+                    &assertion.expression,
+                    &assertion.type_annotation,
+                    Span::from_oxc(assertion.span),
+                    AssertionSyntax::As,
+                ),
+                Expression::TSTypeAssertion(assertion) => self.infer_assertion(
+                    scope,
+                    &assertion.expression,
+                    &assertion.type_annotation,
+                    Span::from_oxc(assertion.span),
+                    AssertionSyntax::Angle,
+                ),
+                Expression::Identifier(ident) => {
+                    let span = Span::from_oxc(ident.span);
+                    let name = ident.name.as_str();
+                    match self.resolve_value_binding(scope, name) {
+                        ValueResolution::TypeOnlyNamespace { .. } => {
+                            self.emit_diagnostic(Diagnostic::cannot_use_namespace_as_value(
+                                span,
+                                ident.name.as_str(),
+                            ));
+                            Some((well_known.error, span))
                         }
-                        match self.standalone_namespace_terminal(namespace) {
+                        ValueResolution::Resolved {
+                            symbol: _,
+                            kind: ResolvedValueKind::StandaloneNamespace { namespace, storage },
+                        } => {
+                            if !self.demand_project_local_value(storage) {
+                                return Some((well_known.error, span));
+                            }
+                            match self.standalone_namespace_terminal(namespace) {
                             Some(super::namespace_values::StandaloneNamespaceTerminal::Ready {
                                 storage: terminal_storage,
                                 ty,
@@ -199,278 +358,303 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                                 Some((well_known.error, span))
                             }
                         }
-                    }
-                    ValueResolution::Resolved {
-                        symbol: symbol_id,
-                        kind: ResolvedValueKind::Ordinary,
-                    } => {
-                        if let Some(storage) = self.effective_value_storage_for_symbol(symbol_id) {
-                            self.account_untyped_parameter_binding_use(storage);
-                            if self.account_object_binding_identifier_demand(storage)
-                                && self.decl_type(storage).is_none()
+                        }
+                        ValueResolution::Resolved {
+                            symbol: symbol_id,
+                            kind: ResolvedValueKind::Ordinary,
+                        } => {
+                            if let Some(storage) =
+                                self.effective_value_storage_for_symbol(symbol_id)
                             {
-                                self.emit_diagnostic(Diagnostic::cannot_find_name(span, name));
+                                self.account_untyped_parameter_binding_use(storage);
+                                if self.account_object_binding_identifier_demand(storage)
+                                    && self.decl_type(storage).is_none()
+                                {
+                                    self.emit_diagnostic(Diagnostic::cannot_find_name(span, name));
+                                    return Some((well_known.error, span));
+                                }
+                            }
+                            if self
+                                .binder
+                                .symbols
+                                .get(symbol_id)
+                                .and_then(|symbol| symbol.value)
+                                .is_some_and(|storage| {
+                                    matches!(
+                                        self.var_value_type_states.get(&storage),
+                                        Some(VarValueTypeState::ObjectBindingPending)
+                                    )
+                                })
+                            {
+                                self.emit_diagnostic(Diagnostic::variable_used_before_assignment(
+                                    span, name,
+                                ));
                                 return Some((well_known.error, span));
                             }
-                        }
-                        if self
-                            .binder
-                            .symbols
-                            .get(symbol_id)
-                            .and_then(|symbol| symbol.value)
-                            .is_some_and(|storage| {
-                                matches!(
-                                    self.var_value_type_states.get(&storage),
-                                    Some(VarValueTypeState::ObjectBindingPending)
-                                )
-                            })
-                        {
-                            self.emit_diagnostic(Diagnostic::variable_used_before_assignment(
-                                span, name,
-                            ));
-                            return Some((well_known.error, span));
-                        }
-                        if name == "globalThis"
-                            && self.binder.direct_global_this_value_conflict(symbol_id)
-                        {
-                            self.demand_project_local_global_values();
-                            if let Some(global_object) = self.global_object_type {
-                                return Some((global_object, span));
-                            }
-                        }
-                        match self.demand_function_group(symbol_id) {
-                            FunctionGroupDemand::Ready(ty)
-                            | FunctionGroupDemand::PrivateSelf(ty) => Some((ty, span)),
-                            FunctionGroupDemand::Pending { report_use } => {
-                                if report_use {
-                                    self.record_incomplete(
-                                        "expr-infer/identifier/function-group-pending",
-                                        span,
-                                        "merged function value waits for body return inference",
-                                    );
+                            if name == "globalThis"
+                                && self.binder.direct_global_this_value_conflict(symbol_id)
+                            {
+                                self.demand_project_local_global_values();
+                                if let Some(global_object) = self.global_object_type {
+                                    return Some((global_object, span));
                                 }
-                                None
                             }
-                            FunctionGroupDemand::Unavailable => None,
-                            FunctionGroupDemand::NotGroup => Some((
-                                self.resolve_identifier_type(symbol_id, ident.span.start),
-                                span,
-                            )),
-                        }
-                    }
-                    ValueResolution::Missing => {
-                        let type_only_import = self
-                            .resolve_type_symbol(scope, name)
-                            .and_then(|symbol| self.binder.symbols.get(symbol))
-                            .is_some_and(|symbol| symbol.type_only_value_absence);
-                        if type_only_import {
-                            self.emit_diagnostic(Diagnostic::type_used_as_value(span, name));
-                            return Some((well_known.error, span));
-                        }
-                        // These built-ins are synthetic globals, after lexical lookup.
-                        if name == "undefined" {
-                            return Some((well_known.undefined, span));
-                        }
-                        if name == "globalThis" {
-                            self.demand_project_local_global_values();
-                            if let Some(global_object) = self.global_object_type {
-                                return Some((global_object, span));
+                            match self.demand_function_group(symbol_id) {
+                                FunctionGroupDemand::Ready(ty)
+                                | FunctionGroupDemand::PrivateSelf(ty) => Some((ty, span)),
+                                FunctionGroupDemand::Pending { report_use } => {
+                                    if report_use {
+                                        self.record_incomplete(
+                                            "expr-infer/identifier/function-group-pending",
+                                            span,
+                                            "merged function value waits for body return inference",
+                                        );
+                                    }
+                                    None
+                                }
+                                FunctionGroupDemand::Unavailable => None,
+                                FunctionGroupDemand::NotGroup => self
+                                    .resolve_identifier_type(symbol_id, span)
+                                    .map(|ty| (ty, span)),
                             }
                         }
-                        self.emit_diagnostic(Diagnostic::cannot_find_name(span, name));
-                        Some((well_known.error, span))
+                        ValueResolution::Missing => {
+                            let type_only_import = self
+                                .resolve_type_symbol(scope, name)
+                                .and_then(|symbol| self.binder.symbols.get(symbol))
+                                .is_some_and(|symbol| symbol.type_only_value_absence);
+                            if type_only_import {
+                                self.emit_diagnostic(Diagnostic::type_used_as_value(span, name));
+                                return Some((well_known.error, span));
+                            }
+                            // These built-ins are synthetic globals, after lexical lookup.
+                            if name == "undefined" {
+                                return Some((well_known.undefined, span));
+                            }
+                            if name == "globalThis" {
+                                self.demand_project_local_global_values();
+                                if let Some(global_object) = self.global_object_type {
+                                    return Some((global_object, span));
+                                }
+                            }
+                            self.emit_diagnostic(Diagnostic::cannot_find_name(span, name));
+                            Some((well_known.error, span))
+                        }
                     }
                 }
-            }
-            // M7: condition shapes (`typeof x`, `!x`). They are walked for their
-            // operands' side effects (resolving references / descending into nested
-            // constructs); their *value* type is only ever a condition, never an
-            // assignment source in the subset, so a coarse result type is sufficient.
-            Expression::UnaryExpression(unary) => Some(self.infer_unary(scope, unary)),
-            Expression::BinaryExpression(binary) => Some(self.infer_binary(scope, binary)),
-            // Backlog 101: `&&`/`||`/`??` and a ternary carry real value types, so this
-            // position is context-free but no longer coarse.
-            Expression::LogicalExpression(logical) => {
-                self.infer_logical(scope, logical, None, ContextualLiteralProvenance::Existing)
-            }
-            Expression::ConditionalExpression(cond) => {
-                self.infer_conditional(scope, cond, None, ContextualLiteralProvenance::Existing)
-            }
-            // A sequence `(a, b, …, z)` (backlog 53): walk every operand for its side
-            // effects (references, nested checks), and take the value/type of the
-            // **last** operand — the comma operator's result.
-            Expression::SequenceExpression(seq) => {
-                let mut result = None;
-                for operand in &seq.expressions {
-                    result = self.infer_expr(scope, operand);
+                // M7: condition shapes (`typeof x`, `!x`). They are walked for their
+                // operands' side effects (resolving references / descending into nested
+                // constructs); their *value* type is only ever a condition, never an
+                // assignment source in the subset, so a coarse result type is sufficient.
+                Expression::UnaryExpression(unary) => Some(self.infer_unary(scope, unary)),
+                Expression::BinaryExpression(binary) => Some(self.infer_binary(scope, binary)),
+                // Backlog 101: `&&`/`||`/`??` and a ternary carry real value types, so this
+                // position is context-free but no longer coarse.
+                Expression::LogicalExpression(logical) => {
+                    let value = self.infer_logical(
+                        scope,
+                        logical,
+                        &InitializerContextSlot::new(None),
+                        ContextualLiteralProvenance::Existing,
+                    )?;
+                    let tuple = value.tuple();
+                    literal = value.literal;
+                    Some(tuple)
                 }
-                result
-            }
-            // M17: an array literal `[e1, e2, …]` infers `(<elem>)[]` where the element
-            // type is the union of the (widened) element types (`[1,2,3]` → `number[]`,
-            // `[1,"x"]` → `(number | string)[]`); `[]` → `never[]`.
-            Expression::ArrayExpression(array) => {
-                let id = self.infer_array_literal(scope, array);
-                Some((id, Span::from_oxc(array.span)))
-            }
-            // M17: element access `a[i]`. If `a` is an array, the result is its element
-            // type (any index yields the element type — M17 does not strict-check the
-            // index). A non-array base is out of M17 scope (no diagnostic, error type).
-            Expression::ComputedMemberExpression(member) => {
-                self.infer_element_access(scope, member)
-            }
-            // A template literal `` `x${e}y` `` is not typed (owner 71). Record the
-            // skipped child slot before dropping so the interpolation's nested errors
-            // are accounted for: `interpolation` when it has holes, else `self`.
-            Expression::TemplateLiteral(tpl) => {
-                let (id, context) = if tpl.expressions.is_empty() {
-                    (
-                        "expr-infer/template-literal/self",
-                        "template literal not typed",
-                    )
-                } else {
-                    (
-                        "expr-infer/template-literal/interpolation",
-                        "template interpolation not visited",
-                    )
-                };
-                self.record_incomplete(id, Span::from_oxc(tpl.span), context);
-                None
-            }
-            Expression::AwaitExpression(await_expr) => {
-                self.infer_expr(scope, &await_expr.argument);
-                self.record_incomplete(
-                    "expr-infer/await-expression/self",
-                    Span::from_oxc(await_expr.span),
-                    "await result typing not modeled",
-                );
-                None
-            }
-            Expression::BigIntLiteral(lit) => {
-                self.record_incomplete(
-                    "expr-infer/bigint-literal/self",
-                    Span::from_oxc(lit.span),
-                    "bigint literal value has no type model",
-                );
-                None
-            }
-            // Class expressions need dedicated local binding and value/type duality semantics.
-            Expression::ClassExpression(class) => {
-                self.record_incomplete(
-                    "expr-infer/class-expression/self",
-                    Span::from_oxc(class.span),
-                    "class expression not modeled",
-                );
-                None
-            }
-            Expression::ChainExpression(chain) => {
-                self.infer_chain_element(scope, &chain.expression);
-                self.record_incomplete(
-                    "expr-infer/optional-chain/self",
-                    Span::from_oxc(chain.span),
-                    "optional chain not inferred",
-                );
-                None
-            }
-            Expression::ImportExpression(import) => {
-                self.infer_expr(scope, &import.source);
-                if let Some(options) = &import.options {
-                    self.infer_expr(scope, options);
+                Expression::ConditionalExpression(cond) => {
+                    let value = self.infer_conditional(
+                        scope,
+                        cond,
+                        &InitializerContextSlot::new(None),
+                        ContextualLiteralProvenance::Existing,
+                    )?;
+                    let tuple = value.tuple();
+                    literal = value.literal;
+                    Some(tuple)
                 }
-                self.record_incomplete(
-                    "expr-infer/import-expression/self",
-                    Span::from_oxc(import.span),
-                    "dynamic import not modeled",
-                );
-                None
-            }
-            Expression::TaggedTemplateExpression(tagged) => {
-                self.infer_expr(scope, &tagged.tag);
-                if let Some(type_arguments) = &tagged.type_arguments {
-                    self.lower_type_arguments(scope, type_arguments);
+                // A sequence `(a, b, …, z)` (backlog 53): walk every operand for its side
+                // effects (references, nested checks), and take the value/type of the
+                // **last** operand — the comma operator's result.
+                Expression::SequenceExpression(seq) => {
+                    let mut result = None;
+                    for operand in &seq.expressions {
+                        result = self.infer_expr(scope, operand);
+                    }
+                    result
                 }
-                for expression in &tagged.quasi.expressions {
-                    self.infer_expr(scope, expression);
+                // M17: an array literal `[e1, e2, …]` infers `(<elem>)[]` where the element
+                // type is the union of the (widened) element types (`[1,2,3]` → `number[]`,
+                // `[1,"x"]` → `(number | string)[]`); `[]` → `never[]`.
+                Expression::ArrayExpression(array) => {
+                    let value = self.infer_array_literal(scope, array);
+                    let tuple = value.tuple();
+                    literal = value.literal;
+                    Some(tuple)
                 }
-                self.record_incomplete(
-                    "expr-infer/tagged-template/self",
-                    Span::from_oxc(tagged.span),
-                    "tagged template not inferred",
-                );
-                None
-            }
-            Expression::UpdateExpression(update) => {
-                self.infer_update_target(scope, &update.argument);
-                Some((well_known.error, Span::from_oxc(update.span)))
-            }
-            Expression::YieldExpression(yield_expr) => {
-                if let Some(argument) = &yield_expr.argument {
-                    self.infer_expr(scope, argument);
+                // M17: element access `a[i]`. If `a` is an array, the result is its element
+                // type (any index yields the element type — M17 does not strict-check the
+                // index). A non-array base is out of M17 scope (no diagnostic, error type).
+                Expression::ComputedMemberExpression(member) => {
+                    self.infer_element_access(scope, member)
                 }
-                self.record_incomplete(
-                    "expr-infer/yield-expression/self",
-                    Span::from_oxc(yield_expr.span),
-                    "generator yield result not modeled",
-                );
-                None
-            }
-            Expression::PrivateInExpression(private_in) => {
-                self.infer_expr(scope, &private_in.right);
-                self.record_incomplete(
-                    "expr-infer/private-in-expression/self",
-                    Span::from_oxc(private_in.span),
-                    "private-in expression not modeled",
-                );
-                None
-            }
-            Expression::TSSatisfiesExpression(satisfies) => self.infer_satisfies(
-                scope,
-                &satisfies.expression,
-                &satisfies.type_annotation,
-                Span::from_oxc(satisfies.span),
-            ),
-            Expression::TSNonNullExpression(non_null) => {
-                self.infer_expr(scope, &non_null.expression);
-                self.record_incomplete(
-                    "expr-infer/non-null-assertion/self",
-                    Span::from_oxc(non_null.span),
-                    "non-null assertion not modeled",
-                );
-                None
-            }
-            Expression::TSInstantiationExpression(instantiation) => {
-                self.infer_expr(scope, &instantiation.expression);
-                self.lower_type_arguments(scope, &instantiation.type_arguments);
-                self.record_incomplete(
-                    "expr-infer/instantiation-expression/self",
-                    Span::from_oxc(instantiation.span),
-                    "instantiation expression not modeled",
-                );
-                None
-            }
-            Expression::PrivateFieldExpression(private_field) => {
-                self.record_incomplete(
-                    "expr-infer/private-field-access/self",
-                    Span::from_oxc(private_field.span),
-                    "private field access not inferred",
-                );
-                self.account_direct_private_field_object(scope, &private_field.object);
-                None
-            }
-            Expression::RegExpLiteral(lit) => {
-                let span = Span::from_oxc(lit.span);
-                if let Some(ty) = self.regexp_literal_type(span) {
-                    return Some((ty, span));
+                // A template literal `` `x${e}y` `` is not typed (owner 71). Record the
+                // skipped child slot before dropping so the interpolation's nested errors
+                // are accounted for: `interpolation` when it has holes, else `self`.
+                Expression::TemplateLiteral(tpl) => {
+                    let (id, context) = if tpl.expressions.is_empty() {
+                        (
+                            "expr-infer/template-literal/self",
+                            "template literal not typed",
+                        )
+                    } else {
+                        (
+                            "expr-infer/template-literal/interpolation",
+                            "template interpolation not visited",
+                        )
+                    };
+                    self.record_incomplete(id, Span::from_oxc(tpl.span), context);
+                    None
                 }
-                self.record_incomplete(
-                    "expr-infer/regexp-literal/self",
-                    span,
-                    "RegExp literal value has no type model",
-                );
-                None
+                Expression::AwaitExpression(await_expr) => {
+                    self.infer_expr(scope, &await_expr.argument);
+                    self.record_incomplete(
+                        "expr-infer/await-expression/self",
+                        Span::from_oxc(await_expr.span),
+                        "await result typing not modeled",
+                    );
+                    None
+                }
+                Expression::BigIntLiteral(lit) => {
+                    self.record_incomplete(
+                        "expr-infer/bigint-literal/self",
+                        Span::from_oxc(lit.span),
+                        "bigint literal value has no type model",
+                    );
+                    None
+                }
+                // Class expressions need dedicated local binding and value/type duality semantics.
+                Expression::ClassExpression(class) => {
+                    self.record_incomplete(
+                        "expr-infer/class-expression/self",
+                        Span::from_oxc(class.span),
+                        "class expression not modeled",
+                    );
+                    None
+                }
+                Expression::ChainExpression(chain) => {
+                    self.infer_chain_element(scope, &chain.expression);
+                    self.record_incomplete(
+                        "expr-infer/optional-chain/self",
+                        Span::from_oxc(chain.span),
+                        "optional chain not inferred",
+                    );
+                    None
+                }
+                Expression::ImportExpression(import) => {
+                    self.infer_expr(scope, &import.source);
+                    if let Some(options) = &import.options {
+                        self.infer_expr(scope, options);
+                    }
+                    self.record_incomplete(
+                        "expr-infer/import-expression/self",
+                        Span::from_oxc(import.span),
+                        "dynamic import not modeled",
+                    );
+                    None
+                }
+                Expression::TaggedTemplateExpression(tagged) => {
+                    self.infer_expr(scope, &tagged.tag);
+                    if let Some(type_arguments) = &tagged.type_arguments {
+                        self.lower_type_arguments(scope, type_arguments);
+                    }
+                    for expression in &tagged.quasi.expressions {
+                        self.infer_expr(scope, expression);
+                    }
+                    self.record_incomplete(
+                        "expr-infer/tagged-template/self",
+                        Span::from_oxc(tagged.span),
+                        "tagged template not inferred",
+                    );
+                    None
+                }
+                Expression::UpdateExpression(update) => {
+                    self.infer_update_target(scope, &update.argument);
+                    Some((well_known.error, Span::from_oxc(update.span)))
+                }
+                Expression::YieldExpression(yield_expr) => {
+                    if let Some(argument) = &yield_expr.argument {
+                        self.infer_expr(scope, argument);
+                    }
+                    self.record_incomplete(
+                        "expr-infer/yield-expression/self",
+                        Span::from_oxc(yield_expr.span),
+                        "generator yield result not modeled",
+                    );
+                    None
+                }
+                Expression::PrivateInExpression(private_in) => {
+                    self.infer_expr(scope, &private_in.right);
+                    self.record_incomplete(
+                        "expr-infer/private-in-expression/self",
+                        Span::from_oxc(private_in.span),
+                        "private-in expression not modeled",
+                    );
+                    None
+                }
+                Expression::TSSatisfiesExpression(satisfies) => self.infer_satisfies(
+                    scope,
+                    &satisfies.expression,
+                    &satisfies.type_annotation,
+                    Span::from_oxc(satisfies.span),
+                ),
+                Expression::TSNonNullExpression(non_null) => {
+                    self.infer_expr(scope, &non_null.expression);
+                    self.record_incomplete(
+                        "expr-infer/non-null-assertion/self",
+                        Span::from_oxc(non_null.span),
+                        "non-null assertion not modeled",
+                    );
+                    None
+                }
+                Expression::TSInstantiationExpression(instantiation) => {
+                    self.infer_expr(scope, &instantiation.expression);
+                    self.lower_type_arguments(scope, &instantiation.type_arguments);
+                    self.record_incomplete(
+                        "expr-infer/instantiation-expression/self",
+                        Span::from_oxc(instantiation.span),
+                        "instantiation expression not modeled",
+                    );
+                    None
+                }
+                Expression::PrivateFieldExpression(private_field) => {
+                    self.record_incomplete(
+                        "expr-infer/private-field-access/self",
+                        Span::from_oxc(private_field.span),
+                        "private field access not inferred",
+                    );
+                    self.account_direct_private_field_object(scope, &private_field.object);
+                    None
+                }
+                Expression::RegExpLiteral(lit) => {
+                    let span = Span::from_oxc(lit.span);
+                    if let Some(ty) = self.regexp_literal_type(span) {
+                        return Some((ty, span));
+                    }
+                    self.record_incomplete(
+                        "expr-infer/regexp-literal/self",
+                        span,
+                        "RegExp literal value has no type model",
+                    );
+                    None
+                }
+                _ => None,
             }
-            _ => None,
-        }
+        })()?;
+        Some(CheckedExpr {
+            ty: result.0,
+            span: result.1,
+            literal,
+        })
     }
 
     /// Walk a complete optional chain structurally; its enclosing record owns the semantics.
@@ -742,10 +926,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         span: Span,
         syntax: AssertionSyntax,
     ) -> Option<(TypeId, Span)> {
-        let source = self.infer_expr(scope, expression);
         if is_const_assertion_type(type_annotation) {
-            return source;
+            return self.infer_const_assertion(scope, expression);
         }
+        let source = self.infer_expr(scope, expression);
         let asserted = self
             .lower_annotation(scope, type_annotation)
             .unwrap_or_else(|| self.interner.well_known().error);
@@ -763,6 +947,167 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         Some((asserted, span))
     }
 
+    fn infer_const_assertion(
+        &mut self,
+        scope: ScopeId,
+        expression: &Expression<'_>,
+    ) -> Option<(TypeId, Span)> {
+        match const_assertion_operand_kind(expression) {
+            ConstAssertionOperandKind::Owned => {
+                self.infer_const_owned_expression(scope, expression)
+            }
+            ConstAssertionOperandKind::EnumCandidate => {
+                match self.enum_member_expression_endpoint(scope, expression) {
+                    Some(EnumMemberEndpoint::Found { .. } | EnumMemberEndpoint::Missing { .. }) => {
+                        self.infer_expr(scope, expression)
+                            .map(|(ty, span)| (self.interner.regularize_literal_type(ty), span))
+                    }
+                    None => self.infer_const_ready_key_enum_member(scope, expression),
+                }
+            }
+            ConstAssertionOperandKind::Invalid => {
+                self.record_invalid_const_operand(expression);
+                self.infer_expr(scope, expression)
+            }
+        }
+    }
+
+    /// `Enum[readyKey] as const`: the single ordinary walk keeps reference/TDZ checks;
+    /// the authenticated endpoint supplies the member, and a missing member stays an
+    /// indexed-access gap rather than a static `TK2339`.
+    fn infer_const_ready_key_enum_member(
+        &mut self,
+        scope: ScopeId,
+        expression: &Expression<'_>,
+    ) -> Option<(TypeId, Span)> {
+        match self.enum_ready_key_expression_endpoint(scope, expression) {
+            Some(EnumMemberEndpoint::Found { member, .. }) => {
+                let (walked, span) = self.infer_expr(scope, expression)?;
+                if walked == self.interner.well_known().error {
+                    return Some((walked, span));
+                }
+                Some((member, span))
+            }
+            Some(EnumMemberEndpoint::Missing { .. }) => {
+                let span = Span::from_oxc(expression.span());
+                self.infer_expr(scope, expression);
+                self.record_incomplete(
+                    "expr-infer/element-access/implicit-any-index",
+                    span,
+                    "ready enum key names no member of the enum",
+                );
+                None
+            }
+            None => {
+                self.record_invalid_const_operand(expression);
+                self.infer_expr(scope, expression)
+            }
+        }
+    }
+
+    fn infer_const_owned_expression(
+        &mut self,
+        scope: ScopeId,
+        expression: &Expression<'_>,
+    ) -> Option<(TypeId, Span)> {
+        match expression {
+            Expression::ParenthesizedExpression(parenthesized) => {
+                self.infer_const_owned_expression(scope, &parenthesized.expression)
+            }
+            Expression::ObjectExpression(object) => Some((
+                self.infer_const_object_literal(scope, object),
+                Span::from_oxc(object.span),
+            )),
+            Expression::ArrayExpression(array) => Some((
+                self.infer_const_array_literal(scope, array),
+                Span::from_oxc(array.span),
+            )),
+            _ => self
+                .infer_expr(scope, expression)
+                .map(|(ty, span)| (self.interner.regularize_literal_type(ty), span)),
+        }
+    }
+
+    fn infer_const_object_literal(
+        &mut self,
+        scope: ScopeId,
+        object: &ObjectExpression<'_>,
+    ) -> TypeId {
+        let mut excluded = false;
+        for member in &object.properties {
+            let ObjectPropertyKind::ObjectProperty(property) = member else {
+                excluded = true;
+                continue;
+            };
+            if property.computed {
+                excluded = true;
+            }
+            if property.method || property.kind != PropertyKind::Init {
+                excluded = true;
+                self.record_incomplete(
+                    "expr-infer/as-const/object-method",
+                    Span::from_oxc(property.span),
+                    "object method in a const context is not modeled",
+                );
+            }
+        }
+        if excluded {
+            return self.infer_object_literal(scope, object).ty;
+        }
+
+        let mut properties = Vec::with_capacity(object.properties.len());
+        for member in &object.properties {
+            let ObjectPropertyKind::ObjectProperty(property) = member else {
+                continue;
+            };
+            let Some(name) = property.key.static_name() else {
+                continue;
+            };
+            let Some((ty, _)) = self.infer_const_owned_expression(scope, &property.value) else {
+                continue;
+            };
+            let mut property = PropertyType::public(name.into_owned(), ty);
+            property.readonly = true;
+            properties.push(property);
+        }
+        self.interner.intern_object(ObjectType {
+            properties,
+            ..Default::default()
+        })
+    }
+
+    fn infer_const_array_literal(&mut self, scope: ScopeId, array: &ArrayExpression<'_>) -> TypeId {
+        if array.elements.iter().any(|element| {
+            matches!(
+                element,
+                ArrayExpressionElement::SpreadElement(_) | ArrayExpressionElement::Elision(_)
+            )
+        }) {
+            return self.infer_array_literal(scope, array).ty;
+        }
+
+        let mut elements = Vec::with_capacity(array.elements.len());
+        for element in &array.elements {
+            let Some(expression) = element.as_expression() else {
+                continue;
+            };
+            let Some((ty, _)) = self.infer_const_owned_expression(scope, expression) else {
+                continue;
+            };
+            elements.push(ty);
+        }
+        let tuple = self.interner.intern_tuple(elements);
+        self.interner.intern_readonly(tuple)
+    }
+
+    fn record_invalid_const_operand(&mut self, expression: &Expression<'_>) {
+        self.record_incomplete(
+            "expr-infer/as-const/invalid-operand",
+            Span::from_oxc(expression.span()),
+            "const assertion operand is outside the modeled literal syntax",
+        );
+    }
+
     /// Contextually check a `satisfies` source while retaining its final source type.
     fn infer_satisfies(
         &mut self,
@@ -771,19 +1116,23 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         type_annotation: &TSType<'_>,
         span: Span,
     ) -> Option<(TypeId, Span)> {
-        let (raw, raw_effects) =
-            self.capture_candidate_effects(|pass| pass.infer_expr(scope, expression));
+        let ((raw, raw_effects), raw_failed) = self.with_initializer_validation_attempt(|pass| {
+            pass.capture_candidate_effects(|pass| pass.infer_expr(scope, expression))
+        });
         let target = self.lower_annotation(scope, type_annotation);
         let Some(raw) = raw else {
+            self.initializer_validation_failed = true;
             self.merge_candidate_effects(raw_effects);
             return None;
         };
         let Some(target) = target else {
+            self.initializer_validation_failed = true;
             self.merge_candidate_effects(raw_effects);
             return Some((raw.0, span));
         };
         let error = self.interner.well_known().error;
         if raw.0 == error || target == error {
+            self.initializer_validation_failed = true;
             self.merge_candidate_effects(raw_effects);
             return Some((raw.0, span));
         }
@@ -804,7 +1153,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         });
         let mut children = self.satisfies_check_sinks.pop().unwrap_or_default();
         let ((source, source_span), rewalk) = contextual;
-        if rewalk == ContextualRewalk::Rewalked {
+        if rewalk.was_rewalked() {
             raw_effects.discard();
             self.merge_candidate_effects(contextual_effects);
         } else {
@@ -813,7 +1162,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
 
         let operator_span = satisfies_operator_gap_span(expression, type_annotation);
-        let contextual_ownership = rewalk == ContextualRewalk::Rewalked
+        self.initializer_validation_failed |=
+            !rewalk.source_ready() || (!rewalk.was_rewalked() && raw_failed);
+        let contextual_ownership = rewalk.was_rewalked()
             && !matches!(
                 peel_parenthesized_expression(expression),
                 Expression::ArrowFunctionExpression(arrow)
@@ -822,6 +1173,15 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         if !contextual_ownership {
             children.clear();
         }
+        let source = if rewalk.source_ready() {
+            self.initializer_validation_source(
+                span,
+                InitializerValidationBoundary::SatisfiesOperand,
+                source,
+            )
+        } else {
+            source
+        };
         let whole = AssignObligation {
             src: source,
             tgt: target,
@@ -853,6 +1213,35 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
     pub(in crate::check::checker) fn has_satisfies_check_sink(&self) -> bool {
         !self.satisfies_check_sinks.is_empty()
+    }
+
+    pub(in crate::check::checker) fn initializer_validation_source(
+        &self,
+        occurrence: Span,
+        boundary: InitializerValidationBoundary,
+        lexical: TypeId,
+    ) -> TypeId {
+        if self.initializer_validation_failed || lexical == self.interner.well_known().error {
+            return lexical;
+        }
+        self.active_initializer_validation
+            .as_ref()
+            .and_then(|member| self.class_initializer_validation.get(member))
+            .filter(|input| {
+                input.source == self.current_source && Some(input.class) == self.current_class
+            })
+            .and_then(|input| input.rows.get(occurrence, boundary))
+            .unwrap_or(lexical)
+    }
+
+    fn with_initializer_validation_attempt<R>(
+        &mut self,
+        walk: impl FnOnce(&mut Self) -> R,
+    ) -> (R, bool) {
+        let parent_failed = std::mem::replace(&mut self.initializer_validation_failed, false);
+        let result = walk(self);
+        let failed = std::mem::replace(&mut self.initializer_validation_failed, parent_failed);
+        (result, failed)
     }
 
     pub(in crate::check::checker) fn satisfies_check_mark(&self) -> usize {
@@ -893,6 +1282,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 Vec::new()
             }
         };
+        let source = self.initializer_validation_source(
+            Span::from_oxc(expression.span()),
+            InitializerValidationBoundary::CompletedContainer,
+            source,
+        );
         self.finish_satisfies_relation_container(source, target, span, excess);
     }
 
@@ -946,17 +1340,18 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     pub(in crate::check::checker) fn resolve_identifier_type(
         &mut self,
         symbol_id: SymbolId,
-        ref_start: u32,
-    ) -> TypeId {
+        span: Span,
+    ) -> Option<TypeId> {
         if let Some(storage) = self.effective_value_storage_for_symbol(symbol_id) {
             let _ = self.demand_project_local_value(storage);
         }
         let flow = self
             .reference_flow
-            .get(&(self.current_module, ref_start))
+            .get(&(self.current_module, span.start))
             .copied()
             .unwrap_or(FlowNodeId::START);
-        self.resolve_narrowed_type(flow, symbol_id)
+        let outcome = self.resolve_narrowed_type(flow, symbol_id);
+        self.own_type_demand(outcome, span)
     }
 
     /// Infer a unary expression for M7 condition support: walk the operand, then
@@ -971,7 +1366,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             if let Expression::NumericLiteral(lit) = &unary.argument {
                 let negated = -lit.value;
                 let value = if negated == 0.0 { 0.0 } else { negated };
-                let id = self.interner.intern_literal(LiteralValue::Number(value));
+                let id = self
+                    .interner
+                    .intern_ordinary_literal(LiteralValue::Number(value));
                 return (id, span);
             }
         }
@@ -1072,48 +1469,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         left: TypeId,
         right: TypeId,
     ) -> TypeId {
-        let wk = self.interner.well_known();
-        match (
-            addition_operand_kind(self.interner.store(), left),
-            addition_operand_kind(self.interner.store(), right),
-        ) {
-            (AdditionOperandKind::Error, _) | (_, AdditionOperandKind::Error) => wk.error,
-            (AdditionOperandKind::Any, _) | (_, AdditionOperandKind::Any) => wk.any,
-            (
-                AdditionOperandKind::String,
-                AdditionOperandKind::String | AdditionOperandKind::Number,
-            )
-            | (AdditionOperandKind::Number, AdditionOperandKind::String) => wk.string,
-            (AdditionOperandKind::Number, AdditionOperandKind::Number) => wk.number,
-            _ => self.addition_general_result(binary, left, right),
-        }
-    }
-
-    /// The `+` rules the primitive fast path does not cover. tsc tests number-like
-    /// first (so `never + 1` is `number`, not `string`), then string-like on either
-    /// side. An operand the model cannot decide keeps the previous conservative error
-    /// result and reports nothing.
-    fn addition_general_result(
-        &mut self,
-        binary: &BinaryExpression<'_>,
-        left: TypeId,
-        right: TypeId,
-    ) -> TypeId {
-        let wk = self.interner.well_known();
-        let left_numeric = self.numeric_operand_verdict(left);
-        let right_numeric = self.numeric_operand_verdict(right);
-        if left_numeric == OperandVerdict::Satisfied && right_numeric == OperandVerdict::Satisfied {
-            return wk.number;
-        }
-        let left_string = self.stringlike_operand_verdict(left);
-        let right_string = self.stringlike_operand_verdict(right);
-        if left_string == OperandVerdict::Satisfied || right_string == OperandVerdict::Satisfied {
-            return wk.string;
-        }
-        let undecided = [left_numeric, right_numeric, left_string, right_string]
-            .contains(&OperandVerdict::Deferred);
-        if undecided {
-            return wk.error;
+        if let Some(ty) = self.addition_type(left, right) {
+            return ty;
         }
         let store = self.interner.store();
         let left_display = render_type(store, left, /* widen */ false);
@@ -1125,7 +1482,55 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             &left_display,
             &right_display,
         ));
-        wk.any
+        self.interner.well_known().any
+    }
+
+    pub(in crate::check::checker) fn addition_type(
+        &mut self,
+        left: TypeId,
+        right: TypeId,
+    ) -> Option<TypeId> {
+        let wk = self.interner.well_known();
+        Some(
+            match (
+                addition_operand_kind(self.interner.store(), left),
+                addition_operand_kind(self.interner.store(), right),
+            ) {
+                (AdditionOperandKind::Error, _) | (_, AdditionOperandKind::Error) => wk.error,
+                (AdditionOperandKind::Any, _) | (_, AdditionOperandKind::Any) => wk.any,
+                (
+                    AdditionOperandKind::String,
+                    AdditionOperandKind::String | AdditionOperandKind::Number,
+                )
+                | (AdditionOperandKind::Number, AdditionOperandKind::String) => wk.string,
+                (AdditionOperandKind::Number, AdditionOperandKind::Number) => wk.number,
+                _ => return self.addition_general_type(left, right),
+            },
+        )
+    }
+
+    /// The `+` rules the primitive fast path does not cover. tsc tests number-like
+    /// first (so `never + 1` is `number`, not `string`), then string-like on either
+    /// side. An operand the model cannot decide keeps the previous conservative error
+    /// result and reports nothing.
+    fn addition_general_type(&mut self, left: TypeId, right: TypeId) -> Option<TypeId> {
+        let wk = self.interner.well_known();
+        let left_numeric = self.numeric_operand_verdict(left);
+        let right_numeric = self.numeric_operand_verdict(right);
+        if left_numeric == OperandVerdict::Satisfied && right_numeric == OperandVerdict::Satisfied {
+            return Some(wk.number);
+        }
+        let left_string = self.stringlike_operand_verdict(left);
+        let right_string = self.stringlike_operand_verdict(right);
+        if left_string == OperandVerdict::Satisfied || right_string == OperandVerdict::Satisfied {
+            return Some(wk.string);
+        }
+        let undecided = [left_numeric, right_numeric, left_string, right_string]
+            .contains(&OperandVerdict::Deferred);
+        if undecided {
+            return Some(wk.error);
+        }
+        None
     }
 
     /// Whether an operand satisfies the arithmetic operand rule. `null`/`undefined`
@@ -1173,7 +1578,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
     /// Drop `null`/`undefined` from a union operand (`null`/`undefined` alone become
     /// `never`, which every primitive accepts — exactly tsc's `getNonNullableType`).
-    fn strip_nullish(&mut self, ty: TypeId) -> TypeId {
+    pub(in crate::check::checker) fn strip_nullish(&mut self, ty: TypeId) -> TypeId {
         let wk = self.interner.well_known();
         if ty == wk.null || ty == wk.undefined {
             return wk.never;
@@ -1206,18 +1611,23 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         scope: ScopeId,
         cond: &ConditionalExpression<'_>,
-        context: Option<TypeId>,
+        context: &InitializerContextSlot,
         provenance: ContextualLiteralProvenance,
-    ) -> Option<(TypeId, Span)> {
+    ) -> Option<CheckedExpr> {
         self.infer_expr(scope, &cond.test);
-        let consequent =
-            self.infer_initializer_with_provenance(scope, &cond.consequent, context, provenance);
-        let alternate =
-            self.infer_initializer_with_provenance(scope, &cond.alternate, context, provenance);
+        let consequent = self
+            .infer_initializer_with_context_slot(scope, &cond.consequent, context, provenance)
+            .map(|value| value.checked);
+        let alternate = self
+            .infer_initializer_with_context_slot(scope, &cond.alternate, context, provenance)
+            .map(|value| value.checked);
         // An arm outside the expression subset contributes no member; a smaller union
         // only ever under-reports, never invents a mismatch.
-        let ty = match (consequent, alternate) {
-            (Some((left, _)), Some((right, _))) => {
+        let ty = match (
+            consequent.as_ref().map(|v| v.ty),
+            alternate.as_ref().map(|v| v.ty),
+        ) {
+            (Some(left), Some(right)) => {
                 if self.conditional_undefined_arity_subtype(left, right) {
                     right
                 } else if self.conditional_undefined_arity_subtype(right, left) {
@@ -1226,10 +1636,29 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     self.interner.union(vec![left, right])
                 }
             }
-            (Some((ty, _)), None) | (None, Some((ty, _))) => ty,
+            (Some(ty), None) | (None, Some(ty)) => ty,
             (None, None) => self.interner.well_known().never,
         };
-        Some((ty, Span::from_oxc(cond.span)))
+        let children = [
+            (LiteralEdge::Consequent, &cond.consequent, consequent),
+            (LiteralEdge::Alternate, &cond.alternate, alternate),
+        ]
+        .into_iter()
+        .map(|(edge, expr, checked)| LiteralChild {
+            edge,
+            full_span: Span::from_oxc(expr.span()),
+            contribution: checked.as_ref().map(|v| v.ty),
+            checked,
+            required: true,
+        })
+        .collect();
+        Some(self.literal_result(
+            scope,
+            ty,
+            Span::from_oxc(cond.span),
+            LiteralKind::Conditional,
+            children,
+        ))
     }
 
     /// The bounded part of tsc's subtype-reducing conditional union needed for
@@ -1249,37 +1678,36 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         scope: ScopeId,
         logical: &LogicalExpression<'_>,
-        context: Option<TypeId>,
+        context: &InitializerContextSlot,
         provenance: ContextualLiteralProvenance,
-    ) -> Option<(TypeId, Span)> {
+    ) -> Option<CheckedExpr> {
         let span = Span::from_oxc(logical.span);
         // tsc's `getContextualTypeForBinaryOperand`: `||`/`??` shape both operands,
         // `&&` only its right one (its left is a condition).
+        let absent = InitializerContextSlot::new(None);
         let left_context = match logical.operator {
-            LogicalOperator::And => None,
+            LogicalOperator::And => &absent,
             LogicalOperator::Or | LogicalOperator::Coalesce => context,
         };
         let left = self
-            .infer_initializer_with_provenance(scope, &logical.left, left_context, provenance)
-            .map(|(ty, _)| ty);
+            .infer_initializer_with_context_slot(scope, &logical.left, left_context, provenance)
+            .map(|value| value.checked);
         let right = self
-            .infer_initializer_with_provenance(scope, &logical.right, context, provenance)
-            .map(|(ty, _)| ty);
-        let Some(left) = left else {
-            let members = right.into_iter().collect();
-            return Some((self.interner.union(members), span));
-        };
+            .infer_initializer_with_context_slot(scope, &logical.right, context, provenance)
+            .map(|value| value.checked);
+        let left_ty = left.as_ref().map(|value| value.ty);
         let never = self.interner.well_known().never;
-        let (kept, taken) = match logical.operator {
-            LogicalOperator::And => (
+        let (kept, taken) = match (logical.operator, left_ty) {
+            (_, None) => (never, self.interner.well_known().unknown),
+            (LogicalOperator::And, Some(left)) => (
                 narrow_by_truthiness(self.interner, left, false),
                 narrow_by_truthiness(self.interner, left, true),
             ),
-            LogicalOperator::Or => (
+            (LogicalOperator::Or, Some(left)) => (
                 narrow_by_truthiness(self.interner, left, true),
                 narrow_by_truthiness(self.interner, left, false),
             ),
-            LogicalOperator::Coalesce => {
+            (LogicalOperator::Coalesce, Some(left)) => {
                 let non_nullish = self.strip_nullish(left);
                 // `??` takes its right operand exactly when the left had a nullish member.
                 let taken = if non_nullish == left { never } else { left };
@@ -1287,18 +1715,46 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
         };
         // The right operand is unreachable, so the value is the whole left operand.
-        if taken == never {
-            return Some((left, span));
-        }
-        let members = std::iter::once(kept).chain(right).collect();
-        Some((self.interner.union(members), span))
+        let ty = if taken == never {
+            left_ty.unwrap_or(never)
+        } else {
+            let members = std::iter::once(kept)
+                .chain(right.as_ref().map(|value| value.ty))
+                .collect();
+            self.interner.union(members)
+        };
+        let left_required =
+            logical.operator != LogicalOperator::And && (left_ty.is_none() || kept != never);
+        let right_required = taken != never;
+        let children = vec![
+            LiteralChild {
+                edge: LiteralEdge::LogicalLeft(if logical.operator == LogicalOperator::Coalesce {
+                    LiteralValueFilter::NonNullish
+                } else {
+                    LiteralValueFilter::Truthy
+                }),
+                full_span: Span::from_oxc(logical.left.span()),
+                contribution: (left_required && left_ty.is_some()).then_some(kept),
+                checked: left,
+                required: left_required,
+            },
+            LiteralChild {
+                edge: LiteralEdge::LogicalRight,
+                full_span: Span::from_oxc(logical.right.span()),
+                contribution: right.as_ref().filter(|_| right_required).map(|v| v.ty),
+                checked: right,
+                required: right_required,
+            },
+        ];
+        Some(self.literal_result(scope, ty, span, LiteralKind::Logical, children))
     }
 
     /// Infer the type of an object literal in `scope`. Unchanged from M2: member
     /// types are widened (`{ a: 1 }` → `{ a: number }`).
-    fn infer_object_literal(&mut self, scope: ScopeId, obj: &ObjectExpression<'_>) -> TypeId {
+    fn infer_object_literal(&mut self, scope: ScopeId, obj: &ObjectExpression<'_>) -> CheckedExpr {
         let mut properties: Vec<PropertyType> = Vec::with_capacity(obj.properties.len());
-        for member in &obj.properties {
+        let mut children = Vec::with_capacity(obj.properties.len());
+        for (ordinal, member) in obj.properties.iter().enumerate() {
             let ObjectPropertyKind::ObjectProperty(prop) = member else {
                 self.record_object_spread_skip(member);
                 continue;
@@ -1307,39 +1763,228 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 self.record_object_computed_key_skip(&prop.key);
                 continue;
             };
-            let Some((value_ty, _)) = self.infer_expr(scope, &prop.value) else {
+            let checked = self.infer_checked_expr(scope, &prop.value);
+            let Some(value_ty) = checked.as_ref().map(|v| v.ty) else {
+                children.push(LiteralChild {
+                    edge: LiteralEdge::Property {
+                        ordinal,
+                        name: Some(name.into_owned()),
+                        key_span: Span::from_oxc(prop.key.span()),
+                    },
+                    full_span: Span::from_oxc(prop.value.span()),
+                    checked: None,
+                    contribution: None,
+                    required: true,
+                });
                 continue;
             };
-            let widened = widen(self.interner, value_ty);
+            let widened = super::literal_publication::finalize_literal_type(
+                self.interner,
+                value_ty,
+                None,
+                super::literal_publication::LiteralPublicationRole::MutableMember,
+            );
+            children.push(LiteralChild {
+                edge: LiteralEdge::Property {
+                    ordinal,
+                    name: Some(name.to_string()),
+                    key_span: Span::from_oxc(prop.key.span()),
+                },
+                full_span: Span::from_oxc(prop.value.span()),
+                checked,
+                contribution: Some(widened),
+                required: true,
+            });
             properties.push(PropertyType::public(name.into_owned(), widened));
         }
         // M19: an object literal never declares an index signature (it is a set of
         // named members); the index slots stay `None`.
-        self.interner.intern_object(ObjectType {
+        let ty = self.interner.intern_object(ObjectType {
             properties,
             ..Default::default()
-        })
+        });
+        self.literal_result(
+            scope,
+            ty,
+            Span::from_oxc(obj.span),
+            LiteralKind::Object,
+            children,
+        )
     }
 
     /// Infer an M17 array literal as an array of the union of widened element types.
     /// Empty/all-skipped literals become `never[]`; spread/elision elements are out
     /// of subset and contribute no element type.
-    fn infer_array_literal(&mut self, scope: ScopeId, array: &ArrayExpression<'_>) -> TypeId {
+    fn infer_array_literal(&mut self, scope: ScopeId, array: &ArrayExpression<'_>) -> CheckedExpr {
         let mut element_types: Vec<TypeId> = Vec::with_capacity(array.elements.len());
-        for element in &array.elements {
+        let mut children = Vec::with_capacity(array.elements.len());
+        for (index, element) in array.elements.iter().enumerate() {
             // Spread (`...xs`) / elision (a hole) are out of subset — the helper records
             // the skipped child slot. Only a plain expression contributes an element type.
             let Some(expr) = self.array_element_expr(element) else {
                 continue;
             };
-            let Some((elem_ty, _)) = self.infer_expr(scope, expr) else {
+            let checked = self.infer_checked_expr(scope, expr);
+            let Some(elem_ty) = checked.as_ref().map(|v| v.ty) else {
+                children.push(LiteralChild {
+                    edge: LiteralEdge::Element(index),
+                    full_span: Span::from_oxc(expr.span()),
+                    checked: None,
+                    contribution: None,
+                    required: true,
+                });
                 continue;
             };
-            element_types.push(widen(self.interner, elem_ty));
+            let contribution = super::literal_publication::finalize_literal_type(
+                self.interner,
+                elem_ty,
+                None,
+                super::literal_publication::LiteralPublicationRole::MutableMember,
+            );
+            children.push(LiteralChild {
+                edge: LiteralEdge::Element(index),
+                full_span: Span::from_oxc(expr.span()),
+                checked,
+                contribution: Some(contribution),
+                required: true,
+            });
+            element_types.push(contribution);
         }
         // Empty (or all-skipped) → empty union → `never`, giving `never[]`.
         let element = self.interner.union(element_types);
-        self.interner.intern_array(element)
+        let ty = self.interner.intern_array(element);
+        self.literal_result(
+            scope,
+            ty,
+            Span::from_oxc(array.span),
+            LiteralKind::Array,
+            children,
+        )
+    }
+
+    fn prepare_initializer_context(
+        &mut self,
+        original_target: TypeId,
+    ) -> Result<PreparedInitializerContext, ContextPreparationFailure> {
+        self.semantic_queries.savepoint();
+        let prepared = (|| {
+            let (publication_context, shaping_context) =
+                self.prepare_context_views(original_target, &mut FxHashSet::default())?;
+            let shaping_context = contextual_literal_target(self.interner.store(), shaping_context);
+            let shaping_context =
+                context_demand(self.normalize_contextual_intersection(shaping_context))?;
+            let contextual_this = self.contextual_this_type(shaping_context);
+            let shaping_context =
+                context_demand(self.intersection_apparent_object(shaping_context))?
+                    .unwrap_or(shaping_context);
+            Ok(PreparedInitializerContext {
+                original_target,
+                publication_context,
+                shaping_context,
+                contextual_this,
+            })
+        })();
+        if prepared.is_ok() {
+            self.semantic_queries.commit();
+        } else {
+            self.semantic_queries.rollback();
+        }
+        prepared
+    }
+
+    fn prepare_context_views(
+        &mut self,
+        context: TypeId,
+        active: &mut FxHashSet<TypeId>,
+    ) -> Result<(TypeId, TypeId), ContextPreparationFailure> {
+        if !active.insert(context) {
+            return Err(ContextPreparationFailure::Unavailable(
+                ContextUnavailable::ConstraintCycle,
+            ));
+        }
+        let result = (|| {
+            if context == self.interner.well_known().error {
+                return Err(ContextPreparationFailure::Unavailable(
+                    ContextUnavailable::InvalidTarget,
+                ));
+            }
+            if let Some(parameter) = self.interner.store().type_param(context) {
+                let bound = self.interner.store().type_param_constraint(parameter.id);
+                let shape = match bound {
+                    Some(bound) => self.prepare_context_views(bound, active)?.1,
+                    None => context,
+                };
+                return Ok((context, shape));
+            }
+            if let Some(members) = self.interner.store().union_members(context) {
+                let members = members.to_vec();
+                let mut publication = Vec::with_capacity(members.len());
+                let mut shaping = Vec::with_capacity(members.len());
+                for member in members {
+                    let (published, shaped) = self.prepare_context_views(member, active)?;
+                    publication.push(published);
+                    shaping.push(shaped);
+                }
+                return Ok((
+                    self.interner.union(publication),
+                    self.interner.union(shaping),
+                ));
+            }
+            let evaluated = context_demand(self.evaluate_type(context))?;
+            if evaluated != context {
+                self.prepare_context_views(evaluated, active)
+            } else {
+                Ok((context, context))
+            }
+        })();
+        active.remove(&context);
+        result
+    }
+
+    fn consume_initializer_context(
+        &mut self,
+        slot: &InitializerContextSlot,
+        span: Span,
+    ) -> Result<Option<PreparedInitializerContext>, ()> {
+        match slot.state.get() {
+            InitializerContextState::Prepared(context) => return Ok(Some(context)),
+            InitializerContextState::Absent => return Ok(None),
+            InitializerContextState::Failed { .. } => return Err(()),
+            InitializerContextState::Unprepared => {}
+        }
+        let Some(target) = slot.original_target else {
+            slot.state.set(InitializerContextState::Absent);
+            return Ok(None);
+        };
+        match self.prepare_initializer_context(target) {
+            Ok(context) => {
+                slot.state.set(InitializerContextState::Prepared(context));
+                Ok(Some(context))
+            }
+            Err(failure) => {
+                self.initializer_validation_failed = true;
+                slot.state.set(InitializerContextState::Failed {
+                    invalid_target: matches!(
+                        failure,
+                        ContextPreparationFailure::Unavailable(ContextUnavailable::InvalidTarget)
+                    ),
+                });
+                match failure {
+                    ContextPreparationFailure::Exhausted(exhaustion) => {
+                        self.own_type_demand(DemandOutcome::Exhausted(exhaustion), span);
+                    }
+                    ContextPreparationFailure::Unavailable(ContextUnavailable::ConstraintCycle) => {
+                        self.record_incomplete(
+                            "contextual-initializer/unavailable-context",
+                            span,
+                            "contextual initializer preparation is unavailable",
+                        );
+                    }
+                    ContextPreparationFailure::Unavailable(ContextUnavailable::InvalidTarget) => {}
+                }
+                Err(())
+            }
+        }
     }
 
     /// Infer an initializer/source expression with a known target type. Structured
@@ -1366,66 +2011,159 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         context: Option<TypeId>,
         provenance: ContextualLiteralProvenance,
     ) -> Option<(TypeId, Span)> {
-        // A ternary / logical is not itself a fresh literal — the value lives in its
-        // operands, so the raw target is pushed down to each of them before any
-        // literal-shaping transform runs on it (backlog `101`).
-        match init {
+        self.infer_initializer_value(scope, init, context, provenance)
+            .map(InitializerValue::tuple)
+    }
+
+    pub(in crate::check::checker) fn infer_initializer_value(
+        &mut self,
+        scope: ScopeId,
+        init: &Expression<'_>,
+        context: Option<TypeId>,
+        provenance: ContextualLiteralProvenance,
+    ) -> Option<InitializerValue> {
+        let result = self.infer_initializer_with_context_slot(
+            scope,
+            init,
+            &InitializerContextSlot::new(context),
+            provenance,
+        );
+        if result
+            .as_ref()
+            .is_none_or(|value| value.source == self.interner.well_known().error)
+        {
+            self.initializer_validation_failed = true;
+        }
+        result
+    }
+
+    pub(in crate::check::checker) fn infer_initializer_with_context_slot(
+        &mut self,
+        scope: ScopeId,
+        init: &Expression<'_>,
+        context: &InitializerContextSlot,
+        provenance: ContextualLiteralProvenance,
+    ) -> Option<InitializerValue> {
+        let value = match init {
             Expression::ConditionalExpression(cond) => {
-                return self.infer_conditional(scope, cond, context, provenance);
+                self.infer_conditional(scope, cond, context, provenance)
             }
             Expression::LogicalExpression(logical) => {
-                return self.infer_logical(scope, logical, context, provenance);
+                self.infer_logical(scope, logical, context, provenance)
             }
-            Expression::CallExpression(call) => {
-                return self.infer_call(scope, call, context);
+            Expression::CallExpression(call) => self
+                .infer_call(scope, call, context.original_target)
+                .map(CheckedExpr::opaque),
+            Expression::ParenthesizedExpression(paren) => {
+                let mut value = self.infer_initializer_with_context_slot(
+                    scope,
+                    &paren.expression,
+                    context,
+                    provenance,
+                )?;
+                value.checked = self
+                    .checked_parenthesis(scope, Span::from_oxc(paren.span), value.checked)
+                    .with_context(value.context);
+                return Some(value);
             }
-            _ => {}
+            _ => {
+                let prepared =
+                    match self.consume_initializer_context(context, Span::from_oxc(init.span())) {
+                        Ok(prepared) => prepared,
+                        Err(()) => {
+                            if context.state.get()
+                                == (InitializerContextState::Failed {
+                                    invalid_target: true,
+                                })
+                            {
+                                // Invalid annotations still own a source walk, but cannot publish its result.
+                                self.infer_expr(scope, init);
+                            }
+                            return None;
+                        }
+                    };
+                self.infer_prepared_initializer(scope, init, prepared, provenance)
+            }
+        }?;
+        let prepared = self.consume_initializer_context(context, value.span).ok()?;
+        let source = self.shape_native_inference_literal(value.ty, prepared);
+        let mut checked = value.with_context(prepared);
+        checked.ty = source;
+        Some(InitializerValue {
+            source,
+            span: checked.span,
+            context: prepared,
+            checked,
+        })
+    }
+
+    fn shape_native_inference_literal(
+        &mut self,
+        source: TypeId,
+        context: Option<PreparedInitializerContext>,
+    ) -> TypeId {
+        if self.inference_environment.is_none()
+            || self
+                .interner
+                .store()
+                .widening_literal_operand(source)
+                .is_none()
+        {
+            return source;
         }
-        let (context, contextual_this) = match context {
-            Some(context) => match self.with_semantic_query_transaction(|pass| {
-                let context = match pass.demand_composite_apparent_type(context) {
-                    DemandOutcome::Ready(context) => {
-                        contextual_literal_target(pass.interner.store(), context)
-                    }
-                    DemandOutcome::Exhausted(exhaustion) => {
-                        return DemandOutcome::Exhausted(exhaustion);
-                    }
-                };
-                let context = match pass.normalize_contextual_intersection(context) {
-                    DemandOutcome::Ready(context) => context,
-                    DemandOutcome::Exhausted(exhaustion) => {
-                        return DemandOutcome::Exhausted(exhaustion);
-                    }
-                };
-                // `ThisType` markers live on the original intersection. Read them
-                // before merging the visible contextual object surface.
-                let contextual_this = pass.contextual_this_type(context);
-                let context = match pass.intersection_apparent_object(context) {
-                    DemandOutcome::Ready(Some(apparent)) => apparent,
-                    DemandOutcome::Ready(None) => context,
-                    DemandOutcome::Exhausted(exhaustion) => {
-                        return DemandOutcome::Exhausted(exhaustion);
-                    }
-                };
-                DemandOutcome::Ready((context, contextual_this))
-            }) {
-                DemandOutcome::Ready((context, contextual_this)) => {
-                    (Some(context), contextual_this)
-                }
-                DemandOutcome::Exhausted(exhaustion) => {
-                    self.own_type_demand(
-                        DemandOutcome::Exhausted(exhaustion),
-                        Span::from_oxc(init.span()),
-                    );
-                    return None;
-                }
-            },
-            None => (None, None),
+        let Some(context) = context else {
+            return source;
+        };
+        let store = self.interner.store();
+        let primitive_bound = store.type_param(context.original_target).is_some()
+            && matches!(
+                store.intrinsic_kind(context.shaping_context),
+                Some(
+                    IntrinsicKind::String
+                        | IntrinsicKind::Number
+                        | IntrinsicKind::Boolean
+                        | IntrinsicKind::BigInt
+                )
+            );
+        let regular = store.regular_literal_type(source);
+        let literal_target =
+            self.inferred_return_type(source, Some(context.shaping_context)) == regular;
+        if (primitive_bound || literal_target)
+            && matches!(
+                self.is_assignable(source, context.shaping_context),
+                RelationOutcome::Yes
+            )
+        {
+            self.interner.regularize_literal_type(source)
+        } else {
+            source
+        }
+    }
+
+    fn infer_prepared_initializer(
+        &mut self,
+        scope: ScopeId,
+        init: &Expression<'_>,
+        prepared: Option<PreparedInitializerContext>,
+        provenance: ContextualLiteralProvenance,
+    ) -> Option<CheckedExpr> {
+        let context = prepared.map(|context| context.shaping_context);
+        let contextual_this = prepared.and_then(|context| context.contextual_this);
+        if let (true, Expression::FunctionExpression(function), Some(prepared)) =
+            (self.inference_environment.is_some(), init, prepared)
+        {
+            return self
+                .infer_contextual_function(scope, function, prepared)
+                .map(|ty| CheckedExpr::opaque((ty, Span::from_oxc(function.span))))
+                .or_else(|| self.infer_checked_expr(scope, init));
+        }
+        if let (Expression::ArrowFunctionExpression(arrow), Some(prepared)) = (init, prepared) {
+            return self
+                .infer_contextual_arrow(scope, arrow, prepared, provenance)
+                .map(|ty| CheckedExpr::opaque((ty, Span::from_oxc(arrow.span))))
+                .or_else(|| self.infer_checked_expr(scope, init));
         };
         match (init, context) {
-            (Expression::ParenthesizedExpression(paren), ctx) => {
-                self.infer_initializer_with_provenance(scope, &paren.expression, ctx, provenance)
-            }
             (Expression::ObjectExpression(obj), Some(ctx))
                 if provenance
                     .shape_members(self.interner.store(), ctx, TypeTag::Object)
@@ -1444,9 +2182,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     provenance,
                 );
                 if grouped {
-                    self.finish_satisfies_container(init, id, ctx, Span::from_oxc(obj.span));
+                    self.finish_satisfies_container(
+                        init,
+                        id.ty,
+                        prepared.map_or(ctx, |context| context.original_target),
+                        Span::from_oxc(obj.span),
+                    );
                 }
-                Some((id, Span::from_oxc(obj.span)))
+                Some(id)
             }
             (Expression::ArrayExpression(array), Some(ctx))
                 if provenance
@@ -1460,9 +2203,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 }
                 let id = self.infer_array_literal_as_tuple(scope, array, ctx, provenance);
                 if grouped {
-                    self.finish_satisfies_container(init, id, ctx, Span::from_oxc(array.span));
+                    self.finish_satisfies_container(
+                        init,
+                        id.ty,
+                        prepared.map_or(ctx, |context| context.original_target),
+                        Span::from_oxc(array.span),
+                    );
                 }
-                Some((id, Span::from_oxc(array.span)))
+                Some(id)
             }
             (Expression::ArrayExpression(array), Some(ctx)) => {
                 if let Some(element_context) =
@@ -1480,14 +2228,19 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         provenance,
                     );
                     if grouped {
-                        self.finish_satisfies_container(init, id, ctx, Span::from_oxc(array.span));
+                        self.finish_satisfies_container(
+                            init,
+                            id.ty,
+                            prepared.map_or(ctx, |context| context.original_target),
+                            Span::from_oxc(array.span),
+                        );
                     }
-                    Some((id, Span::from_oxc(array.span)))
+                    Some(id)
                 } else {
-                    self.infer_expr(scope, init)
+                    self.infer_checked_expr(scope, init)
                 }
             }
-            _ => self.infer_expr(scope, init),
+            _ => self.infer_checked_expr(scope, init),
         }
     }
 
@@ -1551,17 +2304,78 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         raw: (TypeId, Span),
         policy: ContextualWalkPolicy,
     ) -> ((TypeId, Span), ContextualRewalk) {
+        let (value, rewalk) = self.contextual_checked_with_provenance(
+            scope,
+            expr,
+            context,
+            CheckedExpr::opaque(raw),
+            policy,
+        );
+        (value.tuple(), rewalk)
+    }
+
+    pub(in crate::check::checker) fn infer_contextual_checked_source_after_walked_reporting(
+        &mut self,
+        scope: ScopeId,
+        expr: &Expression<'_>,
+        context: TypeId,
+        raw: CheckedExpr,
+        use_contextual_arrow: bool,
+        retain_contextual_arrow_checks: bool,
+    ) -> (CheckedExpr, ContextualRewalk) {
+        self.contextual_checked_with_provenance(
+            scope,
+            expr,
+            context,
+            raw,
+            ContextualWalkPolicy {
+                use_contextual_arrow,
+                retain_contextual_arrow_checks,
+                provenance: ContextualLiteralProvenance::Existing,
+            },
+        )
+    }
+
+    fn contextual_checked_with_provenance(
+        &mut self,
+        scope: ScopeId,
+        expr: &Expression<'_>,
+        context: TypeId,
+        raw: CheckedExpr,
+        policy: ContextualWalkPolicy,
+    ) -> (CheckedExpr, ContextualRewalk) {
+        let ((value, rewalk), failed) = self.with_initializer_validation_attempt(|pass| {
+            pass.walk_contextual_source_after_walked(scope, expr, context, raw, policy)
+        });
+        let rewalk = if failed {
+            if rewalk.was_rewalked() {
+                ContextualRewalk::RewalkedFailed
+            } else {
+                ContextualRewalk::Failed
+            }
+        } else {
+            rewalk
+        };
+        (value, rewalk)
+    }
+
+    fn walk_contextual_source_after_walked(
+        &mut self,
+        scope: ScopeId,
+        expr: &Expression<'_>,
+        context: TypeId,
+        mut raw: CheckedExpr,
+        policy: ContextualWalkPolicy,
+    ) -> (CheckedExpr, ContextualRewalk) {
         let ContextualWalkPolicy {
             use_contextual_arrow,
             retain_contextual_arrow_checks,
             provenance,
         } = policy;
-        let context = match self.demand_composite_apparent_type(context) {
-            DemandOutcome::Ready(context) => context,
-            DemandOutcome::Exhausted(exhaustion) => {
-                self.own_type_demand(DemandOutcome::Exhausted(exhaustion), raw.1);
-                return (raw, ContextualRewalk::KeptRaw);
-            }
+        let context = self.expected_inference_context(context);
+        let slot = InitializerContextSlot::new(Some(context));
+        let Ok(Some(context)) = self.consume_initializer_context(&slot, raw.span) else {
+            return (raw, ContextualRewalk::Failed);
         };
         // Backlog 95: only the effect-discarding mode is memoized. There the walk's
         // whole `CheckerEffects` is dropped, so the answer returned here plus the
@@ -1571,7 +2385,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let memo_key = if retain_contextual_arrow_checks {
             None
         } else {
-            self.contextual_walk_key(scope, raw, context, use_contextual_arrow)
+            self.contextual_walk_key(scope, raw.tuple(), context, use_contextual_arrow)
         };
         if let Some(key) = &memo_key {
             if let Some(memoized) = self.memoized_contextual_walk(key) {
@@ -1586,22 +2400,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             #[cfg(test)]
             super::calls::measure_contextual_rewalk(super::calls::contextual_measure_phase(), true);
             let decl_types = (!retain_contextual_arrow_checks).then(|| self.decl_types.clone());
-            let contextual_return = provenance == ContextualLiteralProvenance::Satisfies;
             let contextual = if retain_contextual_arrow_checks {
-                self.infer_contextual_arrow_with_return_context(
-                    scope,
-                    arrow.as_ref(),
-                    context,
-                    contextual_return,
-                )
+                self.infer_contextual_arrow(scope, arrow.as_ref(), context, provenance)
             } else {
                 let (contextual, effects) = self.capture_candidate_effects(|pass| {
-                    pass.infer_contextual_arrow_with_return_context(
-                        scope,
-                        arrow.as_ref(),
-                        context,
-                        contextual_return,
-                    )
+                    pass.infer_contextual_arrow(scope, arrow.as_ref(), context, provenance)
                 });
                 #[cfg(test)]
                 let discarded_records = effects.records.len();
@@ -1614,26 +2417,36 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 contextual
             };
             let resolved = match contextual {
-                Some(ty) => ((ty, raw.1), ContextualRewalk::Rewalked),
+                Some(ty) => (
+                    CheckedExpr::opaque((ty, raw.span)),
+                    if self.initializer_validation_failed {
+                        ContextualRewalk::RewalkedFailed
+                    } else {
+                        ContextualRewalk::Rewalked
+                    },
+                ),
                 None => (raw, ContextualRewalk::KeptRaw),
             };
             if let Some(key) = memo_key {
-                self.memoize_contextual_walk(key, mark, resolved);
+                self.memoize_contextual_walk(key, mark, resolved.clone());
             }
             return resolved;
         }
 
-        if !self.context_can_shape_fresh_literal(expr, context, provenance) {
-            return (raw, ContextualRewalk::KeptRaw);
+        if !self.context_can_shape_fresh_literal(expr, context.shaping_context, provenance) {
+            raw.ty = self.shape_native_inference_literal(raw.ty, Some(context));
+            return (raw.with_context(Some(context)), ContextualRewalk::KeptRaw);
         }
 
         #[cfg(test)]
         super::calls::measure_contextual_rewalk(super::calls::contextual_measure_phase(), false);
         let contextual = if retain_contextual_arrow_checks {
-            self.infer_initializer_with_provenance(scope, expr, Some(context), provenance)
+            self.infer_initializer_with_context_slot(scope, expr, &slot, provenance)
+                .map(|value| value.checked)
         } else {
             let (contextual, effects) = self.capture_candidate_effects(|pass| {
-                pass.infer_initializer_with_provenance(scope, expr, Some(context), provenance)
+                pass.infer_initializer_with_context_slot(scope, expr, &slot, provenance)
+                    .map(|value| value.checked)
             });
             #[cfg(test)]
             let discarded_records = effects.records.len();
@@ -1643,11 +2456,18 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             contextual
         };
         let resolved = match contextual {
-            Some(source) => (source, ContextualRewalk::Rewalked),
-            None => (raw, ContextualRewalk::KeptRaw),
+            Some(source) => (
+                source,
+                if self.initializer_validation_failed {
+                    ContextualRewalk::RewalkedFailed
+                } else {
+                    ContextualRewalk::Rewalked
+                },
+            ),
+            None => (raw, ContextualRewalk::Failed),
         };
         if let Some(key) = memo_key {
-            self.memoize_contextual_walk(key, mark, resolved);
+            self.memoize_contextual_walk(key, mark, resolved.clone());
         }
         resolved
     }
@@ -1660,6 +2480,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     ) -> bool {
         let context = contextual_literal_target(self.interner.store(), context);
         match expr {
+            Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_) => {
+                self.interner.store().function_type(context).is_some()
+            }
             Expression::ParenthesizedExpression(paren) => {
                 self.context_can_shape_fresh_literal(&paren.expression, context, provenance)
             }
@@ -1702,13 +2525,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         context: TypeId,
         contextual_this: Option<TypeId>,
         provenance: ContextualLiteralProvenance,
-    ) -> TypeId {
+    ) -> CheckedExpr {
         let saved_this = self.current_this;
         if let Some(contextual_this) = contextual_this {
             self.current_this = Some(contextual_this);
         }
         let mut properties: Vec<PropertyType> = Vec::with_capacity(obj.properties.len());
-        for member in &obj.properties {
+        let mut children = Vec::with_capacity(obj.properties.len());
+        for (ordinal, member) in obj.properties.iter().enumerate() {
             let ObjectPropertyKind::ObjectProperty(prop) = member else {
                 self.record_object_spread_skip(member);
                 continue;
@@ -1719,28 +2543,28 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             };
             let value_context = self.object_literal_property_context(context, &name, provenance);
             let check_mark = self.satisfies_check_mark();
-            let value = match value_context {
-                Some(ctx) => {
-                    self.infer_contextual_initializer_child(scope, &prop.value, ctx, provenance)
-                }
-                None => self.infer_expr(scope, &prop.value),
-            };
-            let Some((value_ty, _)) = value else {
+            let Some(value) =
+                self.infer_initializer_value(scope, &prop.value, value_context, provenance)
+            else {
+                children.push(LiteralChild {
+                    edge: LiteralEdge::Property {
+                        ordinal,
+                        name: Some(name.into_owned()),
+                        key_span: Span::from_oxc(prop.key.span()),
+                    },
+                    full_span: Span::from_oxc(prop.value.span()),
+                    checked: None,
+                    contribution: None,
+                    required: true,
+                });
                 continue;
             };
-            let preserve_literal = value_context.is_some_and(|context| {
-                contextual_source_preserves_literal(
-                    self.interner.store(),
-                    &prop.value,
-                    context,
-                    provenance,
-                )
-            });
-            let ty = if preserve_literal {
-                value_ty
-            } else {
-                widen(self.interner, value_ty)
-            };
+            let ty = super::literal_publication::finalize_literal_type(
+                self.interner,
+                value.source,
+                value.publication_context(),
+                super::literal_publication::LiteralPublicationRole::MutableMember,
+            );
             if provenance == ContextualLiteralProvenance::Satisfies {
                 if let Some(target) = value_context {
                     let explicit_arrow = matches!(
@@ -1756,46 +2580,56 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     }
                     if explicit_arrow || self.satisfies_check_mark() == check_mark {
                         self.record_satisfies_child_check(
-                            ty,
+                            self.initializer_validation_source(
+                                Span::from_oxc(prop.value.span()),
+                                InitializerValidationBoundary::Contribution,
+                                ty,
+                            ),
                             target,
                             Span::from_oxc(prop.key.span()),
                         );
                     }
                 }
             }
+            children.push(LiteralChild {
+                edge: LiteralEdge::Property {
+                    ordinal,
+                    name: Some(name.to_string()),
+                    key_span: Span::from_oxc(prop.key.span()),
+                },
+                full_span: Span::from_oxc(prop.value.span()),
+                checked: Some(value.checked),
+                contribution: Some(ty),
+                required: true,
+            });
             properties.push(PropertyType::public(name.into_owned(), ty));
         }
 
         self.current_this = saved_this;
-        self.interner.intern_object(ObjectType {
+        let ty = self.interner.intern_object(ObjectType {
             properties,
             ..Default::default()
-        })
+        });
+        self.literal_result(
+            scope,
+            ty,
+            Span::from_oxc(obj.span),
+            LiteralKind::Object,
+            children,
+        )
     }
 
-    fn infer_contextual_initializer_child(
+    pub(in crate::check::checker) fn inferred_return_type(
         &mut self,
-        scope: ScopeId,
-        expression: &Expression<'_>,
-        context: TypeId,
-        provenance: ContextualLiteralProvenance,
-    ) -> Option<(TypeId, Span)> {
-        if provenance == ContextualLiteralProvenance::Satisfies {
-            if let Expression::ArrowFunctionExpression(arrow) =
-                peel_parenthesized_expression(expression)
-            {
-                let contextual = self.infer_contextual_arrow_with_return_context(
-                    scope,
-                    arrow.as_ref(),
-                    context,
-                    true,
-                );
-                if let Some(ty) = contextual {
-                    return Some((ty, Span::from_oxc(expression.span())));
-                }
-            }
-        }
-        self.infer_initializer_with_provenance(scope, expression, Some(context), provenance)
+        source: TypeId,
+        context: Option<TypeId>,
+    ) -> TypeId {
+        super::literal_publication::finalize_literal_type(
+            self.interner,
+            source,
+            context,
+            super::literal_publication::LiteralPublicationRole::InferredReturn,
+        )
     }
 
     /// Find the one retained `ThisType<T>` marker in a contextual intersection.
@@ -1861,28 +2695,32 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         array: &ArrayExpression<'_>,
         element_context: TypeId,
         provenance: ContextualLiteralProvenance,
-    ) -> TypeId {
+    ) -> CheckedExpr {
         let mut element_types: Vec<TypeId> = Vec::with_capacity(array.elements.len());
-        for element in &array.elements {
+        let mut children = Vec::with_capacity(array.elements.len());
+        for (index, element) in array.elements.iter().enumerate() {
             let Some(expr) = self.array_element_expr(element) else {
                 continue;
             };
             let check_mark = self.satisfies_check_mark();
-            let Some((elem_ty, _)) =
-                self.infer_contextual_initializer_child(scope, expr, element_context, provenance)
+            let Some(value) =
+                self.infer_initializer_value(scope, expr, Some(element_context), provenance)
             else {
+                children.push(LiteralChild {
+                    edge: LiteralEdge::Element(index),
+                    full_span: Span::from_oxc(expr.span()),
+                    checked: None,
+                    contribution: None,
+                    required: true,
+                });
                 continue;
             };
-            let elem_ty = if contextual_source_preserves_literal(
-                self.interner.store(),
-                expr,
-                element_context,
-                provenance,
-            ) {
-                elem_ty
-            } else {
-                widen(self.interner, elem_ty)
-            };
+            let elem_ty = super::literal_publication::finalize_literal_type(
+                self.interner,
+                value.source,
+                value.publication_context(),
+                super::literal_publication::LiteralPublicationRole::MutableMember,
+            );
             if provenance == ContextualLiteralProvenance::Satisfies {
                 let explicit_arrow = matches!(
                     peel_parenthesized_expression(expr),
@@ -1894,16 +2732,34 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 }
                 if explicit_arrow || self.satisfies_check_mark() == check_mark {
                     self.record_satisfies_child_check(
-                        elem_ty,
+                        self.initializer_validation_source(
+                            Span::from_oxc(expr.span()),
+                            InitializerValidationBoundary::Contribution,
+                            elem_ty,
+                        ),
                         element_context,
                         Span::from_oxc(expr.span()),
                     );
                 }
             }
+            children.push(LiteralChild {
+                edge: LiteralEdge::Element(index),
+                full_span: Span::from_oxc(expr.span()),
+                checked: Some(value.checked),
+                contribution: Some(elem_ty),
+                required: true,
+            });
             element_types.push(elem_ty);
         }
         let element = self.interner.union(element_types);
-        self.interner.intern_array(element)
+        let ty = self.interner.intern_array(element);
+        self.literal_result(
+            scope,
+            ty,
+            Span::from_oxc(array.span),
+            LiteralKind::Array,
+            children,
+        )
     }
 
     /// Type an array literal positionally as an M18 tuple context. Element contexts
@@ -1915,7 +2771,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         array: &ArrayExpression<'_>,
         context: TypeId,
         provenance: ContextualLiteralProvenance,
-    ) -> TypeId {
+    ) -> CheckedExpr {
         // Snapshot the target tuple up front (immutable borrow) so the recursive
         // contextual inference below can take `&mut self`. The shared tuple call-shape
         // helper accounts for a represented rest segment and a trailing fixed suffix.
@@ -1927,6 +2783,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .collect();
 
         let mut elements: Vec<TypeId> = Vec::with_capacity(array.elements.len());
+        let mut children = Vec::with_capacity(array.elements.len());
         for (index, element) in array.elements.iter().enumerate() {
             // Spread (`...xs`) / elision (a hole) are out of subset — the helper records
             // the skipped child slot; only a plain expression contributes a position.
@@ -1942,40 +2799,23 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 .collect();
             let elem_context = (!candidates.is_empty()).then(|| self.interner.union(candidates));
             let check_mark = self.satisfies_check_mark();
-            let inferred = match (provenance, expr, elem_context) {
-                (
-                    ContextualLiteralProvenance::Existing,
-                    Expression::ArrowFunctionExpression(arrow),
-                    Some(context),
-                ) if self.interner.store().function_type(context).is_some() => self
-                    .infer_contextual_arrow_with_return_context(
-                        scope,
-                        arrow.as_ref(),
-                        context,
-                        true,
-                    )
-                    .map(|ty| (ty, Span::from_oxc(arrow.span))),
-                (_, _, Some(context)) => {
-                    self.infer_contextual_initializer_child(scope, expr, context, provenance)
-                }
-                (_, _, None) => self.infer_initializer(scope, expr, None),
-            };
-            let Some((elem_ty, _)) = inferred else {
+            let Some(value) = self.infer_initializer_value(scope, expr, elem_context, provenance)
+            else {
+                children.push(LiteralChild {
+                    edge: LiteralEdge::Element(index),
+                    full_span: Span::from_oxc(expr.span()),
+                    checked: None,
+                    contribution: None,
+                    required: true,
+                });
                 continue;
             };
-            let preserve_literal = elem_context.is_some_and(|context| {
-                contextual_source_preserves_literal(
-                    self.interner.store(),
-                    expr,
-                    context,
-                    provenance,
-                )
-            });
-            let elem_ty = if preserve_literal {
-                elem_ty
-            } else {
-                widen(self.interner, elem_ty)
-            };
+            let elem_ty = super::literal_publication::finalize_literal_type(
+                self.interner,
+                value.source,
+                value.publication_context(),
+                super::literal_publication::LiteralPublicationRole::MutableMember,
+            );
             if provenance == ContextualLiteralProvenance::Satisfies {
                 if let Some(target) = elem_context {
                     let explicit_arrow = matches!(
@@ -1988,16 +2828,34 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     }
                     if explicit_arrow || self.satisfies_check_mark() == check_mark {
                         self.record_satisfies_child_check(
-                            elem_ty,
+                            self.initializer_validation_source(
+                                Span::from_oxc(expr.span()),
+                                InitializerValidationBoundary::Contribution,
+                                elem_ty,
+                            ),
                             target,
                             Span::from_oxc(expr.span()),
                         );
                     }
                 }
             }
+            children.push(LiteralChild {
+                edge: LiteralEdge::Element(index),
+                full_span: Span::from_oxc(expr.span()),
+                checked: Some(value.checked),
+                contribution: Some(elem_ty),
+                required: true,
+            });
             elements.push(elem_ty);
         }
-        self.interner.intern_tuple(elements)
+        let ty = self.interner.intern_tuple(elements);
+        self.literal_result(
+            scope,
+            ty,
+            Span::from_oxc(array.span),
+            LiteralKind::Array,
+            children,
+        )
     }
 
     /// Infer `a[i]`: arrays yield their element type for any index, tuples yield the
@@ -2022,16 +2880,18 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let wk = self.interner.well_known();
         let span = Span::from_oxc(member.span);
         if let Some(endpoint) = self.enum_computed_member_endpoint(scope, member) {
-            return Some(match endpoint {
-                EnumMemberEndpoint::Found { member, .. } => (member, span),
+            return match endpoint {
+                EnumMemberEndpoint::Found { member, .. } => {
+                    self.infer_enum_member_value(member, span)
+                }
                 EnumMemberEndpoint::Missing { whole } => {
                     let name = enum_computed_static_name(&member.expression)
                         .expect("authenticated enum key remains static");
                     let target = render_type(self.interner.store(), whole, false);
                     self.emit_diagnostic(Diagnostic::property_does_not_exist(span, name, &target));
-                    (wk.error, span)
+                    Some((wk.error, span))
                 }
-            });
+            };
         }
 
         // Authenticated well-known symbols are exact key literals. Certification
@@ -2540,7 +3400,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             if let Some(EnumMemberEndpoint::Found { member: ty, .. }) = self
                 .enum_member_access_endpoint(scope, &member.object, member.property.name.as_str())
             {
-                return Some((ty, Span::from_oxc(member.property.span)));
+                return self.infer_enum_member_value(ty, Span::from_oxc(member.property.span));
             }
         }
         if let Some(DemandOutcome::Exhausted(exhaustion)) =
@@ -2553,6 +3413,19 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             return None;
         }
         self.infer_member_access_from_base(scope, base_ty, member)
+    }
+
+    fn infer_enum_member_value(&mut self, ty: TypeId, span: Span) -> Option<(TypeId, Span)> {
+        match self.interner.intern_widening_literal(ty) {
+            Ok(value) => Some((value, span)),
+            Err(_) => {
+                self.own_type_demand(
+                    DemandOutcome::Exhausted(Exhaustion::EvaluationInvalidNode { ty }),
+                    span,
+                );
+                None
+            }
+        }
     }
 
     /// Demand publication for an explicit class value before consuming its static
@@ -3170,7 +4043,43 @@ fn is_comparison_operator(op: BinaryOperator) -> bool {
     )
 }
 
-fn is_const_assertion_type(ts_type: &TSType<'_>) -> bool {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::check::checker) enum ConstAssertionOperandKind {
+    Owned,
+    EnumCandidate,
+    Invalid,
+}
+
+pub(in crate::check::checker) fn const_assertion_operand_kind(
+    expression: &Expression<'_>,
+) -> ConstAssertionOperandKind {
+    match expression {
+        Expression::ParenthesizedExpression(parenthesized) => {
+            const_assertion_operand_kind(&parenthesized.expression)
+        }
+        Expression::StringLiteral(_)
+        | Expression::NumericLiteral(_)
+        | Expression::BigIntLiteral(_)
+        | Expression::BooleanLiteral(_)
+        | Expression::ObjectExpression(_)
+        | Expression::ArrayExpression(_) => ConstAssertionOperandKind::Owned,
+        Expression::UnaryExpression(unary)
+            if unary.operator == UnaryOperator::UnaryNegation
+                && matches!(
+                    unary.argument,
+                    Expression::NumericLiteral(_) | Expression::BigIntLiteral(_)
+                ) =>
+        {
+            ConstAssertionOperandKind::Owned
+        }
+        Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_) => {
+            ConstAssertionOperandKind::EnumCandidate
+        }
+        _ => ConstAssertionOperandKind::Invalid,
+    }
+}
+
+pub(in crate::check::checker) fn is_const_assertion_type(ts_type: &TSType<'_>) -> bool {
     let TSType::TSTypeReference(reference) = ts_type else {
         return false;
     };
@@ -3381,63 +4290,6 @@ fn is_contextual_literal_shape(store: &Store, ty: TypeId) -> bool {
     )
 }
 
-fn context_preserves_literal(store: &Store, context: TypeId) -> bool {
-    if store.literal_value(context).is_some() {
-        return true;
-    }
-    store.union_members(context).is_some_and(|members| {
-        members
-            .iter()
-            .all(|member| store.literal_value(*member).is_some())
-    })
-}
-
-fn contextual_source_preserves_literal(
-    store: &Store,
-    expression: &Expression<'_>,
-    context: TypeId,
-    provenance: ContextualLiteralProvenance,
-) -> bool {
-    if context_preserves_literal(store, context)
-        || provenance == ContextualLiteralProvenance::Existing
-    {
-        return true;
-    }
-    match peel_parenthesized_expression(expression) {
-        Expression::BooleanLiteral(_) => context_contains_boolean(store, context),
-        Expression::NumericLiteral(_) | Expression::StringLiteral(_) => false,
-        Expression::UnaryExpression(unary)
-            if unary.operator == UnaryOperator::UnaryNegation
-                && matches!(unary.argument, Expression::NumericLiteral(_)) =>
-        {
-            false
-        }
-        _ => true,
-    }
-}
-
-pub(in crate::check::checker) fn satisfies_context_preserves_literal(
-    store: &Store,
-    expression: &Expression<'_>,
-    context: TypeId,
-) -> bool {
-    contextual_source_preserves_literal(
-        store,
-        expression,
-        context,
-        ContextualLiteralProvenance::Satisfies,
-    )
-}
-
-fn context_contains_boolean(store: &Store, context: TypeId) -> bool {
-    store.intrinsic_kind(context) == Some(IntrinsicKind::Boolean)
-        || store.union_members(context).is_some_and(|members| {
-            members
-                .iter()
-                .any(|member| store.intrinsic_kind(*member) == Some(IntrinsicKind::Boolean))
-        })
-}
-
 /// The sub-expressions a ternary / logical expression passes its contextual target
 /// down to — the ones that carry the value, per tsc's
 /// `getContextualTypeForBinaryOperand`: both ternary arms, both `||` / `??`
@@ -3543,12 +4395,8 @@ mod enum_type_contains_tests {
 
 #[cfg(test)]
 mod satisfies_context_tests {
-    use super::{
-        satisfies_arrow_needs_context, satisfies_context_preserves_literal,
-        satisfies_operator_gap_span,
-    };
+    use super::{satisfies_arrow_needs_context, satisfies_operator_gap_span};
     use crate::span::Span;
-    use crate::types::Interner;
     use oxc_allocator::Allocator;
     use oxc_ast::ast::{Expression, Statement};
     use oxc_parser::Parser;
@@ -3567,28 +4415,6 @@ mod satisfies_context_tests {
             .as_ref()
             .expect("expected initializer");
         check(&source, initializer)
-    }
-
-    #[test]
-    fn satisfies_literal_provenance_is_syntax_directed() {
-        let interner = Interner::with_intrinsics();
-        let wk = interner.well_known();
-        for (source, context, expected) in [
-            (r#""raw""#, wk.string, false),
-            ("1", wk.number, false),
-            ("true", wk.boolean, true),
-            ("typed", wk.string, true),
-            (r#""asserted" as "asserted""#, wk.string, true),
-            (r#"(("raw"))"#, wk.string, false),
-        ] {
-            with_initializer(source, |_, expression| {
-                assert_eq!(
-                    satisfies_context_preserves_literal(interner.store(), expression, context),
-                    expected,
-                    "{source}"
-                );
-            });
-        }
     }
 
     #[test]

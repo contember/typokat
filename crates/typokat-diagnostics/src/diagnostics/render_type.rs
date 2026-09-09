@@ -132,6 +132,9 @@ fn render_type_node(store: &Store, id: TypeId, widen: bool, context: &mut Render
         return;
     }
     match store.tag(id) {
+        TypeTag::WideningLiteral => {
+            render_type_node(store, store.regular_literal_type(id), widen, context);
+        }
         TypeTag::Intrinsic => context.append(
             store
                 .intrinsic_kind(id)
@@ -1174,6 +1177,52 @@ mod stable_union_tests {
     use super::render_type;
     use crate::types::intern::Interner;
     use crate::types::repr::{LiteralValue, ObjectType, PropertyType};
+
+    #[test]
+    fn m1_literal_mode_display_preserves_values_without_exposing_wrappers() {
+        let mut interner = Interner::with_intrinsics();
+        for value in [
+            LiteralValue::Number(-1.0),
+            LiteralValue::String("same".to_owned()),
+            LiteralValue::Boolean(false),
+        ] {
+            let regular = interner.intern_literal(value.clone());
+            let widening = interner.intern_ordinary_literal(value);
+            for verbose in [false, true] {
+                assert_eq!(
+                    render_type(interner.store(), regular, verbose),
+                    render_type(interner.store(), widening, verbose)
+                );
+                let exact = interner.intern_tuple(vec![regular]);
+                let ordinary = interner.intern_tuple(vec![widening]);
+                assert_eq!(
+                    render_type(interner.store(), exact, verbose),
+                    render_type(interner.store(), ordinary, verbose)
+                );
+            }
+        }
+        let enum_id = interner.next_enum_id();
+        interner.intern_enum(crate::types::repr::EnumType {
+            id: enum_id,
+            name: "Mode".to_owned(),
+            members: vec![crate::types::repr::EnumMemberFact {
+                id: crate::types::repr::EnumMemberId(0),
+                name: "Ready".to_owned(),
+                value: crate::types::repr::EnumValue::String("ready".to_owned()),
+            }],
+            numeric_open: false,
+        });
+        let regular = interner
+            .store()
+            .enum_member_type_id(enum_id, crate::types::repr::EnumMemberId(0))
+            .unwrap();
+        let widening = interner.intern_widening_literal(regular).unwrap();
+        assert_eq!(render_type(interner.store(), widening, false), "Mode.Ready");
+        assert_eq!(
+            render_type(interner.store(), widening, true),
+            render_type(interner.store(), regular, true)
+        );
+    }
 
     fn render_string_union(first: &str, second: &str) -> String {
         let mut interner = Interner::with_intrinsics();

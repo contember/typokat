@@ -161,6 +161,26 @@ class ArrLit(Node):
 
 
 @dataclass
+class Conditional(Node):
+    condition: str
+    yes: Node
+    no: Node
+
+
+@dataclass
+class Satisfies(Node):
+    value: Node
+    context: str
+
+
+@dataclass
+class Binding(Node):
+    name: str
+    value: Node
+    mutable: bool = False
+
+
+@dataclass
 class Call(Node):
     callee: str
     args: List[object]
@@ -239,6 +259,13 @@ def render_stmt(stmt, indent: int) -> str:
 def render_expr(e, indent: int) -> str:
     if isinstance(e, Raw):
         return e.text
+    if isinstance(e, Conditional):
+        return f"({e.condition} ? {render_expr(e.yes, indent)} : {render_expr(e.no, indent)})"
+    if isinstance(e, Satisfies):
+        return f"({render_expr(e.value, indent)}) satisfies {e.context}"
+    if isinstance(e, Binding):
+        kind = "let" if e.mutable else "const"
+        return f"{kind} {e.name} = {render_expr(e.value, indent)}"
     if isinstance(e, Call):
         return e.callee + "(" + ", ".join(render_expr(a, indent) for a in e.args) + ")"
     if isinstance(e, ObjLit):
@@ -478,6 +505,7 @@ class GenOptions:
     top_stmts: int = 1
     provider_kinds: Tuple[str, ...] = PROVIDER_KINDS
     consumer_kinds: Tuple[str, ...] = CONSUMER_KINDS
+    publication_transitions: bool = False
 
 
 def generate(seed: int, index: int, opts: Optional[GenOptions] = None) -> Program:
@@ -486,6 +514,8 @@ def generate(seed: int, index: int, opts: Optional[GenOptions] = None) -> Progra
     Seeded from a string: `random.Random(str)` hashes with SHA-512 internally, so the
     stream does not depend on `PYTHONHASHSEED` and a repro regenerates on any host."""
     opts = opts or GenOptions()
+    if opts.publication_transitions:
+        return generate_publication_transition(seed, index)
     rng = random.Random(f"typokat-differential:{seed}:{index}")
     prefix = f"g{seed}_{index}_"
     g = _Gen(rng, prefix, opts)
@@ -498,6 +528,46 @@ def generate(seed: int, index: int, opts: Optional[GenOptions] = None) -> Progra
     return Program(decls=g.decls, body=Block(stmts), class_name=class_name,
                    field_name=field_name,
                    origin=f"differential: seed={seed} index={index} depth={depth}")
+
+
+def generate_publication_transition(seed: int, index: int) -> Program:
+    """Separate deterministic role profile; the original random stream is untouched."""
+    families = (
+        ("true", "1", "boolean | number", ("false", "2")),
+        ('"a"', "1", '"a" | number', ('"b"', "2")),
+        ("true", "undefined", "boolean | undefined", ("false",)),
+        ('"a"', "undefined", "string | undefined", ('"b"',)),
+        ("1", "undefined", "number | undefined", ("2",)),
+        ('"a"', "1", 'string | 1', ('"b"', "2")),
+    )
+    left, right, context, writes = families[index % len(families)]
+    prefix = f"p{seed}_{index}_"
+    flag = prefix + "flag"
+    if seed % 2 == 0:
+        context = " | ".join(reversed(context.split(" | ")))
+    if index // len(families) % 2:
+        left, right = right, left
+    grouped = Conditional(flag, Raw(left), Raw(right))
+    roles = (
+        ("object", ObjLit([("value", deepcopy(grouped))]), f"{{ value: {context} }}", ".value"),
+        ("grouped", ArrLit([deepcopy(grouped)]), f"({context})[]", "[0]"),
+        ("tuple", ArrLit([deepcopy(grouped)]), f"[{context}]", "[0]"),
+        ("separate", ArrLit([Raw(left), Raw(right)]), f"({context})[]", "[0]"),
+        ("returned", Arrow(None, False, deepcopy(grouped)), f"() => {context}", "()"),
+        ("block", Arrow(None, False, Block([Ret(deepcopy(grouped))])), f"() => {context}", "()"),
+    )
+    statements = [Raw(f"declare const {flag}: boolean")]
+    for role, value, target, access in roles:
+        # Alternate enclosing containers without moving the inner publication boundary.
+        if index // (2 * len(families)) % 2:
+            value = ObjLit([("nested", value)])
+            target = f"{{ nested: {target} }}"
+            access = ".nested" + access
+        name = prefix + role
+        statements.append(Binding(name, Satisfies(value, target)))
+        statements.append(Binding(name + "Copy", Raw(name + access), mutable=True))
+        statements.extend(Raw(f"{name}Copy = {write}") for write in writes)
+    return Program([], Block(statements), origin=f"publication-transition: seed={seed} index={index}")
 
 
 # --- shrinking support -------------------------------------------------------
@@ -543,7 +613,12 @@ def _block_slots(block: Block, setter: Setter, out: List[Tuple[Setter, object]])
 
 def _expr_slots(e, setter: Setter, out: List[Tuple[Setter, object]]) -> None:
     out.append((setter, e))
-    if isinstance(e, Call):
+    if isinstance(e, (Binding, Satisfies)):
+        _expr_slots(e.value, _attr_setter(e, "value"), out)
+    elif isinstance(e, Conditional):
+        _expr_slots(e.yes, _attr_setter(e, "yes"), out)
+        _expr_slots(e.no, _attr_setter(e, "no"), out)
+    elif isinstance(e, Call):
         for i, a in enumerate(e.args):
             _expr_slots(a, _list_setter(e.args, i), out)
     elif isinstance(e, Arrow):
@@ -599,7 +674,11 @@ def simplifications(node) -> List[object]:
     Well-formed does **not** mean type-correct: a reduction that introduces a type
     error is fine, the oracle decides whether the divergence survived."""
     out: List[object] = []
-    if isinstance(node, Block):
+    if isinstance(node, Conditional):
+        out.extend([node.yes, node.no])
+    elif isinstance(node, Satisfies):
+        out.append(node.value)
+    elif isinstance(node, Block):
         for i, st in enumerate(node.stmts):
             out.append(Block(node.stmts[:i] + node.stmts[i + 1:]))
             # Flatten one nesting level: splice a nested callback's body in place of

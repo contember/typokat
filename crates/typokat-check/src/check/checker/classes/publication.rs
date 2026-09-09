@@ -29,13 +29,17 @@ use crate::binder::declaration::DeclarationKind;
 use crate::binder::scope::ScopeId;
 use crate::check::checker::context::{
     CheckerEffects, ClassNamespacePropertyPayload, ClassNamespacePropertySourceOrder,
-    ConstraintCheckObligation, DeclTypes, OverrideCheck, Pass, PublishedClassNewMetadata,
-    PublishedClassValueBinding, TypeDecl, TypeDeclTable, TypeDeclView, TypeResolvedTable,
+    ConstraintCheckObligation, DeclTypes, InitializerValidationSources, OverrideCheck, Pass,
+    PublishedClassNewMetadata, PublishedClassValueBinding, TypeDecl, TypeDeclTable, TypeDeclView,
+    TypeResolvedTable,
 };
 use crate::check::checker::decls::type_decl_id;
 use crate::check::checker::events::UserRecordTicket;
+use crate::check::checker::expr::{
+    const_assertion_operand_kind, is_const_assertion_type, ConstAssertionOperandKind,
+};
 use crate::check::checker::lexical_events::{
-    source_ordinal, ClassReservation, LexicalReservations,
+    source_ordinal, ClassReservation, LexicalReservations, MemberSiteId,
 };
 use crate::check::checker::library_identities::NativeArrayGroups;
 use crate::check::checker::reporting_record::CheckerRecord;
@@ -46,8 +50,8 @@ use crate::source::SourceOrdinal;
 use crate::span::Span as CheckSpan;
 use crate::types::layered::LayeredMap;
 use crate::types::repr::{
-    ClassId, FunctionType, ObjectType, PropertyKey as TypePropertyKey, PropertyType, TypeParamId,
-    Visibility,
+    ClassId, FunctionType, LiteralValue, ObjectType, PropertyKey as TypePropertyKey, PropertyType,
+    TypeParamId, Visibility,
 };
 use crate::types::store::TypeId;
 use oxc_ast::ast::{
@@ -294,6 +298,34 @@ impl<Ticket: Copy + PartialEq> Resolver<'_, '_, Ticket> {
             .and_then(|symbol| self.binder.symbols.get(symbol))
             .and_then(|symbol| symbol.value)?;
         values.get(storage)
+    }
+
+    fn resolve_const_enum_member_type(&self, name: &str, member: &str) -> Option<TypeId> {
+        self.resolve_enum_value_members(name)?
+            .into_iter()
+            .find_map(|(candidate, ty)| (candidate == member).then_some(ty))
+    }
+
+    fn resolve_enum_value_members(&self, name: &str) -> Option<Vec<(String, TypeId)>> {
+        let value_symbol = self.binder.resolve_value(self.scope, name)?;
+        let value_group = self
+            .binder
+            .symbols
+            .get(value_symbol)
+            .and_then(|binding| binding.ty)?;
+        let group = self.resolve_type_group_id(name)?;
+        if value_group != group {
+            return None;
+        }
+        let TypeDecl::Enum { member_shells, .. } = self.declarations.get(group.index())? else {
+            return None;
+        };
+        Some(
+            member_shells
+                .iter()
+                .map(|(name, (_, ty))| (name.clone(), *ty))
+                .collect(),
+        )
     }
 
     fn resolve_type_group_id(&self, name: &str) -> Option<crate::binder::declaration::TypeGroupId> {
@@ -1142,6 +1174,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     initializer_poison,
                     mut surface_poison,
                     callables,
+                    initializer_validation,
                     records: produced,
                     default_checks: checks,
                 } = lower_class(
@@ -1159,6 +1192,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     },
                 );
                 let namespace_payload = self.class_namespace_payloads.remove(&binding.type_decl);
+                self.class_initializer_validation
+                    .extend(initializer_validation);
                 let has_namespace_payload = namespace_payload.is_some();
                 if let Some(properties) = namespace_payload {
                     let mut static_object = factory
@@ -1959,6 +1994,7 @@ struct LoweredClassSurface<Ticket: Copy> {
     initializer_poison: Vec<Ticket>,
     surface_poison: Vec<Ticket>,
     callables: Vec<RetainedClassCallable<Ticket>>,
+    initializer_validation: BTreeMap<MemberSiteId, InitializerValidationSources>,
     records: Vec<TicketRecord<Ticket>>,
     default_checks: Vec<DefaultConstraintCheck<Ticket>>,
 }
@@ -2003,6 +2039,7 @@ fn lower_class<'ast, Ticket: Copy + PartialEq>(
     let mut surface_poison = Vec::new();
     let mut constructor = None;
     let mut retained = Vec::new();
+    let mut initializer_validation = BTreeMap::new();
     let mut records = Vec::new();
     let mut default_checks = Vec::new();
     let class_parameter_names: std::collections::BTreeSet<&str> =
@@ -2097,13 +2134,27 @@ fn lower_class<'ast, Ticket: Copy + PartialEq>(
                         value,
                         frame,
                         &mut initializer,
+                        false,
                     );
-                    match SurfaceInitializerInferer::new(factory, &mut initializer).infer(
-                        value,
-                        property.readonly,
-                        property.r#static,
-                    ) {
-                        InitializerInference::Inferred(ty) => Some(ty),
+                    let mut inferer = SurfaceInitializerInferer::new(factory, &mut initializer);
+                    let inferred = inferer.infer(value, property.readonly, property.r#static);
+                    match inferred {
+                        InitializerInference::Inferred(ty) => {
+                            if let (Some(member), Some(rows)) =
+                                (member, inferer.into_validation_sources())
+                            {
+                                initializer_validation.insert(
+                                    member.id,
+                                    InitializerValidationSources {
+                                        source: member.source.unit,
+                                        class: class_id,
+                                        member: member.id,
+                                        rows,
+                                    },
+                                );
+                            }
+                            Some(ty)
+                        }
                         InitializerInference::Unsupported => {
                             records.push(TicketRecord::incomplete(
                                 immediate_owner,
@@ -2699,6 +2750,7 @@ fn lower_class<'ast, Ticket: Copy + PartialEq>(
         initializer_poison,
         surface_poison,
         callables: retained,
+        initializer_validation,
         records,
         default_checks,
     }
@@ -3305,12 +3357,31 @@ fn seed_initializer_annotations<Ticket: Copy + PartialEq>(
     expression: &Expression<'_>,
     frame: &[(String, TypeId)],
     context: &mut InitializerContext,
+    const_context: bool,
 ) {
     match expression {
         Expression::Identifier(identifier) => {
-            if let Some(ty) =
-                resolver.resolve_value_type(identifier.name.as_str(), declaration_values)
-            {
+            let ty = resolver
+                .resolve_value_type(identifier.name.as_str(), declaration_values)
+                .or_else(|| {
+                    if !const_context {
+                        return None;
+                    }
+                    let members = resolver.resolve_enum_value_members(identifier.name.as_str())?;
+                    let properties = members
+                        .into_iter()
+                        .map(|(name, ty)| {
+                            let mut property = PropertyType::public(name, ty);
+                            property.readonly = true;
+                            property
+                        })
+                        .collect();
+                    Some(factory.intern_object(ObjectType {
+                        properties,
+                        ..Default::default()
+                    }))
+                });
+            if let Some(ty) = ty {
                 context.lexical_values.insert(identifier.span.start, ty);
             }
         }
@@ -3320,14 +3391,27 @@ fn seed_initializer_annotations<Ticket: Copy + PartialEq>(
                     .annotations
                     .insert(assertion.type_annotation.span().start, ty);
             }
-            seed_initializer_annotations(
-                factory,
-                resolver,
-                declaration_values,
-                &assertion.expression,
-                frame,
-                context,
-            );
+            let operand = is_const_assertion_type(&assertion.type_annotation)
+                .then(|| const_assertion_operand_kind(&assertion.expression));
+            if operand == Some(ConstAssertionOperandKind::EnumCandidate) {
+                seed_const_member_root(
+                    factory,
+                    resolver,
+                    declaration_values,
+                    &assertion.expression,
+                    context,
+                );
+            } else {
+                seed_initializer_annotations(
+                    factory,
+                    resolver,
+                    declaration_values,
+                    &assertion.expression,
+                    frame,
+                    context,
+                    operand == Some(ConstAssertionOperandKind::Owned),
+                );
+            }
         }
         Expression::TSTypeAssertion(assertion) => {
             if let Ok(ty) = lower_type(factory, resolver, &assertion.type_annotation, frame).0 {
@@ -3335,14 +3419,27 @@ fn seed_initializer_annotations<Ticket: Copy + PartialEq>(
                     .annotations
                     .insert(assertion.type_annotation.span().start, ty);
             }
-            seed_initializer_annotations(
-                factory,
-                resolver,
-                declaration_values,
-                &assertion.expression,
-                frame,
-                context,
-            );
+            let operand = is_const_assertion_type(&assertion.type_annotation)
+                .then(|| const_assertion_operand_kind(&assertion.expression));
+            if operand == Some(ConstAssertionOperandKind::EnumCandidate) {
+                seed_const_member_root(
+                    factory,
+                    resolver,
+                    declaration_values,
+                    &assertion.expression,
+                    context,
+                );
+            } else {
+                seed_initializer_annotations(
+                    factory,
+                    resolver,
+                    declaration_values,
+                    &assertion.expression,
+                    frame,
+                    context,
+                    operand == Some(ConstAssertionOperandKind::Owned),
+                );
+            }
         }
         Expression::TSSatisfiesExpression(satisfies) => {
             if let Ok(ty) = lower_type(factory, resolver, &satisfies.type_annotation, frame).0 {
@@ -3357,6 +3454,7 @@ fn seed_initializer_annotations<Ticket: Copy + PartialEq>(
                 &satisfies.expression,
                 frame,
                 context,
+                const_context,
             );
         }
         Expression::ParenthesizedExpression(parenthesized) => {
@@ -3367,6 +3465,7 @@ fn seed_initializer_annotations<Ticket: Copy + PartialEq>(
                 &parenthesized.expression,
                 frame,
                 context,
+                const_context,
             );
         }
         Expression::ObjectExpression(object) => {
@@ -3376,7 +3475,7 @@ fn seed_initializer_annotations<Ticket: Copy + PartialEq>(
                 };
                 if property.computed
                     || property.method
-                    || property.shorthand
+                    || (property.shorthand && !const_context)
                     || property.kind != PropertyKind::Init
                 {
                     continue;
@@ -3388,6 +3487,7 @@ fn seed_initializer_annotations<Ticket: Copy + PartialEq>(
                     &property.value,
                     frame,
                     context,
+                    const_context,
                 );
             }
         }
@@ -3406,6 +3506,7 @@ fn seed_initializer_annotations<Ticket: Copy + PartialEq>(
                         expression,
                         frame,
                         context,
+                        const_context,
                     );
                 }
             }
@@ -3447,11 +3548,147 @@ fn seed_initializer_annotations<Ticket: Copy + PartialEq>(
                     body,
                     frame,
                     context,
+                    const_context,
                 );
             }
         }
+        Expression::StaticMemberExpression(member) if const_context => {
+            seed_initializer_annotations(
+                factory,
+                resolver,
+                declaration_values,
+                &member.object,
+                frame,
+                context,
+                true,
+            );
+        }
+        Expression::ComputedMemberExpression(member) if const_context => {
+            seed_initializer_annotations(
+                factory,
+                resolver,
+                declaration_values,
+                &member.object,
+                frame,
+                context,
+                true,
+            );
+            seed_initializer_annotations(
+                factory,
+                resolver,
+                declaration_values,
+                &member.expression,
+                frame,
+                context,
+                true,
+            );
+        }
         _ => {}
     }
+}
+
+fn seed_const_member_root<Ticket: Copy + PartialEq>(
+    factory: &mut SurfaceTypeFactory<'_>,
+    resolver: &mut Resolver<'_, '_, Ticket>,
+    declaration_values: &DeclTypes,
+    expression: &Expression<'_>,
+    context: &mut InitializerContext,
+) {
+    let (object, member_name, ready_key) = match expression {
+        Expression::ParenthesizedExpression(parenthesized) => {
+            return seed_const_member_root(
+                factory,
+                resolver,
+                declaration_values,
+                &parenthesized.expression,
+                context,
+            );
+        }
+        Expression::StaticMemberExpression(member) if !member.optional => {
+            (&member.object, member.property.name.to_string(), None)
+        }
+        Expression::ComputedMemberExpression(member) if !member.optional => {
+            match member.static_property_name() {
+                Some(member_name) => (&member.object, member_name.as_str().to_owned(), None),
+                None => {
+                    let Some((key_start, key, member_name)) = ready_const_enum_key(
+                        factory,
+                        resolver,
+                        declaration_values,
+                        &member.expression,
+                    ) else {
+                        return;
+                    };
+                    (&member.object, member_name, Some((key_start, key)))
+                }
+            }
+        }
+        _ => return,
+    };
+    if !seed_const_enum_root(factory, resolver, object, &member_name, context) {
+        return;
+    }
+    if let Some((key_start, key)) = ready_key {
+        context.lexical_values.insert(key_start, key);
+    }
+}
+
+/// An identifier key already published as one string literal: its reference start,
+/// published type and member name.
+fn ready_const_enum_key<Ticket: Copy + PartialEq>(
+    factory: &SurfaceTypeFactory<'_>,
+    resolver: &Resolver<'_, '_, Ticket>,
+    declaration_values: &DeclTypes,
+    key: &Expression<'_>,
+) -> Option<(u32, TypeId, String)> {
+    let mut key = key;
+    while let Expression::ParenthesizedExpression(parenthesized) = key {
+        key = &parenthesized.expression;
+    }
+    let Expression::Identifier(identifier) = key else {
+        return None;
+    };
+    let ty = resolver.resolve_value_type(identifier.name.as_str(), declaration_values)?;
+    let store = factory.store();
+    match store.literal_value(store.regular_literal_type(ty)) {
+        Some(LiteralValue::String(name)) => Some((identifier.span.start, ty, name.clone())),
+        _ => None,
+    }
+}
+
+fn seed_const_enum_root<Ticket: Copy + PartialEq>(
+    factory: &mut SurfaceTypeFactory<'_>,
+    resolver: &mut Resolver<'_, '_, Ticket>,
+    object: &Expression<'_>,
+    member_name: &str,
+    context: &mut InitializerContext,
+) -> bool {
+    let identifier = match object {
+        Expression::ParenthesizedExpression(parenthesized) => {
+            return seed_const_enum_root(
+                factory,
+                resolver,
+                &parenthesized.expression,
+                member_name,
+                context,
+            );
+        }
+        Expression::Identifier(identifier) => identifier,
+        _ => return false,
+    };
+    let Some(member) =
+        resolver.resolve_const_enum_member_type(identifier.name.as_str(), member_name)
+    else {
+        return false;
+    };
+    let mut property = PropertyType::public(member_name.to_owned(), member);
+    property.readonly = true;
+    let ty = factory.intern_object(ObjectType {
+        properties: vec![property],
+        ..Default::default()
+    });
+    context.lexical_values.insert(identifier.span.start, ty);
+    true
 }
 
 fn resolve_parent<Ticket: Copy + PartialEq>(

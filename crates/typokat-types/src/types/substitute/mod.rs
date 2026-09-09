@@ -271,6 +271,17 @@ fn tag_can_reenter(tag: TypeTag) -> bool {
 /// Visit exactly the child ids the `apply_*` arms recurse into — keep this in
 /// sync with `apply.rs` (like `tag_can_reenter`); the prefilter is only sound
 /// while these edges mirror the recursion.
+/// Visit the direct children substitution applies through, in stored structural order.
+pub fn for_each_child(store: &Store, ty: TypeId, visit: impl FnMut(TypeId)) {
+    for_each_apply_child(
+        store,
+        ty,
+        #[cfg(any(test, feature = "test-utils"))]
+        None,
+        visit,
+    );
+}
+
 fn for_each_apply_child(
     store: &Store,
     ty: TypeId,
@@ -286,6 +297,7 @@ fn for_each_apply_child(
         TypeTag::TypeParam
         | TypeTag::Intrinsic
         | TypeTag::Literal
+        | TypeTag::WideningLiteral
         | TypeTag::Enum
         | TypeTag::EnumMember
         | TypeTag::MappedValue
@@ -826,6 +838,7 @@ impl<'a> Substitution<'a> {
                 // Intrinsics and literals contain no type parameter — identity.
                 TypeTag::Intrinsic
                 | TypeTag::Literal
+                | TypeTag::WideningLiteral
                 | TypeTag::Enum
                 | TypeTag::EnumMember
                 | TypeTag::AliasTemplate => ty,

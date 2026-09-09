@@ -1,9 +1,9 @@
 //! assignment module (extracted from checker/mod.rs).
 
-use super::calls::intrinsic_id;
 use super::classes::body::BodyMemberLookup;
 use super::context::*;
 use super::expr::{contextual_literal_target, contextual_value_operands};
+use super::function_groups::FunctionGroupDemand;
 use crate::binder::bind::{ResolvedValueKind, ValueResolution};
 use crate::binder::declaration::ValueStorageId;
 use crate::binder::scope::ScopeId;
@@ -11,18 +11,19 @@ use crate::binder::Binder;
 use crate::class_semantics::DemandOutcome;
 use crate::diagnostics::{render_type, Diagnostic};
 use crate::span::Span;
-use crate::types::repr::{ClassId, TypeTag, Visibility};
+use crate::types::repr::{ClassId, IntrinsicKind, LiteralValue, TypeTag, Visibility};
 use crate::types::store::{Store, TypeId};
 use crate::types::Interner;
 use oxc_ast::ast::{
-    AssignmentExpression, AssignmentOperator, AssignmentTarget, BindingPattern, Expression,
-    ObjectPropertyKind, SimpleAssignmentTarget, StaticMemberExpression, TSAsExpression,
-    TSTypeAssertion, VariableDeclarationKind,
+    AssignmentExpression, AssignmentOperator, AssignmentTarget, BindingPattern,
+    ComputedMemberExpression, Expression, ObjectPropertyKind, SimpleAssignmentTarget,
+    StaticMemberExpression, TSAsExpression, TSTypeAssertion, VariableDeclarationKind,
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_span::GetSpan;
 use rustc_hash::FxHashMap;
 
+#[derive(Clone, Copy)]
 struct MemberAssignmentTarget {
     ty: TypeId,
     visibility: Visibility,
@@ -237,11 +238,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             AssignmentTarget::StaticMemberExpression(member) => {
                 return self.check_member_assignment(scope, member, assign);
             }
+            AssignmentTarget::ComputedMemberExpression(member) => {
+                return self.check_computed_member_assignment(scope, member, assign);
+            }
             // These targets remain otherwise deferred; visit only embedded assertions, then walk
             // the RHS once. Identifier/static-member targets retain their dedicated diagnostics.
             AssignmentTarget::TSAsExpression(_)
             | AssignmentTarget::TSTypeAssertion(_)
-            | AssignmentTarget::ComputedMemberExpression(_)
             | AssignmentTarget::PrivateFieldExpression(_)
             | AssignmentTarget::TSSatisfiesExpression(_)
             | AssignmentTarget::TSNonNullExpression(_)
@@ -257,9 +260,39 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
         };
 
-        // Infer the RHS before the target so it sees pre-assignment narrowing and
-        // compound assignments still walk their RHS.
-        let rhs = self.infer_expr(scope, &assign.right);
+        let arithmetic = !assign.operator.is_assign() && !assign.operator.is_logical();
+        let operation_left = if arithmetic {
+            match self.resolve_value_binding(scope, target.name.as_str()) {
+                ValueResolution::Resolved {
+                    symbol,
+                    kind: ResolvedValueKind::Ordinary,
+                } => {
+                    let span = Span::from_oxc(target.span);
+                    match self.demand_function_group(symbol) {
+                        FunctionGroupDemand::Ready(ty) | FunctionGroupDemand::PrivateSelf(ty) => {
+                            Some(ty)
+                        }
+                        FunctionGroupDemand::NotGroup => self.resolve_identifier_type(symbol, span),
+                        FunctionGroupDemand::Pending { report_use } => {
+                            if report_use {
+                                self.record_incomplete(
+                                    "expr-infer/identifier/function-group-pending",
+                                    span,
+                                    "merged function value waits for body return inference",
+                                );
+                            }
+                            None
+                        }
+                        FunctionGroupDemand::Unavailable => None,
+                    }
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let checked_rhs = self.infer_checked_expr(scope, &assign.right);
+        let rhs = checked_rhs.as_ref().map(CheckedExpr::tuple);
         // The assignment expression's value is the RHS (TS semantics), regardless of
         // whether a type obligation is collected below.
         let value = rhs.map(|(ty, _)| (ty, assign_span));
@@ -285,9 +318,20 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
         };
 
-        // Compound assignment (`+=`, `||=`, …): assignability is unchecked baseline-wide
-        // (out of the M7 subset). The flow graph already reset this symbol's narrowing
-        // (an assignment node), so it is sound to stop here without an obligation.
+        if arithmetic {
+            let left = operation_left?;
+            let (right, _) = rhs?;
+            let wk = self.interner.well_known();
+            let result = if assign.operator == AssignmentOperator::Addition {
+                self.addition_type(left, right).unwrap_or(wk.any)
+            } else if left == wk.error || right == wk.error {
+                wk.error
+            } else {
+                wk.number
+            };
+            return Some((result, assign_span));
+        }
+        // Logical assignment retains the existing endpoint and deferred obligation policy.
         if assign.operator != AssignmentOperator::Assign {
             return value;
         }
@@ -301,8 +345,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .and_then(|s| s.value)
             .and_then(|decl_id| self.decl_type(decl_id));
 
-        if let (Some(tgt), Some(raw)) = (target_ty, rhs) {
-            let (src, src_span) = self.infer_contextual_source_after_walked(
+        if let (Some(tgt), Some(raw)) = (target_ty, checked_rhs) {
+            let (checked, rewalk) = self.infer_contextual_checked_source_after_walked_reporting(
                 scope,
                 &assign.right,
                 tgt,
@@ -310,26 +354,347 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 false,
                 false,
             );
-            match self.check_excess_properties_for_target(&assign.right, tgt) {
-                DemandOutcome::Ready(diagnostics) => {
-                    for diagnostic in diagnostics {
-                        self.emit_diagnostic(diagnostic);
-                    }
-                }
-                DemandOutcome::Exhausted(exhaustion) => {
-                    self.own_type_demand(DemandOutcome::Exhausted(exhaustion), src_span);
-                    return value;
+            if checked.literal.is_none() {
+                self.schedule_obligation(AssignObligation {
+                    src: checked.ty,
+                    tgt,
+                    src_span: checked.span,
+                    source_sites: Vec::new(),
+                    kind: ObligationKind::Assignment,
+                });
+                return value;
+            }
+            match rewalk {
+                super::expr::ContextualRewalk::Failed
+                | super::expr::ContextualRewalk::RewalkedFailed => {}
+                super::expr::ContextualRewalk::KeptRaw
+                | super::expr::ContextualRewalk::Rewalked => {
+                    let group = self.prepare_literal_assignment(&assign.right, &checked, tgt);
+                    self.schedule_literal_assignment(group);
                 }
             }
-            self.schedule_obligation(AssignObligation {
-                src,
-                tgt,
-                src_span,
-                source_sites: Vec::new(),
-                kind: ObligationKind::Assignment,
-            });
         }
 
+        value
+    }
+
+    pub(in crate::check::checker) fn prepare_literal_assignment(
+        &mut self,
+        expr: &Expression<'_>,
+        checked: &CheckedExpr,
+        target: TypeId,
+    ) -> PreparedLiteralAssignment {
+        self.semantic_queries.savepoint();
+        let mut unavailable_sites = Vec::new();
+        let root = self.prepare_literal_site(
+            Some(expr),
+            checked,
+            target,
+            checked.span,
+            None,
+            &mut unavailable_sites,
+        );
+        if unavailable_sites.is_empty() {
+            self.semantic_queries.commit();
+        } else {
+            self.semantic_queries.rollback();
+        }
+        PreparedLiteralAssignment {
+            root,
+            unavailable_sites,
+        }
+    }
+
+    fn prepare_literal_site(
+        &mut self,
+        expr: Option<&Expression<'_>>,
+        checked: &CheckedExpr,
+        target: TypeId,
+        span: Span,
+        filter: Option<LiteralValueFilter>,
+        unavailable_sites: &mut Vec<UnavailableLiteralSite>,
+    ) -> LiteralAssignmentSite {
+        let mut site = LiteralAssignmentSite {
+            residual: AssignObligation {
+                src: checked.ty,
+                tgt: target,
+                src_span: span,
+                source_sites: Vec::new(),
+                kind: ObligationKind::Assignment,
+            },
+            children: Vec::new(),
+            excess: Vec::new(),
+            decomposed: false,
+            unavailable: false,
+            preparation_failure: None,
+            missing_required: false,
+        };
+        let Some(literal) = &checked.literal else {
+            return site;
+        };
+        debug_assert_eq!(literal.module, self.current_module);
+        debug_assert!(self.binder.graph.get(literal.scope).is_some());
+        let represented = contextual_literal_target(self.interner.store(), target);
+        let shape = if matches!(
+            literal.kind,
+            LiteralKind::Parenthesized | LiteralKind::Conditional | LiteralKind::Logical
+        ) || is_excess_literal_shape(self.interner.store(), represented)
+        {
+            represented
+        } else {
+            match self.demand_structural_apparent_type(target) {
+                DemandOutcome::Ready(shape) => {
+                    contextual_literal_target(self.interner.store(), shape)
+                }
+                DemandOutcome::Exhausted(exhaustion) => {
+                    site.preparation_failure = Some(exhaustion.clone());
+                    unavailable_sites.push(UnavailableLiteralSite {
+                        span,
+                        target,
+                        evidence: LiteralUnavailableEvidence::Demand(exhaustion),
+                    });
+                    site.unavailable = true;
+                    return site;
+                }
+            }
+        };
+        let object = self.interner.store().object_type(shape).cloned();
+        let tuple = self.interner.store().tuple_type(shape).cloned();
+        let array = self
+            .interner
+            .store()
+            .array_type(shape)
+            .map(|array| array.element);
+        site.decomposed = match literal.kind {
+            LiteralKind::Object => object.is_some(),
+            LiteralKind::Array => tuple.is_some() || array.is_some(),
+            LiteralKind::Parenthesized | LiteralKind::Conditional | LiteralKind::Logical => true,
+        };
+        if !site.decomposed {
+            if let Some(expr) = expr {
+                match self.check_excess_properties_for_target(expr, target) {
+                    DemandOutcome::Ready(excess) => site.excess = excess,
+                    DemandOutcome::Exhausted(exhaustion) => {
+                        site.preparation_failure = Some(exhaustion.clone());
+                        unavailable_sites.push(UnavailableLiteralSite {
+                            span,
+                            target,
+                            evidence: LiteralUnavailableEvidence::Demand(exhaustion),
+                        });
+                        site.unavailable = true;
+                    }
+                }
+            }
+            return site;
+        }
+        if let (Some(target), Some(source)) =
+            (&object, self.interner.store().object_type(checked.ty))
+        {
+            site.missing_required = target.call_signatures.is_empty()
+                && target.construct_signatures.is_empty()
+                && target.properties.iter().any(|property| {
+                    !property.optional && source.property_by_key(&property.key).is_none()
+                });
+        }
+        for child in literal.children.iter() {
+            if !child.required {
+                continue;
+            }
+            let mut child_span = child.full_span;
+            let child_target = match &child.edge {
+                LiteralEdge::Property {
+                    name: Some(name),
+                    key_span,
+                    ..
+                } => {
+                    child_span = *key_span;
+                    let Some(object) = &object else {
+                        continue;
+                    };
+                    let target = object.property(name).map(|p| p.ty).or_else(|| {
+                        if is_numeric_property_name(name) {
+                            object.number_index.or(object.string_index)
+                        } else {
+                            object.string_index
+                        }
+                    });
+                    if target.is_none()
+                        && (!object.properties.is_empty()
+                            || !object.call_signatures.is_empty()
+                            || !object.construct_signatures.is_empty())
+                    {
+                        site.excess.push(Diagnostic::excess_property(
+                            *key_span,
+                            name,
+                            &render_type(self.interner.store(), shape, false),
+                        ));
+                    }
+                    target
+                }
+                LiteralEdge::Property { name: None, .. } => None,
+                LiteralEdge::Element(index) => tuple
+                    .as_ref()
+                    .and_then(|tuple| {
+                        if tuple
+                            .rest
+                            .as_ref()
+                            .is_none_or(|rest| *index < rest.position)
+                        {
+                            return tuple.elements.get(*index).copied();
+                        }
+                        match expr {
+                            Some(Expression::ArrayExpression(array)) => {
+                                self.tuple_context_element(tuple, *index, array.elements.len())
+                            }
+                            _ => None,
+                        }
+                    })
+                    .or(array),
+                LiteralEdge::Parenthesized
+                | LiteralEdge::Consequent
+                | LiteralEdge::Alternate
+                | LiteralEdge::LogicalLeft(_)
+                | LiteralEdge::LogicalRight => Some(target),
+            };
+            let Some(child_target) = child_target else {
+                continue;
+            };
+            let Some(source) = &child.checked else {
+                unavailable_sites.push(UnavailableLiteralSite {
+                    span: child.full_span,
+                    target: child_target,
+                    evidence: LiteralUnavailableEvidence::SourceWalk,
+                });
+                site.unavailable = true;
+                continue;
+            };
+            let child_filter = match child.edge {
+                LiteralEdge::Property { .. } | LiteralEdge::Element(_) => None,
+                LiteralEdge::LogicalLeft(local) => Some(match (filter, local) {
+                    (Some(LiteralValueFilter::Truthy), _) | (_, LiteralValueFilter::Truthy) => {
+                        LiteralValueFilter::Truthy
+                    }
+                    _ => LiteralValueFilter::NonNullish,
+                }),
+                _ => filter,
+            };
+            let mut ty = if matches!(child.edge, LiteralEdge::LogicalLeft(_)) {
+                child.contribution.unwrap_or(source.ty)
+            } else {
+                source.ty
+            };
+            if let Some(filter) = child_filter {
+                ty = match filter {
+                    LiteralValueFilter::Truthy => {
+                        crate::check::flow::narrow_by_truthiness(self.interner, ty, true)
+                    }
+                    LiteralValueFilter::NonNullish => self.strip_nullish(ty),
+                };
+                if ty == self.interner.well_known().never {
+                    continue;
+                }
+            }
+            let contribution = CheckedExpr {
+                ty,
+                span: source.span,
+                literal: source.literal.clone(),
+            };
+            let child_expr = expr.and_then(|expr| literal_child_expression(expr, &child.edge));
+            site.children.push(self.prepare_literal_site(
+                child_expr,
+                &contribution,
+                child_target,
+                child_span,
+                child_filter,
+                unavailable_sites,
+            ));
+        }
+        site
+    }
+
+    /// Preserve deferred computed assignments, except statically known readonly
+    /// targets report `TK2540`.
+    fn check_computed_member_assignment(
+        &mut self,
+        scope: ScopeId,
+        member: &ComputedMemberExpression<'_>,
+        assign: &AssignmentExpression<'_>,
+    ) -> Option<(TypeId, Span)> {
+        let base = self.infer_expr(scope, &member.object);
+        let key = self.infer_expr(scope, &member.expression);
+        let rhs = self.infer_expr(scope, &assign.right);
+        let value = rhs.map(|(ty, _)| (ty, Span::from_oxc(assign.span)));
+        if assign.operator != AssignmentOperator::Assign {
+            return value;
+        }
+
+        let Some((base_ty, _)) = base else {
+            return value;
+        };
+        let apparent = self.apparent_type(base_ty);
+        let readonly_collection = readonly_collection_target(
+            self.interner.store(),
+            apparent,
+            key.map(|(ty, _)| ty),
+            member.static_property_name().as_deref(),
+        );
+        let static_name = member
+            .static_property_name()
+            .map(|name| name.to_string())
+            .or_else(|| key.and_then(|(ty, _)| literal_property_name(self.interner.store(), ty)));
+        let property_span = Span::from_oxc(member.expression.span());
+        let mut found = None;
+        if let Some(name) = static_name.as_deref() {
+            let wk = self.interner.well_known();
+            if base_ty != wk.error && base_ty != wk.any {
+                if let Some(DemandOutcome::Exhausted(exhaustion)) =
+                    self.demand_class_value_surface(scope, &member.object)
+                {
+                    self.own_type_demand(DemandOutcome::Exhausted(exhaustion), property_span);
+                    return value;
+                }
+                let structural = match self.demand_structural_apparent_type(base_ty) {
+                    DemandOutcome::Ready(structural) => self
+                        .interner
+                        .store()
+                        .readonly_operand(structural)
+                        .unwrap_or(structural),
+                    DemandOutcome::Exhausted(exhaustion) => {
+                        self.own_type_demand(DemandOutcome::Exhausted(exhaustion), property_span);
+                        return value;
+                    }
+                };
+                found = match self.structural_member_assignment_target(structural, name) {
+                    DemandOutcome::Ready(found) => found,
+                    DemandOutcome::Exhausted(exhaustion) => {
+                        self.own_type_demand(DemandOutcome::Exhausted(exhaustion), property_span);
+                        return value;
+                    }
+                };
+                if let Some(target) = found {
+                    self.check_member_access_control(
+                        name,
+                        property_span,
+                        target.visibility,
+                        target.declaring_class,
+                    );
+                }
+            }
+        }
+        let readonly_property = found.is_some_and(|target| target.readonly);
+        if !readonly_collection && !readonly_property {
+            return value;
+        }
+        if !readonly_collection
+            && found.is_some_and(|target| {
+                self.readonly_member_assignment_allowed(&member.object, target)
+            })
+        {
+            return value;
+        }
+
+        let name = static_name.unwrap_or_else(|| "computed".to_owned());
+        self.emit_diagnostic(Diagnostic::readonly_assignment(property_span, &name));
         value
     }
 
@@ -444,24 +809,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         // Look up the property on the base **object** type. Snapshot the property's
         // type + `readonly` + `is_accessor` + origin before any `&mut` borrow for a
         // diagnostic.
-        let object_found = self
-            .interner
-            .store()
-            .object_type(base_ty)
-            .and_then(|obj| obj.property(prop_name))
-            .map(|prop| MemberAssignmentTarget {
-                ty: prop.write_ty.unwrap_or(prop.ty),
-                visibility: prop.visibility,
-                readonly: prop.readonly,
-                is_accessor: prop.is_accessor,
-                declaring_class: prop.declaring_class,
-            });
-
-        // Union bases have no single object; fall back to the read-side union member
-        // model so readonly and type checks are not skipped.
-        let found = match body_this_found.or(object_found) {
+        let found = match body_this_found {
             Some(found) => Some(found),
-            None => match self.union_member_assignment_target(base_ty, prop_name) {
+            None => match self.structural_member_assignment_target(base_ty, prop_name) {
                 DemandOutcome::Ready(found) => found,
                 DemandOutcome::Exhausted(exhaustion) => {
                     self.own_type_demand(DemandOutcome::Exhausted(exhaustion), property_span);
@@ -499,26 +849,29 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         // `readonly` data fields may be assigned only as `this.prop` in the declaring
         // constructor. Get-only accessors are read-only everywhere, so the carve-out
         // is gated on `!is_accessor`.
-        if readonly {
-            let in_declaring_ctor = !is_accessor
-                && self.current_in_ctor
-                && matches!(
-                    (self.current_class, declaring_class),
-                    (Some(ctx), Some(owner)) if ctx == owner
-                );
-            if !(base_is_this(&member.object) && in_declaring_ctor) {
-                self.emit_diagnostic(Diagnostic::readonly_assignment(
-                    Span::from_oxc(member.property.span),
-                    member.property.name.as_str(),
-                ));
-                // `TK2540` is the assignment error for this target; do not also collect a
-                // type-assignability obligation (the fixtures' readonly RHS types already
-                // match, and tsc surfaces the read-only violation as the assignment error).
-                return value;
-            }
-            // Allowed (declaring constructor): fall through to the normal type check, so a
-            // *type-wrong* `this.readonly = …` in the constructor is still `TK2322`.
+        if readonly
+            && !self.readonly_member_assignment_allowed(
+                &member.object,
+                MemberAssignmentTarget {
+                    ty: prop_ty,
+                    visibility,
+                    readonly,
+                    is_accessor,
+                    declaring_class,
+                },
+            )
+        {
+            self.emit_diagnostic(Diagnostic::readonly_assignment(
+                Span::from_oxc(member.property.span),
+                member.property.name.as_str(),
+            ));
+            // `TK2540` is the assignment error for this target; do not also collect a
+            // type-assignability obligation (the fixtures' readonly RHS types already
+            // match, and tsc surfaces the read-only violation as the assignment error).
+            return value;
         }
+        // Allowed (declaring constructor): fall through to the normal type check, so a
+        // *type-wrong* `this.readonly = …` in the constructor is still `TK2322`.
 
         // Type-assignability obligation: the RHS must be assignable to the property's type.
         // Skipped when the RHS type is the error type (incomplete inference — see the doc
@@ -555,6 +908,43 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
 
         value
+    }
+
+    fn readonly_member_assignment_allowed(
+        &self,
+        object: &Expression<'_>,
+        target: MemberAssignmentTarget,
+    ) -> bool {
+        !target.is_accessor
+            && self.current_in_ctor
+            && base_is_this(object)
+            && matches!(
+                (self.current_class, target.declaring_class),
+                (Some(context), Some(owner)) if context == owner
+            )
+    }
+
+    fn structural_member_assignment_target(
+        &mut self,
+        base_ty: TypeId,
+        prop_name: &str,
+    ) -> DemandOutcome<Option<MemberAssignmentTarget>> {
+        let object_found = self
+            .interner
+            .store()
+            .object_type(base_ty)
+            .and_then(|object| object.property(prop_name))
+            .map(|property| MemberAssignmentTarget {
+                ty: property.write_ty.unwrap_or(property.ty),
+                visibility: property.visibility,
+                readonly: property.readonly,
+                is_accessor: property.is_accessor,
+                declaring_class: property.declaring_class,
+            });
+        match object_found {
+            Some(found) => DemandOutcome::Ready(Some(found)),
+            None => self.union_member_assignment_target(base_ty, prop_name),
+        }
     }
 
     /// Resolve a union assignment target. The property must exist on every member;
@@ -862,6 +1252,35 @@ fn is_excess_literal_shape(store: &Store, ty: TypeId) -> bool {
         store.tag(ty),
         TypeTag::Object | TypeTag::Array | TypeTag::Tuple
     )
+}
+
+fn literal_child_expression<'e, 'ast>(
+    expr: &'e Expression<'ast>,
+    edge: &LiteralEdge,
+) -> Option<&'e Expression<'ast>> {
+    match (expr, edge) {
+        (Expression::ObjectExpression(object), LiteralEdge::Property { ordinal, .. }) => {
+            match object.properties.get(*ordinal)? {
+                ObjectPropertyKind::ObjectProperty(property) => Some(&property.value),
+                _ => None,
+            }
+        }
+        (Expression::ArrayExpression(array), LiteralEdge::Element(index)) => {
+            array.elements.get(*index)?.as_expression()
+        }
+        (Expression::ParenthesizedExpression(paren), LiteralEdge::Parenthesized) => {
+            Some(&paren.expression)
+        }
+        (Expression::ConditionalExpression(cond), LiteralEdge::Consequent) => {
+            Some(&cond.consequent)
+        }
+        (Expression::ConditionalExpression(cond), LiteralEdge::Alternate) => Some(&cond.alternate),
+        (Expression::LogicalExpression(logical), LiteralEdge::LogicalLeft(_)) => {
+            Some(&logical.left)
+        }
+        (Expression::LogicalExpression(logical), LiteralEdge::LogicalRight) => Some(&logical.right),
+        _ => None,
+    }
 }
 
 /// Recursive excess-property check. M19 index signatures suppress unknown keys
@@ -1175,6 +1594,65 @@ fn is_numeric_property_name(name: &str) -> bool {
     name.parse::<f64>().map(|n| n.is_finite()).unwrap_or(false)
 }
 
+fn readonly_collection_target(
+    store: &Store,
+    ty: TypeId,
+    key_ty: Option<TypeId>,
+    static_name: Option<&str>,
+) -> bool {
+    if let Some(operand) = store.readonly_operand(ty) {
+        if let Some(tuple) = store.tuple_type(operand) {
+            return collection_index(store, key_ty, static_name)
+                .is_some_and(|index| index.is_none_or(|index| index < tuple.elements.len()));
+        }
+        if store.array_type(operand).is_some() {
+            return collection_index(store, key_ty, static_name).is_some();
+        }
+        return false;
+    }
+    store.union_members(ty).is_some_and(|members| {
+        members
+            .iter()
+            .any(|member| readonly_collection_target(store, *member, key_ty, static_name))
+    })
+}
+
+fn collection_index(
+    store: &Store,
+    key_ty: Option<TypeId>,
+    static_name: Option<&str>,
+) -> Option<Option<usize>> {
+    if let Some(name) = static_name {
+        let index = name.parse::<usize>().ok()?;
+        return (index.to_string() == name).then_some(Some(index));
+    }
+    let key_ty = key_ty?;
+    match store.literal_value(key_ty) {
+        Some(LiteralValue::String(name)) => {
+            let index = name.parse::<usize>().ok()?;
+            (index.to_string() == *name).then_some(Some(index))
+        }
+        Some(LiteralValue::Number(value)) if *value >= 0.0 && value.fract() == 0.0 => {
+            let value = if *value == 0.0 {
+                "0".to_string()
+            } else {
+                value.to_string()
+            };
+            value.parse::<usize>().ok().map(Some)
+        }
+        _ if store.intrinsic_kind(key_ty) == Some(IntrinsicKind::Number) => Some(None),
+        _ => None,
+    }
+}
+
+fn literal_property_name(store: &Store, ty: TypeId) -> Option<String> {
+    match store.literal_value(ty) {
+        Some(LiteralValue::String(name)) => Some(name.clone()),
+        Some(LiteralValue::Number(value)) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
 /// Whether an assignment-target base expression is the `this` keyword (M14), unwrapping
 /// redundant parentheses (`(this).prop`). Used to gate the `readonly` constructor
 /// allowance, which applies only to `this.prop` — not to `obj.prop` on some other
@@ -1198,34 +1676,7 @@ pub(in crate::check::checker) fn declared_from_init(
     if kind.is_const() {
         return init_ty;
     }
-    widen_declared_literals(interner, init_ty)
-}
-
-/// Widen the literal types an initializer produced, **member-wise** for a union
-/// (tsc's `getWidenedLiteralType` maps over constituents), so `let x = c ? 1 : 2` is
-/// `number` and a later `x = 3` stays legal.
-fn widen_declared_literals(interner: &mut Interner, ty: TypeId) -> TypeId {
-    if let Some(whole) = interner.store().enum_member_whole_type_id(ty) {
-        return whole;
-    }
-    if let Some(lit) = interner.store().literal_value(ty) {
-        return intrinsic_id(interner.well_known(), lit.base_kind());
-    }
-    let Some(members) = interner.store().union_members(ty).map(<[TypeId]>::to_vec) else {
-        return ty;
-    };
-    let mut widened = Vec::with_capacity(members.len());
-    let mut changed = false;
-    for member in members {
-        let base = widen_declared_literals(interner, member);
-        changed |= base != member;
-        widened.push(base);
-    }
-    if changed {
-        interner.union(widened)
-    } else {
-        ty
-    }
+    interner.widen_literal_type(init_ty)
 }
 
 /// The [`ValueStorageId`] of a declarator's binding, resolved through the scope graph by
@@ -1270,6 +1721,10 @@ mod enum_widen_tests {
             .store()
             .enum_member_type_id(enum_id, member_id)
             .expect("interning the family publishes its exact member");
+        let regular = member;
+        let member = interner
+            .intern_widening_literal(regular)
+            .expect("ordinary enum initializer");
 
         assert_eq!(
             declared_from_init(&mut interner, VariableDeclarationKind::Let, member),
@@ -1280,5 +1735,10 @@ mod enum_widen_tests {
             member
         );
         assert_eq!(widen(&mut interner, member), whole);
+        assert_eq!(
+            declared_from_init(&mut interner, VariableDeclarationKind::Let, regular),
+            regular
+        );
+        assert_eq!(widen(&mut interner, regular), regular);
     }
 }

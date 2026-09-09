@@ -65,6 +65,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         // body is checked — exactly as the instance template was lowered in `fill_class`.
         // Save class context so nested classes do not permanently clobber enclosing state.
         let saved_this = self.current_this;
+        let saved_initializer_validation = self.active_initializer_validation.take();
+        let saved_initializer_validation_failed =
+            std::mem::replace(&mut self.initializer_validation_failed, false);
         let saved_body_this_environment = self.current_body_this_environment.clone();
         let saved_class = self.current_class;
         let saved_super_ctor = self.current_super_ctor;
@@ -170,6 +173,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
         self.current_super_ctor = saved_super_ctor;
         self.current_in_ctor = saved_in_ctor;
+        self.active_initializer_validation = saved_initializer_validation;
+        self.initializer_validation_failed = saved_initializer_validation_failed;
     }
 
     /// Check member bodies with class context already bound by [`check_class`].
@@ -190,7 +195,16 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             member_view: body_member_view,
         } = surfaces;
         self.check_class_overload_implementations(class, retained);
-        for element in &class.body.body {
+        let member_sites = self
+            .lexical_events
+            .class_at(
+                super::super::lexical_events::source_ordinal(self.current_source),
+                class.span.start,
+            )
+            .and_then(|site| self.lexical_events.class(site))
+            .map(|class| class.members.clone())
+            .unwrap_or_default();
+        for (index, element) in class.body.body.iter().enumerate() {
             let ClassElement::MethodDefinition(method) = element else {
                 // Field initializers are checked here, with `this` bound to the instance
                 // or static side. Static blocks and `accessor` properties remain out of
@@ -219,6 +233,19 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         // Annotated field initializers use the variable-initializer path
                         // (assignability, fresh excess, contextual typing). `readonly` is
                         // irrelevant here; optional fields target their `T | undefined` type.
+                        let validation = member_sites
+                            .get(index)
+                            .and_then(|member| self.class_initializer_validation.get(member))
+                            .filter(|input| {
+                                input.source == self.current_source
+                                    && Some(input.class) == self.current_class
+                                    && Some(&input.member) == member_sites.get(index)
+                            })
+                            .map(|input| input.member);
+                        let saved_validation =
+                            std::mem::replace(&mut self.active_initializer_validation, validation);
+                        let saved_validation_failed =
+                            std::mem::replace(&mut self.initializer_validation_failed, false);
                         self.with_lexical_effects(
                             prop.span.start,
                             LexicalOwnerPhase::Body,
@@ -249,6 +276,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                                 );
                             },
                         );
+                        self.active_initializer_validation = saved_validation;
+                        self.initializer_validation_failed = saved_validation_failed;
                         self.current_this = saved_member_this;
                         self.current_body_this_environment = saved_body_this_environment;
                     }

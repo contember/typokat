@@ -37,11 +37,12 @@ pub enum FlowNode {
     Unreachable,
     /// Reserved sentinel: flow start — the declared type (slot 1).
     Start,
-    /// An assignment in straight-line flow. `None` resets to the declared type for
-    /// complex/compound assignments, the sound over-report direction.
+    /// An assignment in straight-line flow. Missing value and source reset to the
+    /// declared type for complex/compound assignments, the sound over-report direction.
     Assignment {
         symbol: SymbolId,
         assigned: Option<TypeId>,
+        assigned_source: Option<SymbolId>,
         antecedent: FlowNodeId,
     },
     /// A condition branch: the guard's `op` applied to `symbol` under `positive`
@@ -204,6 +205,150 @@ pub(in crate::check) fn narrow_query<L: PublishedClassLookup + ?Sized>(
     outcome
 }
 
+pub(in crate::check) fn assignment_reduce_query<L: PublishedClassLookup + ?Sized>(
+    interner: &mut Interner,
+    published: &L,
+    state: &mut SemanticQueryState,
+    next_type_param: &mut u32,
+    declared: TypeId,
+    source: TypeId,
+) -> SemanticQueryAttempt<DemandOutcome<TypeId>> {
+    state.savepoint();
+    let outcome = assignment_reduce_inner(
+        interner,
+        published,
+        state,
+        next_type_param,
+        declared,
+        source,
+    );
+    if matches!(
+        outcome,
+        SemanticQueryAttempt::Complete(DemandOutcome::Ready(_))
+    ) {
+        state.commit();
+    } else {
+        state.rollback();
+    }
+    outcome
+}
+
+fn assignment_reduce_inner<L: PublishedClassLookup + ?Sized>(
+    interner: &mut Interner,
+    published: &L,
+    state: &mut SemanticQueryState,
+    next_type_param: &mut u32,
+    declared: TypeId,
+    source: TypeId,
+) -> SemanticQueryAttempt<DemandOutcome<TypeId>> {
+    // Original endpoints must pass recursive poison preflight before any shortcut.
+    match SemanticQueryCoordinator::new(interner, published, state, next_type_param)
+        .is_assignable_attempt(source, declared)
+    {
+        SemanticQueryAttempt::Complete(RelationOutcome::Yes | RelationOutcome::No(_)) => {}
+        SemanticQueryAttempt::Complete(RelationOutcome::Exhausted(reason)) => {
+            return SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(reason));
+        }
+        SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+            return SemanticQueryAttempt::NeedsNativeIdentities(demands);
+        }
+    }
+    let wk = interner.well_known();
+    let members = if declared == wk.boolean
+        || interner.store().union_members(declared).is_some()
+        || interner
+            .store()
+            .closed_enum_member_types(declared)
+            .is_some()
+    {
+        enum_expanded_members(interner.store(), declared)
+    } else {
+        return SemanticQueryAttempt::Complete(DemandOutcome::Ready(declared));
+    };
+    let members = assignment_boolean_members(interner, members);
+    if source == wk.never || source == declared {
+        return SemanticQueryAttempt::Complete(DemandOutcome::Ready(source));
+    }
+    let sources = interner
+        .store()
+        .union_members(source)
+        .map_or_else(|| vec![source], |members| members.to_vec());
+    let sources = assignment_boolean_members(interner, sources);
+    let fresh_boolean = interner.store().widening_literal_operand(source).is_some()
+        && matches!(
+            interner.store().literal_value(source),
+            Some(LiteralValue::Boolean(_))
+        );
+    let mut kept = Vec::new();
+    for member in members {
+        for contribution in &sources {
+            let decision =
+                SemanticQueryCoordinator::new(interner, published, state, next_type_param)
+                    .is_assignable_attempt(*contribution, member);
+            match decision {
+                SemanticQueryAttempt::Complete(RelationOutcome::Yes) => {
+                    let selected = if fresh_boolean {
+                        match interner.store().literal_value(member).cloned() {
+                            Some(value @ LiteralValue::Boolean(_)) => {
+                                interner.intern_ordinary_literal(value)
+                            }
+                            _ => member,
+                        }
+                    } else {
+                        member
+                    };
+                    kept.push(selected);
+                    break;
+                }
+                SemanticQueryAttempt::Complete(RelationOutcome::No(_)) => {}
+                SemanticQueryAttempt::Complete(RelationOutcome::Exhausted(reason)) => {
+                    return SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(reason));
+                }
+                SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+                    return SemanticQueryAttempt::NeedsNativeIdentities(demands);
+                }
+            }
+        }
+    }
+    let false_type = interner.intern_literal(LiteralValue::Boolean(false));
+    let true_type = interner.intern_literal(LiteralValue::Boolean(true));
+    if kept.contains(&false_type) && kept.contains(&true_type) {
+        kept.retain(|member| *member != false_type && *member != true_type);
+        kept.push(wk.boolean);
+    }
+    let reduced = interner.union(kept);
+    match SemanticQueryCoordinator::new(interner, published, state, next_type_param)
+        .is_assignable_attempt(source, reduced)
+    {
+        SemanticQueryAttempt::Complete(RelationOutcome::Yes) => {
+            SemanticQueryAttempt::Complete(DemandOutcome::Ready(reduced))
+        }
+        SemanticQueryAttempt::Complete(RelationOutcome::No(_)) => {
+            SemanticQueryAttempt::Complete(DemandOutcome::Ready(declared))
+        }
+        SemanticQueryAttempt::Complete(RelationOutcome::Exhausted(reason)) => {
+            SemanticQueryAttempt::Complete(DemandOutcome::Exhausted(reason))
+        }
+        SemanticQueryAttempt::NeedsNativeIdentities(demands) => {
+            SemanticQueryAttempt::NeedsNativeIdentities(demands)
+        }
+    }
+}
+
+fn assignment_boolean_members(interner: &mut Interner, members: Vec<TypeId>) -> Vec<TypeId> {
+    let boolean = interner.well_known().boolean;
+    let mut expanded = Vec::with_capacity(members.len());
+    for member in members {
+        if member == boolean {
+            expanded.push(interner.intern_literal(LiteralValue::Boolean(false)));
+            expanded.push(interner.intern_literal(LiteralValue::Boolean(true)));
+        } else {
+            expanded.push(member);
+        }
+    }
+    expanded
+}
+
 /// Narrow by `typeof x === <tag>`. Then keeps matching primitive/literal members;
 /// else keeps the complement. `any` stays un-narrowable.
 pub fn narrow_by_typeof(interner: &mut Interner, ty: TypeId, tag: TypeofTag, keep: bool) -> TypeId {
@@ -288,8 +433,10 @@ fn equality_subject_refines_to_member(
         };
         current = constraint;
     }
-    matches!(store.tag(current), TypeTag::Enum | TypeTag::EnumMember)
-        && enum_equality_overlap(store, current, compared_ty) != EqualityOverlap::Never
+    matches!(
+        store.tag(store.regular_literal_type(current)),
+        TypeTag::Enum | TypeTag::EnumMember
+    ) && enum_equality_overlap(store, current, compared_ty) != EqualityOverlap::Never
 }
 
 /// Narrow by truthiness. Boolean is split into its exact literal branch. Broad
@@ -432,9 +579,13 @@ fn discriminant_keeps(
         // either branch → keep it (conservative, sound).
         return true;
     };
-    if matches!(store.tag(prop_ty), TypeTag::Enum | TypeTag::EnumMember)
-        || matches!(store.tag(literal), TypeTag::Enum | TypeTag::EnumMember)
-    {
+    if matches!(
+        store.tag(store.regular_literal_type(prop_ty)),
+        TypeTag::Enum | TypeTag::EnumMember
+    ) || matches!(
+        store.tag(store.regular_literal_type(literal)),
+        TypeTag::Enum | TypeTag::EnumMember
+    ) {
         let overlap = enum_equality_overlap(store, prop_ty, literal);
         return if positive {
             overlap != EqualityOverlap::Never
@@ -449,7 +600,7 @@ fn discriminant_keeps(
     } else {
         // else-branch: drop only when `m.prop` is exactly the literal (so
         // `m.prop === literal` always holds and `!==` excludes the member).
-        prop_ty != literal
+        store.regular_literal_type(prop_ty) != store.regular_literal_type(literal)
     }
 }
 
@@ -462,10 +613,16 @@ fn literal_could_equal_property(
     property: TypeId,
     wk: crate::types::WellKnown,
 ) -> bool {
-    if literal == property || property == wk.any || property == wk.error {
+    if store.regular_literal_type(literal) == store.regular_literal_type(property)
+        || property == wk.any
+        || property == wk.error
+    {
         return true;
     }
     match store.tag(property) {
+        TypeTag::WideningLiteral => {
+            literal_could_equal_property(store, literal, store.regular_literal_type(property), wk)
+        }
         TypeTag::Literal => false,
         TypeTag::Intrinsic => match store.literal_value(literal) {
             Some(value) => store.intrinsic_kind(property) == Some(value.base_kind()),
@@ -519,10 +676,14 @@ pub(in crate::check) fn discriminant_keeps_query<L: PublishedClassLookup + ?Size
         return SemanticQueryAttempt::Complete(DemandOutcome::Ready(true));
     };
     if matches!(
-        coordinator.store().tag(prop_ty),
+        coordinator
+            .store()
+            .tag(coordinator.store().regular_literal_type(prop_ty)),
         TypeTag::Enum | TypeTag::EnumMember
     ) || matches!(
-        coordinator.store().tag(literal),
+        coordinator
+            .store()
+            .tag(coordinator.store().regular_literal_type(literal)),
         TypeTag::Enum | TypeTag::EnumMember
     ) {
         let overlap = enum_equality_overlap(coordinator.store(), prop_ty, literal);
@@ -533,7 +694,10 @@ pub(in crate::check) fn discriminant_keeps_query<L: PublishedClassLookup + ?Size
         }));
     }
     if !positive {
-        return SemanticQueryAttempt::Complete(DemandOutcome::Ready(prop_ty != literal));
+        return SemanticQueryAttempt::Complete(DemandOutcome::Ready(
+            coordinator.store().regular_literal_type(prop_ty)
+                != coordinator.store().regular_literal_type(literal),
+        ));
     }
     match coordinator.is_assignable_attempt(literal, prop_ty) {
         SemanticQueryAttempt::Complete(RelationOutcome::Yes) => {
@@ -783,6 +947,7 @@ fn member_matches_typeof(
     tag: TypeofTag,
 ) -> bool {
     match store.tag(member) {
+        TypeTag::WideningLiteral => member_matches_typeof(store, store.regular_literal_type(member), tag),
         TypeTag::Intrinsic => store.intrinsic_kind(member) == Some(tag.intrinsic()),
         TypeTag::Literal => store.literal_value(member).map(LiteralValue::base_kind) == Some(tag.intrinsic()),
         // M27: a template literal type is a string subtype, so it matches `typeof x ===
@@ -851,6 +1016,7 @@ fn typeof_overlap_inner(
     tag: TypeofTag,
     seen: &mut rustc_hash::FxHashSet<crate::types::repr::TypeParamId>,
 ) -> EqualityOverlap {
+    let ty = store.regular_literal_type(ty);
     if let Some(parameter) = store.type_param(ty) {
         if !seen.insert(parameter.id) {
             return EqualityOverlap::Maybe;
@@ -1004,7 +1170,7 @@ fn enum_overlap_type_contains_enum(store: &crate::types::store::Store, ty: TypeI
         ty: TypeId,
         seen: &mut rustc_hash::FxHashSet<crate::types::repr::TypeParamId>,
     ) -> bool {
-        match store.tag(ty) {
+        match store.tag(store.regular_literal_type(ty)) {
             TypeTag::Enum | TypeTag::EnumMember => true,
             TypeTag::Union => store.union_members(ty).is_some_and(|members| {
                 members
@@ -1073,8 +1239,8 @@ fn enum_equality_overlap_inner(
             .collect::<Vec<_>>();
         return combine_equality_overlaps(&outcomes);
     }
-    if left == right {
-        return match store.tag(left) {
+    if store.regular_literal_type(left) == store.regular_literal_type(right) {
+        return match store.tag(store.regular_literal_type(left)) {
             TypeTag::Literal | TypeTag::EnumMember => EqualityOverlap::Always,
             _ => EqualityOverlap::Maybe,
         };

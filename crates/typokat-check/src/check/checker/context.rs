@@ -45,6 +45,155 @@ use super::type_groups::{
     TypeGroupConstruction,
 };
 
+#[derive(Clone)]
+pub(in crate::check::checker) struct CheckedExpr {
+    pub ty: TypeId,
+    pub span: Span,
+    pub literal: Option<Arc<LiteralSource>>,
+}
+
+#[derive(Clone)]
+pub(in crate::check::checker) struct LiteralSource {
+    pub module: ScopeId,
+    pub scope: ScopeId,
+    pub full_span: Span,
+    pub context: Option<super::expr::PreparedInitializerContext>,
+    pub kind: LiteralKind,
+    pub children: Arc<[LiteralChild]>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(in crate::check::checker) enum LiteralKind {
+    Object,
+    Array,
+    Parenthesized,
+    Conditional,
+    Logical,
+}
+
+pub(in crate::check::checker) enum LiteralEdge {
+    Property {
+        ordinal: usize,
+        name: Option<String>,
+        key_span: Span,
+    },
+    Element(usize),
+    Parenthesized,
+    Consequent,
+    Alternate,
+    LogicalLeft(LiteralValueFilter),
+    LogicalRight,
+}
+
+#[derive(Clone, Copy)]
+pub(in crate::check::checker) enum LiteralValueFilter {
+    Truthy,
+    NonNullish,
+}
+
+pub(in crate::check::checker) struct LiteralChild {
+    pub edge: LiteralEdge,
+    pub full_span: Span,
+    pub checked: Option<CheckedExpr>,
+    pub contribution: Option<TypeId>,
+    pub required: bool,
+}
+
+impl CheckedExpr {
+    pub fn opaque((ty, span): (TypeId, Span)) -> Self {
+        Self {
+            ty,
+            span,
+            literal: None,
+        }
+    }
+
+    pub fn tuple(&self) -> (TypeId, Span) {
+        (self.ty, self.span)
+    }
+
+    pub fn with_context(
+        mut self,
+        context: Option<super::expr::PreparedInitializerContext>,
+    ) -> Self {
+        if let Some(literal) = &mut self.literal {
+            Arc::make_mut(literal).context = context;
+        }
+        self
+    }
+
+    pub fn append_type_roots(&self, roots: &mut Vec<TypeId>) {
+        roots.push(self.ty);
+        if let Some(literal) = &self.literal {
+            if let Some(context) = literal.context {
+                roots.extend([
+                    context.original_target,
+                    context.publication_context,
+                    context.shaping_context,
+                ]);
+                roots.extend(context.contextual_this);
+            }
+            for child in literal.children.iter() {
+                roots.extend(child.contribution);
+                if let Some(checked) = &child.checked {
+                    checked.append_type_roots(roots);
+                }
+            }
+        }
+    }
+}
+
+pub(in crate::check::checker) struct PreparedLiteralAssignment {
+    pub root: LiteralAssignmentSite,
+    pub unavailable_sites: Vec<UnavailableLiteralSite>,
+}
+
+pub(in crate::check::checker) struct LiteralAssignmentSite {
+    pub residual: AssignObligation,
+    pub children: Vec<LiteralAssignmentSite>,
+    pub excess: Vec<Diagnostic>,
+    pub decomposed: bool,
+    pub unavailable: bool,
+    pub preparation_failure: Option<crate::class_semantics::Exhaustion>,
+    pub missing_required: bool,
+}
+
+#[derive(Clone)]
+pub(in crate::check::checker) struct UnavailableLiteralSite {
+    pub span: Span,
+    pub target: TypeId,
+    pub evidence: LiteralUnavailableEvidence,
+}
+
+#[derive(Clone)]
+pub(in crate::check::checker) enum LiteralUnavailableEvidence {
+    Demand(crate::class_semantics::Exhaustion),
+    SourceWalk,
+}
+
+pub(in crate::check::checker) struct LiteralQueryFailure {
+    pub obligation: AssignObligation,
+    pub exhaustion: crate::class_semantics::Exhaustion,
+}
+
+pub(in crate::check::checker) enum LiteralDecision {
+    Valid,
+    Invalid(Vec<Diagnostic>),
+}
+
+pub(in crate::check::checker) enum LiteralGroupOutcome {
+    Decided(LiteralDecision),
+    Unavailable {
+        diagnostics: Vec<Diagnostic>,
+        sites: Vec<UnavailableLiteralSite>,
+    },
+    Exhausted {
+        diagnostics: Vec<Diagnostic>,
+        failures: Vec<LiteralQueryFailure>,
+        unavailable_sites: Vec<UnavailableLiteralSite>,
+    },
+}
+
 /// Authenticated value-space roots that may authorize syntax-directed lowering.
 ///
 /// These ids come only from authenticated library ownership projections. A
@@ -81,6 +230,7 @@ pub(in crate::check::checker) enum ObligationKind {
 /// One assignability obligation: `src` must be assignable to `tgt`, with the
 /// resulting diagnostic's primary span at `src_span` and its code determined by
 /// `kind`.
+#[derive(Clone)]
 pub(in crate::check::checker) struct AssignObligation {
     pub(in crate::check::checker) src: TypeId,
     pub(in crate::check::checker) tgt: TypeId,
@@ -97,6 +247,69 @@ pub(in crate::check::checker) struct SatisfiesCheckNode {
 
 pub(in crate::check::checker) struct SatisfiesObligation {
     pub(in crate::check::checker) root: SatisfiesCheckNode,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(in crate::check::checker) enum InitializerValidationBoundary {
+    SatisfiesOperand,
+    Contribution,
+    CompletedContainer,
+    InferredArrowBody,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(in crate::check::checker) struct InitializerValidationRows {
+    sources: FxHashMap<(u32, u32, InitializerValidationBoundary), TypeId>,
+}
+
+impl InitializerValidationRows {
+    pub(in crate::check::checker) fn insert(
+        &mut self,
+        span: Span,
+        boundary: InitializerValidationBoundary,
+        source: TypeId,
+    ) {
+        if boundary == InitializerValidationBoundary::Contribution
+            && self.get(span, InitializerValidationBoundary::CompletedContainer) == Some(source)
+        {
+            return;
+        }
+        let previous = self
+            .sources
+            .insert((span.start, span.end, boundary), source);
+        debug_assert!(previous.is_none() || previous == Some(source));
+    }
+
+    pub(in crate::check::checker) fn get(
+        &self,
+        span: Span,
+        boundary: InitializerValidationBoundary,
+    ) -> Option<TypeId> {
+        self.sources
+            .get(&(span.start, span.end, boundary))
+            .copied()
+            .or_else(|| {
+                (boundary == InitializerValidationBoundary::Contribution)
+                    .then(|| {
+                        self.sources
+                            .get(&(
+                                span.start,
+                                span.end,
+                                InitializerValidationBoundary::CompletedContainer,
+                            ))
+                            .copied()
+                    })
+                    .flatten()
+            })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(in crate::check::checker) struct InitializerValidationSources {
+    pub source: SourceUnit,
+    pub class: ClassId,
+    pub member: super::lexical_events::MemberSiteId,
+    pub rows: InitializerValidationRows,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -138,6 +351,7 @@ pub(in crate::check::checker) struct AssertionCompatibilityObligation {
 /// Relation work retains one scheduling order within its lexical effect owner.
 pub(in crate::check::checker) enum DeferredRelationObligation {
     Assign(AssignObligation),
+    LiteralAssignment(PreparedLiteralAssignment),
     Satisfies(SatisfiesObligation),
     AssertionCompatibility(AssertionCompatibilityObligation),
 }
@@ -414,11 +628,18 @@ impl PendingEffectSlots {
 #[derive(Clone, Copy)]
 struct DeclEvent {
     id: ValueStorageId,
-    /// The slot's value before a write; equal to `value` for a read.
-    previous: Option<TypeId>,
-    value: Option<TypeId>,
+    /// The slot's state before a write; equal to `value` for a read.
+    previous: DeclState,
+    value: DeclState,
     write: bool,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DeclState {
+    ty: Option<TypeId>,
+}
+
+pub(in crate::check::checker) type DeclDependency = (ValueStorageId, Option<TypeId>);
 
 /// One slot's net movement across a stretch of walking: what it held when the stretch
 /// began and what it holds now. A slot written and then restored has `previous ==
@@ -443,12 +664,7 @@ fn observing_declarations() -> bool {
     DECL_OBSERVATIONS.with(|log| log.borrow().is_some())
 }
 
-fn observe_declaration(
-    id: ValueStorageId,
-    previous: Option<TypeId>,
-    value: Option<TypeId>,
-    write: bool,
-) {
+fn observe_declaration(id: ValueStorageId, previous: DeclState, value: DeclState, write: bool) {
     DECL_OBSERVATIONS.with(|log| {
         if let Some(log) = log.borrow_mut().as_mut() {
             log.push(DeclEvent {
@@ -461,9 +677,7 @@ fn observe_declaration(
     });
 }
 
-/// Per-declaration computed types, indexed by [`ValueStorageId`]. `None` means a
-/// declaration whose type could not be computed (out of subset); a reference to
-/// it resolves to the error type defensively.
+/// Per-declaration complete computed types, indexed by [`ValueStorageId`].
 #[derive(Clone)]
 pub(in crate::check::checker) struct DeclTypes {
     base: Arc<[Option<TypeId>]>,
@@ -480,7 +694,7 @@ impl DeclTypes {
 
     /// The single mutator: every declaration-type change in the checker reaches the
     /// table through here, so the observation log cannot fall behind.
-    fn put(&mut self, id: ValueStorageId, value: Option<TypeId>) {
+    fn put_state(&mut self, id: ValueStorageId, value: DeclState) {
         if id.index() < self.base.len() {
             return;
         }
@@ -491,16 +705,16 @@ impl DeclTypes {
         else {
             return;
         };
-        let previous = *slot;
+        let previous = DeclState { ty: *slot };
         if previous == value {
             return;
         }
-        *slot = value;
+        *slot = value.ty;
         observe_declaration(id, previous, value, true);
     }
 
     pub(in crate::check::checker) fn set(&mut self, id: ValueStorageId, ty: TypeId) {
-        self.put(id, Some(ty));
+        self.put_state(id, DeclState { ty: Some(ty) });
     }
 
     /// Read a slot without recording the read. Reserved for the memo's own validity
@@ -511,6 +725,12 @@ impl DeclTypes {
             return self.base.get(index).copied().flatten();
         }
         self.local.get(index - self.base.len()).copied().flatten()
+    }
+
+    fn untracked_state(&self, id: ValueStorageId) -> DeclState {
+        DeclState {
+            ty: self.untracked_get(id),
+        }
     }
 
     /// Open/close the observation log. The checker keeps it open for exactly the
@@ -536,9 +756,7 @@ impl DeclTypes {
     /// The slots a walk depended on: those it read **before** it wrote them. A slot
     /// the walk wrote first is its own output, not an input, so re-running the walk in
     /// an environment that disagrees only there would still take the same path.
-    pub(in crate::check::checker) fn dependencies_since(
-        mark: usize,
-    ) -> Vec<(ValueStorageId, Option<TypeId>)> {
+    pub(in crate::check::checker) fn dependencies_since(mark: usize) -> Vec<DeclDependency> {
         let mut seen: FxHashSet<ValueStorageId> = FxHashSet::default();
         let mut dependencies = Vec::new();
         Self::with_log_tail(mark, |tail| {
@@ -547,7 +765,7 @@ impl DeclTypes {
                     continue;
                 }
                 if !event.write {
-                    dependencies.push((event.id, event.value));
+                    dependencies.push((event.id, event.value.ty));
                 }
             }
         });
@@ -559,8 +777,7 @@ impl DeclTypes {
     /// mark was taken in reproduces the current state exactly.
     pub(in crate::check::checker) fn net_writes_since(mark: usize) -> Vec<NetDeclWrite> {
         let mut order: Vec<ValueStorageId> = Vec::new();
-        let mut movement: FxHashMap<ValueStorageId, (Option<TypeId>, Option<TypeId>)> =
-            FxHashMap::default();
+        let mut movement: FxHashMap<ValueStorageId, (DeclState, DeclState)> = FxHashMap::default();
         Self::with_log_tail(mark, |tail| {
             for event in tail.iter().filter(|event| event.write) {
                 match movement.get_mut(&event.id) {
@@ -582,8 +799,8 @@ impl DeclTypes {
             .filter(|&(_, previous, value)| previous != value)
             .map(|(id, previous, value)| NetDeclWrite {
                 id,
-                previous,
-                value,
+                previous: previous.ty,
+                value: value.ty,
             })
             .collect()
     }
@@ -599,21 +816,20 @@ impl DeclTypes {
     /// Whether every slot a memoized walk depended on still holds the value it saw.
     pub(in crate::check::checker) fn dependencies_hold(
         &self,
-        dependencies: &[(ValueStorageId, Option<TypeId>)],
+        dependencies: &[DeclDependency],
     ) -> bool {
         dependencies
             .iter()
-            .all(|&(id, value)| self.untracked_get(id) == value)
+            .all(|&(id, ty)| self.untracked_state(id) == (DeclState { ty }))
     }
 
     /// Re-observe a memoized walk's dependencies, so an enclosing walk inherits them
     /// as its own — the skipped walk read those slots, and the enclosing walk's memo
     /// entry must say so.
-    pub(in crate::check::checker) fn replay_dependencies(
-        dependencies: &[(ValueStorageId, Option<TypeId>)],
-    ) {
-        for &(id, value) in dependencies {
-            observe_declaration(id, value, value, false);
+    pub(in crate::check::checker) fn replay_dependencies(dependencies: &[DeclDependency]) {
+        for &(id, ty) in dependencies {
+            let state = DeclState { ty };
+            observe_declaration(id, state, state, false);
         }
     }
 
@@ -621,7 +837,7 @@ impl DeclTypes {
     /// same bindings behind that performing it would have.
     pub(in crate::check::checker) fn apply_writes(&mut self, writes: &[NetDeclWrite]) {
         for write in writes {
-            self.put(write.id, write.value);
+            self.put_state(write.id, DeclState { ty: write.value });
         }
     }
 
@@ -631,17 +847,19 @@ impl DeclTypes {
         let undo = Self::net_writes_since(mark);
         *self = saved;
         for write in undo {
-            debug_assert_eq!(write.previous, self.untracked_get(write.id));
-            observe_declaration(write.id, write.value, write.previous, true);
+            let previous = DeclState { ty: write.previous };
+            let value = DeclState { ty: write.value };
+            debug_assert_eq!(previous, self.untracked_state(write.id));
+            observe_declaration(write.id, value, previous, true);
         }
     }
 
     pub(in crate::check::checker) fn get(&self, id: ValueStorageId) -> Option<TypeId> {
-        let value = self.untracked_get(id);
+        let state = self.untracked_state(id);
         if id.index() >= self.base.len() {
-            observe_declaration(id, value, value, false);
+            observe_declaration(id, state, state, false);
         }
-        value
+        state.ty
     }
 
     #[cfg(any(test, feature = "test-utils"))]
@@ -1566,6 +1784,11 @@ pub(in crate::check::checker) trait ProjectLocalUserDemandGateway {
     fn commit_staged(&mut self) -> Result<ProjectLocalDemandSnapshot, &'static str>;
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::check::checker) struct FlowValueState {
+    pub(in crate::check::checker) ty: TypeId,
+}
+
 pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = UserRecordTicket> {
     pub(in crate::check::checker) interner: &'a mut Interner,
     pub(in crate::check::checker) binder: &'a Binder,
@@ -1614,6 +1837,8 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     /// below live for exactly the outermost frame and are cleared as it closes, so a
     /// memoized answer can never outlive the walk region it was taken in.
     pub(in crate::check::checker) argument_walk_depth: u32,
+    pub(in crate::check::checker) inference_environment:
+        Option<std::sync::Arc<super::calls::ContextualInferenceEnvironment>>,
     /// Memo for the raw (context-free) walk of a re-walkable call/`new` argument
     /// (backlog `95`). Re-executing an enclosing call — which is what a contextual
     /// re-walk of an enclosing argument does — otherwise re-walks this whole subtree.
@@ -1666,6 +1891,11 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     /// Exact class callables retained by the one surface-lowering pass.
     pub(in crate::check::checker) retained_class_callables:
         BTreeMap<ClassId, Vec<RetainedClassCallable<Ticket>>>,
+    pub(in crate::check::checker) class_initializer_validation:
+        BTreeMap<super::lexical_events::MemberSiteId, InitializerValidationSources>,
+    pub(in crate::check::checker) active_initializer_validation:
+        Option<super::lexical_events::MemberSiteId>,
+    pub(in crate::check::checker) initializer_validation_failed: bool,
     /// Query-invisible own-member surfaces used only while checking class bodies.
     /// Poisoned classes stay exhausted through `published_classes`; these drafts keep
     /// independent body diagnostics from losing `this` and `static this`.
@@ -1785,11 +2015,12 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     /// the whole check pass (ids are globally unique). A value that depended on an
     /// in-progress loop back edge is **never** written here (gated on
     /// [`flow_loop_depth`](Pass::flow_loop_depth) — invariants §1).
-    pub(in crate::check::checker) flow_memo: FxHashMap<(FlowNodeId, SymbolId), TypeId>,
+    pub(in crate::check::checker) flow_memo: FxHashMap<(FlowNodeId, SymbolId), FlowValueState>,
     /// Provisional loop-label seeds during a fixpoint resolution: a re-entrant walk
     /// of a loop label returns its seed here instead of looping. Cleared per label
     /// once its fixpoint resolves; never promoted to [`flow_memo`](Pass::flow_memo).
-    pub(in crate::check::checker) flow_provisional: FxHashMap<(FlowNodeId, SymbolId), TypeId>,
+    pub(in crate::check::checker) flow_provisional:
+        FxHashMap<(FlowNodeId, SymbolId), FlowValueState>,
     /// Depth of in-progress loop-label fixpoints. `> 0` suppresses durable memo
     /// writes (the resolved value may depend on a provisional seed), which is what
     /// keeps a stale pre-loop narrow state from being cached across a back edge.

@@ -172,6 +172,17 @@ impl Interner {
         flat.sort_unstable();
         flat.dedup();
 
+        let regulars: FxHashSet<_> = flat
+            .iter()
+            .copied()
+            .filter(|&ty| self.store.widening_literal_operand(ty).is_none())
+            .collect();
+        flat.retain(|&ty| {
+            self.store
+                .widening_literal_operand(ty)
+                .is_none_or(|regular| !regulars.contains(&regular))
+        });
+
         // Collapse 0-/1-member cases before store insertion.
         match flat.len() {
             0 => return wk.never,

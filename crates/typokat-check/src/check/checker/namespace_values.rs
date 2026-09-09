@@ -3111,16 +3111,16 @@ fn query_free_initializer_type<Ticket: Copy + PartialEq>(
     let ty = match initializer {
         Expression::StringLiteral(literal) => {
             pass.interner
-                .intern_literal(crate::types::repr::LiteralValue::String(
+                .intern_ordinary_literal(crate::types::repr::LiteralValue::String(
                     literal.value.to_string(),
                 ))
         }
         Expression::NumericLiteral(literal) => pass
             .interner
-            .intern_literal(crate::types::repr::LiteralValue::Number(literal.value)),
+            .intern_ordinary_literal(crate::types::repr::LiteralValue::Number(literal.value)),
         Expression::BooleanLiteral(literal) => pass
             .interner
-            .intern_literal(crate::types::repr::LiteralValue::Boolean(literal.value)),
+            .intern_ordinary_literal(crate::types::repr::LiteralValue::Boolean(literal.value)),
         Expression::NullLiteral(_) => pass.interner.well_known().null,
         Expression::Identifier(identifier)
             if matches!(pass.current_source, crate::source::SourceUnit::User { .. }) =>

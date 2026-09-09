@@ -15,6 +15,189 @@ use typokat_types::alias_semantics::{
     PublishedAliasSurface, PublishedAliasTerminal, PublishedAliases,
 };
 
+#[test]
+fn m1_literal_modes_preserve_demand_and_overlay_but_not_relation_identity() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let regular = interner.intern_literal(LiteralValue::Number(1.0));
+    let widening = interner.intern_ordinary_literal(LiteralValue::Number(1.0));
+    let conditional = interner.intern_conditional(ConditionalType {
+        check: wk.number,
+        extends_ty: wk.number,
+        true_branch: widening,
+        false_branch: wk.never,
+        infer_count: 0,
+        distributive: false,
+        poisoned: false,
+    });
+    let exact = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", regular)],
+        ..Default::default()
+    });
+    let ordinary = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", conditional)],
+        ..Default::default()
+    });
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next = 0;
+    for (left, right) in [
+        (widening, regular),
+        (regular, widening),
+        (ordinary, exact),
+        (exact, ordinary),
+    ] {
+        let mut query =
+            SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next);
+        assert_eq!(query.demand(widening), DemandOutcome::Ready(widening));
+        assert_eq!(query.demand(conditional), DemandOutcome::Ready(widening));
+        assert!(matches!(
+            query.is_assignable(left, right),
+            RelationOutcome::Yes
+        ));
+        assert_eq!(query.is_identical(left, right), DemandOutcome::Ready(true));
+    }
+    assert_eq!(
+        interner
+            .store()
+            .object_type(ordinary)
+            .unwrap()
+            .property("value")
+            .unwrap()
+            .ty,
+        conditional
+    );
+    assert_ne!(regular, widening);
+}
+
+#[test]
+fn m1_literal_modes_cannot_hide_poison_or_promote_tainted_cache() {
+    for poison in [None, Some(PublishedClassPoison::Initializer)] {
+        let mut interner = Interner::with_intrinsics();
+        let class = ClassId(94_401);
+        let application = interner.intern_class_instance(class, Vec::new());
+        let regular = interner.intern_literal(LiteralValue::Number(1.0));
+        let widening = interner.intern_ordinary_literal(LiteralValue::Number(1.0));
+        let left = interner.intern_tuple(vec![widening, application]);
+        let right = interner.intern_tuple(vec![regular, application]);
+        let published = match poison {
+            Some(reason) => PublishedClasses::from_publication(
+                FxHashMap::from_iter([(class, ClassConstructionState::Poisoned)]),
+                FxHashMap::default(),
+                FxHashMap::from_iter([(class, reason)]),
+            )
+            .unwrap(),
+            None => PublishedClasses::empty(),
+        };
+        let mut state = SemanticQueryState::default();
+        let mut next = 0;
+        for (source, target) in [(left, right), (right, left), (left, left)] {
+            let mut query =
+                SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next);
+            assert!(matches!(
+                query.is_assignable(source, target),
+                RelationOutcome::Exhausted(_)
+            ));
+            assert!(matches!(
+                query.is_identical(source, target),
+                DemandOutcome::Exhausted(_)
+            ));
+            drop(query);
+            assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
+        }
+    }
+}
+
+#[test]
+fn m1_literal_mode_overlay_exhaustion_leaves_no_durable_success() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let widening = interner.intern_ordinary_literal(LiteralValue::Number(1.0));
+    let regular = interner.store().regular_literal_type(widening);
+    let mut root = widening;
+    for _ in 0..=DEFAULT_STEP_BUDGET {
+        root = interner.intern_conditional(ConditionalType {
+            check: wk.number,
+            extends_ty: wk.number,
+            true_branch: root,
+            false_branch: wk.never,
+            infer_count: 0,
+            distributive: false,
+            poisoned: false,
+        });
+    }
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next = 0;
+    for (left, right) in [(root, regular), (regular, root)] {
+        let mut query =
+            SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next);
+        assert!(matches!(
+            query.is_assignable(left, right),
+            RelationOutcome::Exhausted(Exhaustion::EvaluationBudget)
+        ));
+        drop(query);
+        assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
+    }
+}
+
+#[test]
+fn m1_literal_modes_do_not_mask_pending_enum_publication() {
+    let mut interner = Interner::with_intrinsics();
+    let id = interner.next_enum_id();
+    let whole = interner.reserve_enum(id, "Mode");
+    let member_id = EnumMemberId(0);
+    let member = interner.reserve_enum_member(id, member_id, "Mode", "Ready");
+    let ordinary = interner.intern_ordinary_literal(LiteralValue::Number(1.0));
+    let root = interner.intern_tuple(vec![ordinary, member]);
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next = 0;
+    {
+        let mut query =
+            SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next);
+        assert!(matches!(query.demand(root), DemandOutcome::Exhausted(_)));
+        assert!(matches!(
+            query.is_assignable(root, root),
+            RelationOutcome::Exhausted(_)
+        ));
+        assert!(matches!(
+            query.is_identical(root, root),
+            DemandOutcome::Exhausted(_)
+        ));
+    }
+    assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
+    interner
+        .fill_enum(
+            whole,
+            EnumType {
+                id,
+                name: "Mode".to_owned(),
+                members: vec![EnumMemberFact {
+                    id: member_id,
+                    name: "Ready".to_owned(),
+                    value: EnumValue::String("ready".to_owned()),
+                }],
+                numeric_open: false,
+            },
+        )
+        .unwrap();
+    let widening_member = interner.intern_widening_literal(member).unwrap();
+    for (left, right) in [(member, widening_member), (widening_member, member)] {
+        let mut query =
+            SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next);
+        assert_eq!(
+            query.demand(widening_member),
+            DemandOutcome::Ready(widening_member)
+        );
+        assert!(matches!(
+            query.is_assignable(left, right),
+            RelationOutcome::Yes
+        ));
+        assert_eq!(query.is_identical(left, right), DemandOutcome::Ready(true));
+    }
+}
+
 fn published(
     class: ClassId,
     params: Vec<TypeParamId>,

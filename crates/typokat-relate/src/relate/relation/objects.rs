@@ -1069,6 +1069,7 @@ impl<'a> Relater<'a> {
                 }
                 TypeTag::Intrinsic
                 | TypeTag::Literal
+                | TypeTag::WideningLiteral
                 | TypeTag::Enum
                 | TypeTag::EnumMember
                 | TypeTag::Infer

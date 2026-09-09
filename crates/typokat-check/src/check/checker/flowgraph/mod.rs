@@ -386,6 +386,7 @@ enum FlowStep {
     Assignment {
         target: SymbolId,
         assigned: Option<TypeId>,
+        assigned_source: Option<SymbolId>,
         antecedent: FlowNodeId,
     },
     Condition {

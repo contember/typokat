@@ -12,10 +12,23 @@ use oxc_ast::ast::{
 use rustc_hash::FxHashMap;
 
 use super::surface_types::SurfaceTypeFactory;
+use crate::check::checker::context::{InitializerValidationBoundary, InitializerValidationRows};
 use crate::check::checker::expr::{
-    contextual_literal_target, contextual_shape_members, satisfies_arrow_needs_context,
-    satisfies_context_preserves_literal,
+    const_assertion_operand_kind, contextual_literal_target, contextual_shape_members,
+    is_const_assertion_type, object_element_access, satisfies_arrow_needs_context,
+    ConstAssertionOperandKind, ElementAccessLookup,
 };
+use crate::check::checker::literal_publication::LiteralPublicationRole;
+use crate::span::Span;
+use oxc_span::GetSpan;
+
+#[cfg(test)]
+#[path = "../tests/literal_publication.rs"]
+mod literal_publication_tests;
+
+#[cfg(test)]
+#[path = "../tests/publication_role_repair.rs"]
+mod publication_role_repair_tests;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(in crate::check::checker) enum InitializerInference {
@@ -40,6 +53,7 @@ pub(in crate::check::checker) struct SurfaceInitializerInferer<'a, 'b, C> {
     factory: &'a mut SurfaceTypeFactory<'b>,
     context: &'a mut C,
     locals: Vec<FxHashMap<String, TypeId>>,
+    validation: Option<InitializerValidationRows>,
 }
 
 impl<'a, 'b, C: SurfaceInitializerContext> SurfaceInitializerInferer<'a, 'b, C> {
@@ -51,6 +65,7 @@ impl<'a, 'b, C: SurfaceInitializerContext> SurfaceInitializerInferer<'a, 'b, C> 
             factory,
             context,
             locals: Vec::new(),
+            validation: Some(InitializerValidationRows::default()),
         }
     }
 
@@ -61,53 +76,76 @@ impl<'a, 'b, C: SurfaceInitializerContext> SurfaceInitializerInferer<'a, 'b, C> 
         is_static: bool,
     ) -> InitializerInference {
         if is_static {
+            self.validation = None;
             return InitializerInference::Unsupported;
         }
-        self.infer_expression(expression, readonly).map_or(
+        let inferred = self.infer_expression(expression, readonly).map_or(
             InitializerInference::Unsupported,
             InitializerInference::Inferred,
-        )
+        );
+        if inferred == InitializerInference::Unsupported {
+            self.validation = None;
+        }
+        inferred
+    }
+
+    pub(in crate::check::checker) fn into_validation_sources(
+        self,
+    ) -> Option<InitializerValidationRows> {
+        self.validation
+    }
+
+    fn retain_validation_source(
+        &mut self,
+        expression: &Expression<'_>,
+        boundary: InitializerValidationBoundary,
+        source: TypeId,
+    ) {
+        if let Some(rows) = &mut self.validation {
+            rows.insert(Span::from_oxc(expression.span()), boundary, source);
+        }
     }
 
     fn infer_expression(&mut self, expression: &Expression<'_>, readonly: bool) -> Option<TypeId> {
-        self.infer_expression_with_context(expression, readonly, None)
+        let role = if readonly {
+            LiteralPublicationRole::ModeRetaining
+        } else {
+            LiteralPublicationRole::MutableMember
+        };
+        self.infer_expression_with_context(expression, role, None, false)
     }
 
     fn infer_expression_with_context(
         &mut self,
         expression: &Expression<'_>,
-        readonly: bool,
+        role: LiteralPublicationRole,
         context: Option<TypeId>,
+        const_context: bool,
     ) -> Option<TypeId> {
         let wk = self.factory.well_known();
         let context =
             context.map(|context| contextual_literal_target(self.factory.store(), context));
-        let preserve_literal = context.is_some_and(|context| {
-            satisfies_context_preserves_literal(self.factory.store(), expression, context)
-        });
-        match expression {
-            Expression::BooleanLiteral(literal) => Some(if readonly || preserve_literal {
+        let ty = match expression {
+            Expression::BooleanLiteral(literal) => Some(
                 self.factory
-                    .intern_literal(LiteralValue::Boolean(literal.value))
-            } else {
-                wk.boolean
-            }),
+                    .intern_ordinary_literal(LiteralValue::Boolean(literal.value)),
+            ),
             Expression::NullLiteral(_) => Some(wk.null),
-            Expression::NumericLiteral(literal) => Some(if readonly || preserve_literal {
+            Expression::NumericLiteral(literal) => Some(
                 self.factory
-                    .intern_literal(LiteralValue::Number(literal.value))
-            } else {
-                wk.number
-            }),
-            Expression::StringLiteral(literal) => Some(if readonly || preserve_literal {
+                    .intern_ordinary_literal(LiteralValue::Number(literal.value)),
+            ),
+            Expression::StringLiteral(literal) => Some(
                 self.factory
-                    .intern_literal(LiteralValue::String(literal.value.to_string()))
-            } else {
-                wk.string
-            }),
-            Expression::ParenthesizedExpression(parenthesized) => {
-                self.infer_expression_with_context(&parenthesized.expression, readonly, context)
-            }
+                    .intern_ordinary_literal(LiteralValue::String(literal.value.to_string())),
+            ),
+            Expression::ParenthesizedExpression(parenthesized) => self
+                .infer_expression_with_context(
+                    &parenthesized.expression,
+                    role,
+                    context,
+                    const_context,
+                ),
             Expression::UnaryExpression(unary)
                 if unary.operator == UnaryOperator::UnaryNegation
                     && matches!(unary.argument, Expression::NumericLiteral(_)) =>
@@ -115,12 +153,10 @@ impl<'a, 'b, C: SurfaceInitializerContext> SurfaceInitializerInferer<'a, 'b, C> 
                 let Expression::NumericLiteral(literal) = &unary.argument else {
                     return None;
                 };
-                Some(if readonly || preserve_literal {
+                Some(
                     self.factory
-                        .intern_literal(LiteralValue::Number(-literal.value))
-                } else {
-                    wk.number
-                })
+                        .intern_ordinary_literal(LiteralValue::Number(-literal.value)),
+                )
             }
             Expression::TSAsExpression(assertion) => {
                 self.infer_assertion(&assertion.expression, &assertion.type_annotation)
@@ -129,9 +165,34 @@ impl<'a, 'b, C: SurfaceInitializerContext> SurfaceInitializerInferer<'a, 'b, C> 
                 self.infer_assertion(&assertion.expression, &assertion.type_annotation)
             }
             Expression::TSSatisfiesExpression(satisfies) => {
-                self.infer_satisfies(&satisfies.expression, &satisfies.type_annotation, readonly)
+                let operand =
+                    self.infer_satisfies(&satisfies.expression, &satisfies.type_annotation)?;
+                self.retain_validation_source(
+                    expression,
+                    InitializerValidationBoundary::SatisfiesOperand,
+                    operand,
+                );
+                Some(operand)
             }
             Expression::ArrayExpression(array) => {
+                if const_context {
+                    let mut elements = Vec::with_capacity(array.elements.len());
+                    for element in &array.elements {
+                        let expression = match element {
+                            ArrayExpressionElement::SpreadElement(_)
+                            | ArrayExpressionElement::Elision(_) => return None,
+                            _ => element.as_expression()?,
+                        };
+                        elements.push(self.infer_expression_with_context(
+                            expression,
+                            LiteralPublicationRole::ConstOwned,
+                            None,
+                            true,
+                        )?);
+                    }
+                    let tuple = self.factory.intern_tuple(TupleType::fixed(elements));
+                    return Some(self.factory.intern_readonly(tuple));
+                }
                 let tuple_contexts = context.and_then(|context| {
                     contextual_shape_members(self.factory.store(), context, TypeTag::Tuple)
                 });
@@ -171,11 +232,18 @@ impl<'a, 'b, C: SurfaceInitializerContext> SurfaceInitializerInferer<'a, 'b, C> 
                     } else {
                         None
                     };
-                    elements.push(self.infer_expression_with_context(
+                    let contribution = self.infer_expression_with_context(
                         expression,
-                        false,
+                        LiteralPublicationRole::MutableMember,
                         element_context,
-                    )?);
+                        false,
+                    )?;
+                    self.retain_validation_source(
+                        expression,
+                        InitializerValidationBoundary::Contribution,
+                        contribution,
+                    );
+                    elements.push(contribution);
                 }
                 if tuple_contexts.is_some() {
                     Some(self.factory.intern_tuple(TupleType::fixed(elements)))
@@ -185,6 +253,34 @@ impl<'a, 'b, C: SurfaceInitializerContext> SurfaceInitializerInferer<'a, 'b, C> 
                 }
             }
             Expression::ObjectExpression(object) => {
+                if const_context {
+                    let mut properties = Vec::with_capacity(object.properties.len());
+                    for property in &object.properties {
+                        let ObjectPropertyKind::ObjectProperty(property) = property else {
+                            return None;
+                        };
+                        if property.computed
+                            || property.method
+                            || property.kind != PropertyKind::Init
+                        {
+                            return None;
+                        }
+                        let name = property.key.static_name()?.into_owned();
+                        let ty = self.infer_expression_with_context(
+                            &property.value,
+                            LiteralPublicationRole::ConstOwned,
+                            None,
+                            true,
+                        )?;
+                        let mut property = PropertyType::public(name, ty);
+                        property.readonly = true;
+                        properties.push(property);
+                    }
+                    return Some(self.factory.intern_object(ObjectType {
+                        properties,
+                        ..Default::default()
+                    }));
+                }
                 let mut properties = Vec::with_capacity(object.properties.len());
                 for property in &object.properties {
                     let ObjectPropertyKind::ObjectProperty(property) = property else {
@@ -202,9 +298,15 @@ impl<'a, 'b, C: SurfaceInitializerContext> SurfaceInitializerInferer<'a, 'b, C> 
                         context.and_then(|context| self.object_property_context(context, &name));
                     let ty = self.infer_expression_with_context(
                         &property.value,
-                        false,
+                        LiteralPublicationRole::MutableMember,
                         property_context,
+                        false,
                     )?;
+                    self.retain_validation_source(
+                        &property.value,
+                        InitializerValidationBoundary::Contribution,
+                        ty,
+                    );
                     properties.push(PropertyType::public(name, ty));
                 }
                 Some(self.factory.intern_object(ObjectType {
@@ -279,7 +381,11 @@ impl<'a, 'b, C: SurfaceInitializerContext> SurfaceInitializerInferer<'a, 'b, C> 
                             };
                             ty
                         }
-                        None => contextual.as_ref()?.params.get(index)?.ty,
+                        None => self.factory.ready_contextual_parameter_target(
+                            &contextual.as_ref()?.params,
+                            index,
+                            arrow.params.items.len(),
+                        )?,
                     };
                     frame.insert(identifier.name.to_string(), ty);
                     parameters.push(if parameter.optional {
@@ -292,7 +398,31 @@ impl<'a, 'b, C: SurfaceInitializerContext> SurfaceInitializerInferer<'a, 'b, C> 
                 let body = arrow.get_expression()?;
                 let body_context =
                     declared_return.or_else(|| target.as_ref().map(|target| target.ret));
-                let ret = self.infer_expression_with_context(body, false, body_context);
+                let declared_validation = declared_return.and_then(|_| self.validation.take());
+                let ret = self.infer_expression_with_context(
+                    body,
+                    LiteralPublicationRole::ModeRetaining,
+                    body_context,
+                    false,
+                );
+                if declared_return.is_some() {
+                    self.validation = declared_validation;
+                } else if let Some(source) = ret {
+                    self.retain_validation_source(
+                        body,
+                        InitializerValidationBoundary::InferredArrowBody,
+                        source,
+                    );
+                }
+                let ret = ret.map(|source| {
+                    self.factory.finalize_literal_type(
+                        source,
+                        body_context.map(|context| {
+                            contextual_literal_target(self.factory.store(), context)
+                        }),
+                        LiteralPublicationRole::InferredReturn,
+                    )
+                });
                 self.locals.pop();
                 Some(self.factory.intern_function(FunctionType {
                     type_params: Vec::new(),
@@ -300,6 +430,11 @@ impl<'a, 'b, C: SurfaceInitializerContext> SurfaceInitializerInferer<'a, 'b, C> 
                     params: parameters,
                     ret: declared_return.or(ret)?,
                 }))
+            }
+            Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_)
+                if const_context =>
+            {
+                self.infer_const_member_reference(expression)
             }
             Expression::Identifier(identifier) => self
                 .locals
@@ -345,7 +480,21 @@ impl<'a, 'b, C: SurfaceInitializerContext> SurfaceInitializerInferer<'a, 'b, C> 
             | Expression::ComputedMemberExpression(_)
             | Expression::StaticMemberExpression(_)
             | Expression::PrivateFieldExpression(_) => None,
+        }?;
+        let published = self.factory.finalize_literal_type(ty, context, role);
+        if matches!(
+            expression,
+            Expression::ObjectExpression(_)
+                | Expression::ArrayExpression(_)
+                | Expression::ArrowFunctionExpression(_)
+        ) {
+            self.retain_validation_source(
+                expression,
+                InitializerValidationBoundary::CompletedContainer,
+                published,
+            );
         }
+        Some(published)
     }
 
     fn infer_assertion(
@@ -353,6 +502,20 @@ impl<'a, 'b, C: SurfaceInitializerContext> SurfaceInitializerInferer<'a, 'b, C> 
         operand: &Expression<'_>,
         annotation: &TSType<'_>,
     ) -> Option<TypeId> {
+        if is_const_assertion_type(annotation) {
+            return match const_assertion_operand_kind(operand) {
+                ConstAssertionOperandKind::Owned => self.infer_expression_with_context(
+                    operand,
+                    LiteralPublicationRole::ConstOwned,
+                    None,
+                    true,
+                ),
+                ConstAssertionOperandKind::EnumCandidate => {
+                    self.infer_const_member_reference(operand)
+                }
+                ConstAssertionOperandKind::Invalid => None,
+            };
+        }
         self.infer_expression(operand, false)?;
         match self.context.lower_annotation(annotation) {
             DemandOutcome::Ready(ty) => Some(ty),
@@ -360,16 +523,73 @@ impl<'a, 'b, C: SurfaceInitializerContext> SurfaceInitializerInferer<'a, 'b, C> 
         }
     }
 
+    fn infer_const_member_reference(&mut self, operand: &Expression<'_>) -> Option<TypeId> {
+        match operand {
+            Expression::ParenthesizedExpression(parenthesized) => {
+                self.infer_const_member_reference(&parenthesized.expression)
+            }
+            Expression::StaticMemberExpression(member) if !member.optional => {
+                let base = self.infer_expression_with_context(
+                    &member.object,
+                    LiteralPublicationRole::ConstOwned,
+                    None,
+                    true,
+                )?;
+                self.factory
+                    .store()
+                    .object_type(base)?
+                    .property(member.property.name.as_str())
+                    .map(|property| property.ty)
+            }
+            Expression::ComputedMemberExpression(member) if !member.optional => {
+                let base = self.infer_expression_with_context(
+                    &member.object,
+                    LiteralPublicationRole::ConstOwned,
+                    None,
+                    true,
+                )?;
+                if let Some(name) = member.static_property_name() {
+                    if let Some(ty) = self
+                        .factory
+                        .store()
+                        .object_type(base)
+                        .and_then(|object| object.property(name.as_str()))
+                        .map(|property| property.ty)
+                    {
+                        return Some(ty);
+                    }
+                }
+                let key = self.infer_expression_with_context(
+                    &member.expression,
+                    LiteralPublicationRole::ConstOwned,
+                    None,
+                    true,
+                )?;
+                match object_element_access(self.factory.store(), base, Some(key)) {
+                    ElementAccessLookup::Found(ty) => Some(ty),
+                    ElementAccessLookup::MissingObjectKey
+                    | ElementAccessLookup::NullishReceiver
+                    | ElementAccessLookup::UnsupportedReceiver => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     fn infer_satisfies(
         &mut self,
         operand: &Expression<'_>,
         annotation: &TSType<'_>,
-        readonly: bool,
     ) -> Option<TypeId> {
         let DemandOutcome::Ready(target) = self.context.lower_annotation(annotation) else {
             return None;
         };
-        self.infer_expression_with_context(operand, readonly, Some(target))
+        self.infer_expression_with_context(
+            operand,
+            LiteralPublicationRole::ModeRetaining,
+            Some(target),
+            false,
+        )
     }
 
     fn object_property_context(&mut self, context: TypeId, name: &str) -> Option<TypeId> {
@@ -409,6 +629,7 @@ mod tests {
         string: Option<TypeId>,
         boolean: Option<TypeId>,
         object: Option<TypeId>,
+        function: Option<TypeId>,
         string_literals: FxHashMap<String, TypeId>,
         fields: FxHashMap<String, TypeId>,
         methods: FxHashMap<String, EarlierMethodSurface>,
@@ -431,6 +652,10 @@ mod tests {
                     DemandOutcome::Ready,
                 ),
                 TSType::TSTypeLiteral(_) => self.object.map_or_else(
+                    || DemandOutcome::Exhausted(Exhaustion::EvaluationBudget),
+                    DemandOutcome::Ready,
+                ),
+                TSType::TSFunctionType(_) => self.function.map_or_else(
                     || DemandOutcome::Exhausted(Exhaustion::EvaluationBudget),
                     DemandOutcome::Ready,
                 ),
@@ -496,7 +721,11 @@ mod tests {
             let InitializerInference::Inferred(readonly) = readonly else {
                 panic!("readonly literal must be inferred");
             };
-            assert_eq!(factory.store().tag(readonly), TypeTag::Literal);
+            assert_eq!(factory.store().tag(readonly), TypeTag::WideningLiteral);
+            assert_eq!(
+                factory.store().literal_value(readonly),
+                Some(&LiteralValue::Number(1.0))
+            );
         });
     }
 
@@ -730,7 +959,12 @@ mod tests {
             };
             let mut factory = SurfaceTypeFactory::new(&mut interner);
             let source = SurfaceInitializerInferer::new(&mut factory, &mut context)
-                .infer_expression_with_context(expression, false, Some(target))
+                .infer_expression_with_context(
+                    expression,
+                    LiteralPublicationRole::MutableMember,
+                    Some(target),
+                    false,
+                )
                 .expect("annotated arrow surface");
             let source = factory
                 .store()
@@ -778,5 +1012,417 @@ mod tests {
                 );
             });
         }
+    }
+
+    #[test]
+    fn validation_capture_retains_body_modes_without_changing_function_or_class_graph() {
+        use crate::check::checker::classes::construction::{
+            ClassConstruction, ClassRecoveryOrder, ClassSurfaceLowerer,
+        };
+        use crate::source::{ModuleOrdinal, SourceOrdinal};
+        use crate::types::repr::ClassId;
+        with_initializer(r#"(() => ("a")) satisfies () => string"#, |expression| {
+            let mut interner = Interner::with_intrinsics();
+            let wk = interner.well_known();
+            let ordinary = interner.intern_ordinary_literal(LiteralValue::String("a".into()));
+            let function = interner.intern_function(FunctionType {
+                type_params: vec![],
+                receiver: None,
+                params: vec![],
+                ret: wk.string,
+            });
+            let mut context = Context {
+                function: Some(function),
+                ..Default::default()
+            };
+            let mut factory = SurfaceTypeFactory::new(&mut interner);
+            let mut inferer = SurfaceInitializerInferer::new(&mut factory, &mut context);
+            assert_eq!(
+                inferer.infer(expression, false, false),
+                InitializerInference::Inferred(function)
+            );
+            let rows = inferer
+                .into_validation_sources()
+                .expect("successful source");
+            let Expression::TSSatisfiesExpression(satisfies) = expression else {
+                panic!("satisfies")
+            };
+            let Expression::ParenthesizedExpression(parenthesized) = &satisfies.expression else {
+                panic!("parentheses")
+            };
+            let Expression::ArrowFunctionExpression(arrow) = &parenthesized.expression else {
+                panic!("arrow")
+            };
+            let body = arrow.get_expression().unwrap();
+            assert_eq!(
+                rows.get(
+                    Span::from_oxc(body.span()),
+                    InitializerValidationBoundary::InferredArrowBody
+                ),
+                Some(ordinary)
+            );
+            assert_eq!(
+                rows.get(
+                    Span::from_oxc(arrow.span),
+                    InitializerValidationBoundary::CompletedContainer
+                ),
+                Some(function)
+            );
+            assert_eq!(
+                rows.get(
+                    Span::from_oxc(expression.span()),
+                    InitializerValidationBoundary::SatisfiesOperand
+                ),
+                Some(function)
+            );
+            assert_ne!(ordinary, wk.string);
+            let template = interner.intern_object(ObjectType {
+                properties: vec![PropertyType::public("field", function)],
+                ..Default::default()
+            });
+            let publish = |interner: &mut Interner| {
+                let lowerer: ClassSurfaceLowerer<()> = ClassSurfaceLowerer::new(
+                    ClassId(0),
+                    ClassRecoveryOrder {
+                        source: SourceOrdinal::User(ModuleOrdinal::new(0)),
+                        binding_start: 0,
+                        declaration_ordinal: 0,
+                    },
+                    vec![],
+                    template,
+                    template,
+                    None,
+                );
+                let mut construction = ClassConstruction::default();
+                construction.register(lowerer.finish()).unwrap();
+                construction.finish(interner).unwrap()
+            };
+            let before = publish(&mut interner);
+            drop(rows);
+            let after = publish(&mut interner);
+            assert_eq!(before.graph, after.graph);
+            assert_eq!(before.dependency_first_sccs, after.dependency_first_sccs);
+        });
+    }
+
+    #[test]
+    fn validation_capture_discards_failed_fields_and_excludes_declared_bodies() {
+        for source in [
+            r#"({ ready: "a" satisfies "a", unsupported: true ? 1 : 2 })"#,
+            r#"({ unsupported: true ? 1 : 2, ready: "a" satisfies "a" })"#,
+        ] {
+            with_initializer(source, |expression| {
+                let mut interner = Interner::with_intrinsics();
+                let exact = interner.intern_literal(LiteralValue::String("a".into()));
+                let mut context = Context {
+                    string_literals: FxHashMap::from_iter([("a".into(), exact)]),
+                    ..Default::default()
+                };
+                let mut factory = SurfaceTypeFactory::new(&mut interner);
+                let mut inferer = SurfaceInitializerInferer::new(&mut factory, &mut context);
+                assert_eq!(
+                    inferer.infer(expression, false, false),
+                    InitializerInference::Unsupported
+                );
+                assert!(inferer.into_validation_sources().is_none());
+            });
+        }
+        with_initializer(
+            r#"((): string => ("a" satisfies string)) satisfies () => string"#,
+            |expression| {
+                let mut interner = Interner::with_intrinsics();
+                let wk = interner.well_known();
+                let function = interner.intern_function(FunctionType {
+                    type_params: vec![],
+                    receiver: None,
+                    params: vec![],
+                    ret: wk.string,
+                });
+                let mut context = Context {
+                    string: Some(wk.string),
+                    function: Some(function),
+                    ..Default::default()
+                };
+                let mut factory = SurfaceTypeFactory::new(&mut interner);
+                let mut inferer = SurfaceInitializerInferer::new(&mut factory, &mut context);
+                assert_eq!(
+                    inferer.infer(expression, false, false),
+                    InitializerInference::Inferred(function)
+                );
+                let rows = inferer.into_validation_sources().unwrap();
+                let Expression::TSSatisfiesExpression(satisfies) = expression else {
+                    panic!("satisfies")
+                };
+                let Expression::ParenthesizedExpression(parenthesized) = &satisfies.expression
+                else {
+                    panic!("parentheses")
+                };
+                let Expression::ArrowFunctionExpression(arrow) = &parenthesized.expression else {
+                    panic!("arrow")
+                };
+                let body = arrow.get_expression().unwrap();
+                assert_eq!(
+                    rows.get(
+                        Span::from_oxc(body.span()),
+                        InitializerValidationBoundary::InferredArrowBody
+                    ),
+                    None
+                );
+                let Expression::ParenthesizedExpression(body) = body else {
+                    panic!("body parentheses")
+                };
+                assert_eq!(
+                    rows.get(
+                        Span::from_oxc(body.expression.span()),
+                        InitializerValidationBoundary::SatisfiesOperand
+                    ),
+                    None
+                );
+                assert_eq!(
+                    rows.get(
+                        Span::from_oxc(expression.span()),
+                        InitializerValidationBoundary::SatisfiesOperand
+                    ),
+                    Some(function)
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn rest_projection_class_sources_keep_positional_parameter_and_body_ids() {
+        use crate::types::repr::{TupleRestType, TypeParamId};
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let symbolic = interner.intern_type_param(TypeParamId(13), "T");
+        let array = interner.intern_array(wk.number);
+        let symbols = interner.intern_array(symbolic);
+        let tuple = interner.intern_tuple(vec![wk.number, wk.string]);
+        let alternatives = interner.union(vec![array, symbols]);
+        let union_element = interner.union(vec![wk.number, symbolic]);
+        let nested = interner.intern_tuple_type(TupleType::with_rest(
+            vec![wk.string],
+            TupleRestType::new(1, symbols),
+        ));
+        let suffix = interner.intern_tuple_type(TupleType::with_rest(
+            vec![wk.number],
+            TupleRestType::new(0, nested),
+        ));
+        let explicit_undefined = interner.union(vec![wk.number, wk.undefined]);
+        for (source, params, expected) in [
+            ("((value) => value) satisfies (...args: number[]) => number", vec![ParameterType::rest("args", array)], vec![wk.number]),
+            ("((first, second, third) => third) satisfies (...args: number[]) => number", vec![ParameterType::rest("args", array)], vec![wk.number; 3]),
+            ("((value) => value) satisfies (...args: [number, string]) => number", vec![ParameterType::rest("args", tuple)], vec![wk.number]),
+            ("((first, second) => second) satisfies (...args: [number, string]) => string", vec![ParameterType::rest("args", tuple)], vec![wk.number, wk.string]),
+            ("((first, second) => second) satisfies (first: string, ...args: number[]) => number", vec![ParameterType::required("first", wk.string), ParameterType::rest("args", array)], vec![wk.string, wk.number]),
+            ("((value) => value) satisfies (...args: T[]) => T", vec![ParameterType::rest("args", symbols)], vec![symbolic]),
+            ("((value) => value) satisfies (value: T) => T", vec![ParameterType::required("value", symbolic)], vec![symbolic]),
+            ("((value) => value) satisfies (...args: number[] | T[]) => number | T", vec![ParameterType::rest("args", alternatives)], vec![union_element]),
+            ("((first, second, third) => third) satisfies (...args: [...[string, ...T[]], number]) => number", vec![ParameterType::rest("args", suffix)], vec![wk.string, symbolic, wk.number]),
+            ("((value) => value) satisfies (value?: number | undefined) => number | undefined", vec![ParameterType::optional("value", explicit_undefined)], vec![explicit_undefined]),
+        ] {
+            with_initializer(source, |expression| {
+                let returned = *expected.last().unwrap();
+                let target = interner.intern_function(FunctionType {
+                    type_params: vec![],
+                    receiver: None,
+                    params,
+                    ret: returned,
+                });
+                let mut context = Context {
+                    function: Some(target),
+                    ..Default::default()
+                };
+                let mut factory = SurfaceTypeFactory::new(&mut interner);
+                let mut inferer = SurfaceInitializerInferer::new(&mut factory, &mut context);
+                let InitializerInference::Inferred(function) =
+                    inferer.infer(expression, false, false)
+                else {
+                    panic!("ready rest source")
+                };
+                let rows = inferer.into_validation_sources().unwrap();
+                let Expression::TSSatisfiesExpression(satisfies) = expression else {
+                    panic!("satisfies")
+                };
+                let Expression::ParenthesizedExpression(parenthesized) = &satisfies.expression
+                else {
+                    panic!("parentheses")
+                };
+                let Expression::ArrowFunctionExpression(arrow) = &parenthesized.expression else {
+                    panic!("arrow")
+                };
+                let body = arrow.get_expression().unwrap();
+                let surface = factory.store().function_type(function).unwrap();
+                assert_eq!(surface.params.len(), arrow.params.items.len());
+                assert_eq!(surface.params.iter().map(|parameter| parameter.ty).collect::<Vec<_>>(), expected);
+                assert!(surface.params.iter().all(ParameterType::is_fixed));
+                assert_eq!(surface.ret, returned);
+                assert_eq!(
+                    rows.get(
+                        Span::from_oxc(body.span()),
+                        InitializerValidationBoundary::InferredArrowBody
+                    ),
+                    Some(returned)
+                );
+                assert_eq!(
+                    rows.get(
+                        Span::from_oxc(arrow.span),
+                        InitializerValidationBoundary::CompletedContainer
+                    ),
+                    Some(function)
+                );
+                assert_eq!(
+                    rows.get(
+                        Span::from_oxc(expression.span()),
+                        InitializerValidationBoundary::SatisfiesOperand
+                    ),
+                    Some(function)
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn rest_projection_class_annotation_precedes_readiness_and_failure_discards_rows() {
+        use crate::types::repr::TypeParamId;
+        for annotated in [true, false] {
+            let source = if annotated {
+                "((value: number) => 1) satisfies (...args: T) => number"
+            } else {
+                "((value) => 1) satisfies (...args: T) => number"
+            };
+            with_initializer(source, |expression| {
+                let mut interner = Interner::with_intrinsics();
+                let wk = interner.well_known();
+                let opaque = interner.intern_type_param(TypeParamId(3), "T");
+                let array = interner.intern_array(wk.number);
+                assert!(interner.set_type_param_constraint(TypeParamId(3), array));
+                let function = interner.intern_function(FunctionType {
+                    type_params: vec![],
+                    receiver: None,
+                    params: vec![ParameterType::rest("args", opaque)],
+                    ret: wk.number,
+                });
+                let mut context = Context {
+                    number: Some(wk.number),
+                    function: Some(function),
+                    ..Default::default()
+                };
+                let mut factory = SurfaceTypeFactory::new(&mut interner);
+                let mut inferer = SurfaceInitializerInferer::new(&mut factory, &mut context);
+                let inferred = inferer.infer(expression, false, false);
+                let rows = inferer.into_validation_sources();
+                if annotated {
+                    let InitializerInference::Inferred(function) = inferred else {
+                        panic!("declared parameter source")
+                    };
+                    assert_eq!(
+                        factory.store().function_type(function).unwrap().params[0].ty,
+                        wk.number
+                    );
+                    assert!(rows.is_some());
+                } else {
+                    assert_eq!(inferred, InitializerInference::Unsupported);
+                    assert!(rows.is_none());
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn fixed_slot_sources_survive_unused_opaque_union_rest() {
+        use crate::types::repr::TypeParamId;
+        for (source, parameter_count, literal_body) in [
+            ("((value) => value) satisfies (value: number, ...args: T | number[]) => number", 1, false),
+            ("((value) => 1) satisfies (value: number, ...args: T | number[]) => number", 1, true),
+            ("((first, second: number) => 1) satisfies (first: number, ...args: T | number[]) => number", 2, true),
+        ] {
+            with_initializer(source, |expression| {
+                let mut interner = Interner::with_intrinsics();
+                let wk = interner.well_known();
+                let symbolic = interner.intern_type_param(TypeParamId(41), "T");
+                let numbers = interner.intern_array(wk.number);
+                let rest = interner.union(vec![symbolic, numbers]);
+                let body_id = if literal_body {
+                    interner.intern_ordinary_literal(LiteralValue::Number(1.0))
+                } else {
+                    wk.number
+                };
+                let target = interner.intern_function(FunctionType {
+                    type_params: vec![], receiver: None,
+                    params: vec![ParameterType::required("value", wk.number), ParameterType::rest("args", rest)],
+                    ret: wk.number,
+                });
+                let mut context = Context { number: Some(wk.number), function: Some(target), ..Default::default() };
+                let mut factory = SurfaceTypeFactory::new(&mut interner);
+                let mut inferer = SurfaceInitializerInferer::new(&mut factory, &mut context);
+                let InitializerInference::Inferred(function) = inferer.infer(expression, false, false) else { panic!("ready fixed source") };
+                let rows = inferer.into_validation_sources().unwrap();
+                let Expression::TSSatisfiesExpression(satisfies) = expression else { panic!("satisfies") };
+                let Expression::ParenthesizedExpression(parenthesized) = &satisfies.expression else { panic!("parentheses") };
+                let Expression::ArrowFunctionExpression(arrow) = &parenthesized.expression else { panic!("arrow") };
+                let surface = factory.store().function_type(function).unwrap();
+                assert_eq!(surface.params.len(), parameter_count);
+                assert!(surface.params.iter().all(|parameter| parameter.is_fixed() && parameter.ty == wk.number));
+                assert_eq!(surface.ret, wk.number);
+                assert_eq!(rows.get(Span::from_oxc(arrow.get_expression().unwrap().span()), InitializerValidationBoundary::InferredArrowBody), Some(body_id));
+                assert_eq!(rows.get(Span::from_oxc(arrow.span), InitializerValidationBoundary::CompletedContainer), Some(function));
+                assert_eq!(rows.get(Span::from_oxc(expression.span()), InitializerValidationBoundary::SatisfiesOperand), Some(function));
+            });
+        }
+    }
+
+    #[test]
+    fn validation_capture_keeps_contextual_template_binder_identity() {
+        use crate::types::repr::TypeParamId;
+        with_initializer(
+            "((value) => value) satisfies (value: T) => T",
+            |expression| {
+                let mut interner = Interner::with_intrinsics();
+                let parameter = interner.intern_type_param(TypeParamId(7), "T");
+                let function = interner.intern_function(FunctionType {
+                    type_params: vec![],
+                    receiver: None,
+                    params: vec![ParameterType::required("value", parameter)],
+                    ret: parameter,
+                });
+                let mut context = Context {
+                    function: Some(function),
+                    ..Default::default()
+                };
+                let mut factory = SurfaceTypeFactory::new(&mut interner);
+                let mut inferer = SurfaceInitializerInferer::new(&mut factory, &mut context);
+                assert_eq!(
+                    inferer.infer(expression, false, false),
+                    InitializerInference::Inferred(function)
+                );
+                let rows = inferer.into_validation_sources().unwrap();
+                let Expression::TSSatisfiesExpression(satisfies) = expression else {
+                    panic!("satisfies")
+                };
+                let Expression::ParenthesizedExpression(parenthesized) = &satisfies.expression
+                else {
+                    panic!("parentheses")
+                };
+                let Expression::ArrowFunctionExpression(arrow) = &parenthesized.expression else {
+                    panic!("arrow")
+                };
+                assert_eq!(
+                    rows.get(
+                        Span::from_oxc(arrow.get_expression().unwrap().span()),
+                        InitializerValidationBoundary::InferredArrowBody
+                    ),
+                    Some(parameter)
+                );
+                assert_eq!(
+                    factory.store().function_type(function).unwrap().params[0].ty,
+                    parameter
+                );
+                assert_eq!(
+                    factory.store().type_param(parameter).unwrap().id,
+                    TypeParamId(7)
+                );
+            },
+        );
     }
 }

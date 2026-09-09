@@ -1323,6 +1323,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             self.interner.store().tag(root),
             TypeTag::Intrinsic
                 | TypeTag::Literal
+                | TypeTag::WideningLiteral
                 | TypeTag::TypeParam
                 | TypeTag::Infer
                 | TypeTag::MappedValue
@@ -1556,6 +1557,19 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             return IdentityAttempt::Needs(demand);
         }
         let progress_key = (left, right, Self::alpha_binder_key(alpha_binders));
+        let regular_left = store.regular_literal_type(left);
+        let regular_right = store.regular_literal_type(right);
+        if regular_left != left || regular_right != right {
+            return Self::identical_retry_attempt(
+                store,
+                plan,
+                regular_left,
+                regular_right,
+                seen,
+                alpha_binders,
+                retry,
+            );
+        }
         if !seen.insert(progress_key.clone()) {
             retry.coinductive_epoch = retry.coinductive_epoch.saturating_add(1);
             return IdentityAttempt::Decided(DemandOutcome::Ready(true));
@@ -3139,6 +3153,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             }
             TypeTag::Intrinsic
             | TypeTag::Literal
+            | TypeTag::WideningLiteral
             | TypeTag::Enum
             | TypeTag::EnumMember
             | TypeTag::TypeParam
@@ -4229,6 +4244,7 @@ fn alias_distribution_argument_requires_visit(store: &Store, argument: TypeId) -
 
 fn query_children(store: &Store, ty: TypeId) -> Vec<TypeId> {
     match store.tag(ty) {
+        TypeTag::WideningLiteral => store.widening_literal_operand(ty).into_iter().collect(),
         TypeTag::Object => store.object_type(ty).map_or_else(Vec::new, |object| {
             let mut children = Vec::new();
             for property in &object.properties {

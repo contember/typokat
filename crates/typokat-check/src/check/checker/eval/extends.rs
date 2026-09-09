@@ -164,6 +164,7 @@ impl<'a> ConditionalEvaluator<'a> {
                     // template (below).
                     TypeTag::Intrinsic
                     | TypeTag::Literal
+                    | TypeTag::WideningLiteral
                     | TypeTag::Infer
                     | TypeTag::MappedValue => {
                         self.concrete.insert(t, true);

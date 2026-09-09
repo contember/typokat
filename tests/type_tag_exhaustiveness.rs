@@ -86,6 +86,7 @@ fn type_tag_variant_list_is_frozen_for_exhaustiveness_audit() {
             "Enum",
             "EnumMember",
             "AliasTemplate",
+            "WideningLiteral",
         ],
         "TypeTag changed; adjudicate the new variant at every guarded match site"
     );
@@ -343,8 +344,8 @@ fn production_type_tag_wildcards_adjudicate_enum_variants() {
             "whole and member enum typeof overlap is handled explicitly before the fallback",
         ),
         (
-            "crates/typokat-check/src/check/flow.rs#5:match store.tag(left)",
-            "same-id whole enums can overlap while exact members have their explicit arm",
+            "crates/typokat-check/src/check/flow.rs#5:match store.tag(store.regular_literal_type(left))",
+            "same regular identity: literal and exact member arms are Always, whole enums and every other tag fall back to Maybe",
         ),
         (
             "crates/typokat-check/src/check/query/mod.rs#1:match tag",

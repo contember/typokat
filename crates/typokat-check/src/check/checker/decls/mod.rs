@@ -149,6 +149,7 @@ fn for_each_object_alias_type_operand(store: &Store, owner: TypeId, mut visit: i
     match store.tag(owner) {
         TypeTag::Intrinsic
         | TypeTag::Literal
+        | TypeTag::WideningLiteral
         | TypeTag::Enum
         | TypeTag::EnumMember
         | TypeTag::Infer
@@ -320,6 +321,19 @@ fn push_pending_effect_type_roots<Ticket: Copy>(
             DeferredRelationObligation::Assign(obligation) => {
                 roots.extend([obligation.src, obligation.tgt]);
             }
+            DeferredRelationObligation::LiteralAssignment(group) => {
+                push_literal_assignment_roots(roots, &group.root);
+                for site in &group.unavailable_sites {
+                    roots.push(site.target);
+                    if let super::context::LiteralUnavailableEvidence::Demand(
+                        crate::class_semantics::Exhaustion::EvaluationCycle { ty }
+                        | crate::class_semantics::Exhaustion::EvaluationInvalidNode { ty },
+                    ) = &site.evidence
+                    {
+                        roots.push(*ty);
+                    }
+                }
+            }
             DeferredRelationObligation::Satisfies(obligation) => {
                 push_satisfies_check_roots(roots, &obligation.root);
             }
@@ -350,6 +364,16 @@ fn push_satisfies_check_roots(roots: &mut Vec<TypeId>, check: &super::context::S
     roots.extend([check.residual.src, check.residual.tgt]);
     for child in &check.children {
         push_satisfies_check_roots(roots, child);
+    }
+}
+
+fn push_literal_assignment_roots(
+    roots: &mut Vec<TypeId>,
+    site: &super::context::LiteralAssignmentSite,
+) {
+    roots.extend([site.residual.src, site.residual.tgt]);
+    for child in &site.children {
+        push_literal_assignment_roots(roots, child);
     }
 }
 
@@ -1122,6 +1146,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                                 .store()
                                 .enum_member_type_id(enum_id, member.id)
                                 .map(|ty| {
+                                    let ty = pass.interner.intern_widening_literal(ty)
+                                        .expect("atomically published enum member has a widening value mode");
                                     let mut property = crate::types::repr::PropertyType::public(
                                         member.name.clone(),
                                         ty,
@@ -3806,6 +3832,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
     fn object_alias_semantic_roots(&self, active_owners: &FxHashMap<TypeId, usize>) -> Vec<TypeId> {
         let mut roots = Vec::new();
+        self.append_checked_walk_roots(&mut roots);
         for index in self.type_decls.published_len()..self.type_decls.len() {
             let Some(resolved) = self.type_resolved.get(index).and_then(|resolved| *resolved)
             else {

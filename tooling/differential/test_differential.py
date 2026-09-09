@@ -11,6 +11,7 @@ generator determinism, and the shrinker's refusal to wander to a different bug.
 """
 
 import os
+import hashlib
 import re
 import tempfile
 import unittest
@@ -19,6 +20,33 @@ from collections import Counter
 import differential as D
 import grammar
 from shrink import shrink_program, shrink_text
+
+
+class TestPublicationTransitions(unittest.TestCase):
+    def test_role_profile_composes_grouping_context_and_copy_writes(self):
+        options = grammar.GenOptions(publication_transitions=True)
+        for seed in (1, 2, 3):
+            for index in range(24):
+                program = grammar.generate(seed, index, options)
+                text = program.render()
+                self.assertEqual(text, grammar.generate(seed, index, options).render())
+                self.assertIn(" satisfies ", text)
+                self.assertIn("Copy = ", text)
+                nodes = [node for _, node in grammar.slots(program)]
+                self.assertEqual(sum(isinstance(n, grammar.Conditional) for n in nodes), 5)
+                self.assertEqual(sum(isinstance(n, grammar.Satisfies) for n in nodes), 6)
+                self.assertEqual(sum(isinstance(n, grammar.Binding) for n in nodes), 12)
+                self.assertEqual(sum(isinstance(n, grammar.Arrow) for n in nodes), 2)
+                for node in nodes:
+                    if isinstance(node, grammar.Conditional):
+                        self.assertEqual(grammar.simplifications(node), [node.yes, node.no])
+
+    def test_original_three_seed_stream_remains_frozen(self):
+        digest = hashlib.sha256()
+        for seed in (1, 2, 3):
+            for index in range(400):
+                digest.update(grammar.generate(seed, index).render().encode())
+        self.assertEqual(digest.hexdigest(), "94daa7207f6ad72c1230130286d7a62e3a0baaf876445fda79d5cbeee2bfe665")
 
 
 def outcome(diags, exit_code=1, incompletes=()):

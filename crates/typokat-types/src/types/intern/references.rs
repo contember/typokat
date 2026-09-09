@@ -319,6 +319,12 @@ impl Interner {
                 | TypeTag::Literal
                 | TypeTag::MappedValue
                 | TypeTag::AliasTemplate => {}
+                TypeTag::WideningLiteral => {
+                    let regular = store
+                        .widening_literal_operand(owner)
+                        .ok_or("validated widening literal operand is missing")?;
+                    push_type_operand(&mut references, owner, regular);
+                }
                 TypeTag::Infer => {
                     if let Some(constraint) = store
                         .infer_type(owner)

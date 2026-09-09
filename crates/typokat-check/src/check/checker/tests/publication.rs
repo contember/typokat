@@ -373,6 +373,7 @@ fn free_type_params(store: &Store, root: TypeId) -> FxHashSet<TypeParamId> {
             }
             TypeTag::Intrinsic
             | TypeTag::Literal
+            | TypeTag::WideningLiteral
             | TypeTag::Enum
             | TypeTag::EnumMember
             | TypeTag::Infer

@@ -623,6 +623,7 @@ impl<'a> ConditionalEvaluator<'a> {
                 TypeTag::Template
                 | TypeTag::Intrinsic
                 | TypeTag::Literal
+                | TypeTag::WideningLiteral
                 | TypeTag::Enum
                 | TypeTag::EnumMember
                 | TypeTag::TypeParam
@@ -655,7 +656,9 @@ impl<'a> ConditionalEvaluator<'a> {
                     | crate::types::repr::IntrinsicKind::Unknown
             )
         ) || matches!(
-            self.interner.store().tag(cond.check),
+            self.interner
+                .store()
+                .tag(self.interner.store().regular_literal_type(cond.check)),
             TypeTag::Literal | TypeTag::Template
         );
         if primitive_check

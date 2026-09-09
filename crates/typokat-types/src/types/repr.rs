@@ -112,6 +112,8 @@ pub enum TypeTag {
     /// The immutable identity of one recursive alias declaration. The payload is
     /// an [`AliasId`]; applications are ordinary [`TypeTag::Instantiation`] nodes.
     AliasTemplate = 22,
+    /// Widening mode refers to one canonical regular literal without duplicating its owner.
+    WideningLiteral = 23,
 }
 
 impl TypeTag {
@@ -140,6 +142,7 @@ impl TypeTag {
             TypeTag::Enum => 20,
             TypeTag::EnumMember => 21,
             TypeTag::AliasTemplate => 22,
+            TypeTag::WideningLiteral => 23,
         }
     }
 }

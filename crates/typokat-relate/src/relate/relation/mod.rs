@@ -726,6 +726,11 @@ impl<'a> Relater<'a> {
         } else {
             (src, tgt)
         };
+        let regular_src = self.store.regular_literal_type(src);
+        let regular_tgt = self.store.regular_literal_type(tgt);
+        if regular_src != src || regular_tgt != tgt {
+            return self.relate(regular_src, regular_tgt, kind, assumed, want_reason);
+        }
         // Identity fast path: `T` relates to `T` under every relation.
         if src == tgt {
             return Relation::Yes;

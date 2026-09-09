@@ -5,6 +5,7 @@ use crate::binder::bind::{ResolvedValueKind, ValueResolution};
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::SymbolId;
 use crate::check::flow::{FlowNode, FlowNodeId};
+use crate::types::repr::LiteralValue;
 use crate::types::store::TypeId;
 use oxc_ast::ast::{
     ArrowFunctionExpression, AssignmentExpression, AssignmentOperator, AssignmentTarget,
@@ -14,6 +15,9 @@ use oxc_ast::ast::{
 };
 
 use super::super::context::*;
+use super::super::expr::{
+    const_assertion_operand_kind, is_const_assertion_type, ConstAssertionOperandKind,
+};
 
 impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// Build the flow for an expression: record each identifier reference at the
@@ -34,6 +38,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
             Expression::TSTypeAssertion(assertion) => {
                 self.build_flow_expr(scope, &assertion.expression)
+            }
+            Expression::TSSatisfiesExpression(satisfies) => {
+                self.build_flow_expr(scope, &satisfies.expression)
             }
             Expression::LogicalExpression(logical) => self.build_flow_logical(scope, logical),
             Expression::ConditionalExpression(cond) => self.build_flow_conditional(scope, cond),
@@ -201,6 +208,18 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// narrows to the assigned value, while compound/complex/destructuring targets
     /// reset bound identifiers to declared types. Member targets bind no symbol.
     fn build_flow_assignment(&mut self, scope: ScopeId, assign: &AssignmentExpression<'_>) {
+        if !matches!(
+            assign.operator,
+            AssignmentOperator::Assign
+                | AssignmentOperator::LogicalAnd
+                | AssignmentOperator::LogicalOr
+                | AssignmentOperator::LogicalNullish
+        ) {
+            if let AssignmentTarget::AssignmentTargetIdentifier(target) = &assign.left {
+                self.reference_flow
+                    .insert((self.current_module, target.span.start), self.flow_cursor);
+            }
+        }
         self.build_flow_expr(scope, &assign.right);
         if self.flow_cursor == FlowNodeId::UNREACHABLE {
             return;
@@ -216,16 +235,17 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             return;
         };
 
-        let assigned = if assign.operator == AssignmentOperator::Assign {
+        let (assigned, assigned_source) = if assign.operator == AssignmentOperator::Assign {
             self.flow_assigned(scope, &assign.right)
         } else {
             // Compound (`+=`, `||=`, …): the result type is out of the value subset —
             // reset to the declared type so a later reference is not over-narrowed.
-            None
+            (None, None)
         };
         let node = self.new_flow(FlowNode::Assignment {
             symbol,
             assigned,
+            assigned_source,
             antecedent: self.flow_cursor,
         });
         self.flow_cursor = node;
@@ -254,6 +274,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let node = self.new_flow(FlowNode::Assignment {
             symbol,
             assigned: None,
+            assigned_source: None,
             antecedent: self.flow_cursor,
         });
         self.flow_cursor = node;
@@ -337,27 +358,138 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .and_then(|target| target.continue_target)
     }
 
-    /// The narrowed type a `x = <rhs>` assignment installs: a literal's **widened**
-    /// base (`"s"` → `string`, `5` → `number`), `null`/`undefined` as-is, or `None`
-    /// (reset to the declared type) for any richer RHS — the sound over-report, and
-    /// enough for the corpus. Uses only well-known ids (no interning).
-    fn flow_assigned(&self, scope: ScopeId, rhs: &Expression<'_>) -> Option<TypeId> {
+    /// The flow value installed by `x = rhs`: direct literals, const assertions, or
+    /// a referenced identifier with non-widening provenance; richer RHSs reset.
+    fn flow_assigned(
+        &mut self,
+        scope: ScopeId,
+        rhs: &Expression<'_>,
+    ) -> (Option<TypeId>, Option<SymbolId>) {
+        match rhs {
+            Expression::ParenthesizedExpression(parenthesized) => {
+                return self.flow_assigned(scope, &parenthesized.expression)
+            }
+            Expression::TSSatisfiesExpression(satisfies) => {
+                return self.flow_assigned(scope, &satisfies.expression)
+            }
+            Expression::AssignmentExpression(assignment)
+                if assignment.operator == AssignmentOperator::Assign =>
+            {
+                return self.flow_assigned(scope, &assignment.right)
+            }
+            Expression::SequenceExpression(sequence) => {
+                return sequence
+                    .expressions
+                    .last()
+                    .map_or((None, None), |last| self.flow_assigned(scope, last))
+            }
+            Expression::TSAsExpression(assertion)
+                if is_const_assertion_type(&assertion.type_annotation) =>
+            {
+                return self.flow_const_asserted(scope, &assertion.expression)
+            }
+            Expression::TSTypeAssertion(assertion)
+                if is_const_assertion_type(&assertion.type_annotation) =>
+            {
+                return self.flow_const_asserted(scope, &assertion.expression)
+            }
+            _ => {}
+        }
         if let Some(super::super::decls::EnumMemberEndpoint::Found { member, .. }) =
             self.enum_member_expression_endpoint(scope, rhs)
         {
-            return Some(member);
+            return (self.interner.intern_widening_literal(member).ok(), None);
         }
         let wk = self.interner.well_known();
         match rhs {
-            Expression::StringLiteral(_) => Some(wk.string),
-            Expression::NumericLiteral(_) => Some(wk.number),
-            Expression::BooleanLiteral(_) => Some(wk.boolean),
-            Expression::NullLiteral(_) => Some(wk.null),
+            Expression::StringLiteral(literal) => (
+                Some(
+                    self.interner
+                        .intern_ordinary_literal(LiteralValue::String(literal.value.to_string())),
+                ),
+                None,
+            ),
+            Expression::NumericLiteral(literal) => (
+                Some(
+                    self.interner
+                        .intern_ordinary_literal(LiteralValue::Number(literal.value)),
+                ),
+                None,
+            ),
+            Expression::BooleanLiteral(literal) => (
+                Some(
+                    self.interner
+                        .intern_ordinary_literal(LiteralValue::Boolean(literal.value)),
+                ),
+                None,
+            ),
+            Expression::NullLiteral(_) => (Some(wk.null), None),
             Expression::Identifier(ident) if ident.name.as_str() == "undefined" => {
-                Some(wk.undefined)
+                (Some(wk.undefined), None)
             }
-            Expression::ParenthesizedExpression(paren) => {
-                self.flow_assigned(scope, &paren.expression)
+            Expression::Identifier(identifier) => self
+                .assignable_symbol(scope, identifier.name.as_str())
+                .filter(|symbol| !self.function_groups.requires_demand_intercept(*symbol))
+                .map_or((None, None), |symbol| (None, Some(symbol))),
+            _ => (None, None),
+        }
+    }
+
+    fn flow_const_asserted(
+        &mut self,
+        scope: ScopeId,
+        operand: &Expression<'_>,
+    ) -> (Option<TypeId>, Option<SymbolId>) {
+        match const_assertion_operand_kind(operand) {
+            ConstAssertionOperandKind::Owned => self
+                .flow_const_owned_literal(operand)
+                .map_or((None, None), |ty| (Some(ty), None)),
+            ConstAssertionOperandKind::EnumCandidate => {
+                match self.enum_member_expression_endpoint(scope, operand) {
+                    Some(super::super::decls::EnumMemberEndpoint::Found { member, .. }) => {
+                        (Some(member), None)
+                    }
+                    Some(super::super::decls::EnumMemberEndpoint::Missing { .. }) | None => {
+                        (None, None)
+                    }
+                }
+            }
+            ConstAssertionOperandKind::Invalid => (None, None),
+        }
+    }
+
+    fn flow_const_owned_literal(&mut self, operand: &Expression<'_>) -> Option<TypeId> {
+        match operand {
+            Expression::ParenthesizedExpression(parenthesized) => {
+                self.flow_const_owned_literal(&parenthesized.expression)
+            }
+            Expression::StringLiteral(literal) => Some(
+                self.interner
+                    .intern_literal(LiteralValue::String(literal.value.to_string())),
+            ),
+            Expression::NumericLiteral(literal) => Some(
+                self.interner
+                    .intern_literal(LiteralValue::Number(literal.value)),
+            ),
+            Expression::BooleanLiteral(literal) => Some(
+                self.interner
+                    .intern_literal(LiteralValue::Boolean(literal.value)),
+            ),
+            Expression::UnaryExpression(unary)
+                if unary.operator == UnaryOperator::UnaryNegation =>
+            {
+                let Expression::NumericLiteral(literal) = &unary.argument else {
+                    return None;
+                };
+                let value = -literal.value;
+                Some(
+                    self.interner
+                        .intern_literal(LiteralValue::Number(if value == 0.0 {
+                            0.0
+                        } else {
+                            value
+                        })),
+                )
             }
             _ => None,
         }

@@ -713,6 +713,7 @@ impl<'a> ConditionalEvaluator<'a> {
             // value placeholder (M26) carries no conditional infer binder — all opaque.
             TypeTag::Intrinsic
             | TypeTag::Literal
+            | TypeTag::WideningLiteral
             | TypeTag::Enum
             | TypeTag::EnumMember
             | TypeTag::TypeParam

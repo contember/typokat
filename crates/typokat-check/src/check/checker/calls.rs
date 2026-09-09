@@ -9,7 +9,9 @@ use super::context::*;
 use super::decls::alloc_type_param_ids;
 use super::eval::{contains_deferred_argument, contains_deferred_keyof};
 use super::expr::{contextual_literal_target, ContextualLiteralProvenance, ContextualRewalk};
+use super::expr::{InitializerContextSlot, InitializerContextState, PreparedInitializerContext};
 use super::function_groups::FunctionGroupDemand;
+use super::signature_projection::{CallArgumentTarget, RestArity, RestCallShape};
 use super::type_groups::{
     PublishedTypeGroupSurface, PublishedTypeGroupTerminal, TypeEnvironmentState,
 };
@@ -29,7 +31,7 @@ use crate::types::repr::{
 };
 use crate::types::store::TypeId;
 use crate::types::substitute::SubstitutionOutcome;
-use crate::types::{instantiate_function, substitute, Interner, WellKnown};
+use crate::types::{instantiate_function, substitute, Interner};
 use oxc_ast::ast::{
     Argument, ArrowFunctionExpression, BindingPattern, CallExpression, Expression, FormalParameter,
     FormalParameterRest, FormalParameters, Function, FunctionBody, NewExpression, TSTypeAnnotation,
@@ -38,15 +40,63 @@ use oxc_ast::ast::{
 use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHasher};
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(in crate::check::checker) struct ContextualInferenceEnvironment {
+    ordinary: Vec<(TypeParamId, TypeId)>,
+    expected_result: Vec<(TypeParamId, TypeId)>,
+}
+
+impl ContextualInferenceEnvironment {
+    fn extend(
+        outer: Option<&Self>,
+        type_params: &[GenericTypeParam],
+        ordinary: &FxHashMap<TypeParamId, TypeId>,
+        expected_result: &FxHashMap<TypeParamId, TypeId>,
+    ) -> Arc<Self> {
+        let mut all_ordinary: FxHashMap<_, _> = outer
+            .into_iter()
+            .flat_map(|outer| outer.ordinary.iter().copied())
+            .filter(|(binder, _)| !type_params.iter().any(|parameter| parameter.id == *binder))
+            .collect();
+        all_ordinary.extend(ordinary.iter().map(|(&binder, &ty)| (binder, ty)));
+        let mut all_expected: FxHashMap<_, _> = outer
+            .into_iter()
+            .flat_map(|outer| outer.expected_result.iter().copied())
+            .filter(|(binder, _)| !type_params.iter().any(|parameter| parameter.id == *binder))
+            .collect();
+        all_expected.extend(expected_result.iter().map(|(&binder, &ty)| (binder, ty)));
+        let mut ordinary: Vec<_> = all_ordinary.into_iter().collect();
+        ordinary.sort_unstable_by_key(|(binder, _)| binder.0);
+        let mut expected_result: Vec<_> = all_expected.into_iter().collect();
+        expected_result.sort_unstable_by_key(|(binder, _)| binder.0);
+        Arc::new(Self {
+            ordinary,
+            expected_result,
+        })
+    }
+}
 
 #[derive(Clone, Copy)]
 enum ArrowReturnPolicy {
-    Ordinary(Option<TypeId>),
+    Ordinary {
+        annotation: Option<TypeId>,
+        expression_context: Option<TypeId>,
+    },
     Satisfies {
         context: TypeId,
         return_target: TypeId,
         annotation: Option<TypeId>,
     },
+}
+
+#[derive(Clone, Copy)]
+struct ShellInferenceInput {
+    raw: Option<TypeId>,
+    target: TypeId,
+    root: TypeId,
+    index: usize,
 }
 
 #[cfg(test)]
@@ -55,6 +105,9 @@ mod contextual_duplicate_diagnostics_spec;
 #[cfg(test)]
 #[path = "calls/spec/contextual_rewalk_scaling_spec.rs"]
 mod contextual_rewalk_scaling_spec;
+#[cfg(test)]
+#[path = "calls/spec/native_inference_spec.rs"]
+mod native_inference_spec;
 
 /// How many declaration slots a memoized walk may depend on or republish, and how
 /// many distinct environments one node keeps entries for. A walk outside these bounds
@@ -91,8 +144,9 @@ const ARGUMENT_WALK_BUCKET_BUDGET: usize = 8;
 ///   (`docs/reference/invariants.md` §1). Narrowing in particular is not ambient — the
 ///   flow-node CFG resolves a reference from its own `(module scope, span)`, both of
 ///   which the node fixes.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub(in crate::check::checker) struct WalkEnvironment {
+    inference_environment: Option<Arc<ContextualInferenceEnvironment>>,
     module: ScopeId,
     scope: ScopeId,
     start: u32,
@@ -112,7 +166,7 @@ pub(in crate::check::checker) struct WalkEnvironment {
 /// One raw (context-free) walk of a call/`new` argument whose shape a committed
 /// contextual walk can supersede. The raw walk takes no contextual type, so the
 /// environment is the whole key.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub(in crate::check::checker) struct ArgumentWalkKey {
     environment: WalkEnvironment,
 }
@@ -120,11 +174,11 @@ pub(in crate::check::checker) struct ArgumentWalkKey {
 /// One effect-discarding contextual re-walk: the same environment, plus the raw type
 /// it refines, the already-resolved contextual type it is walked against, and which of
 /// the two branches (`use_contextual_arrow`) it takes.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub(in crate::check::checker) struct ContextualWalkKey {
     environment: WalkEnvironment,
     raw: TypeId,
-    context: TypeId,
+    context: PreparedInitializerContext,
     use_contextual_arrow: bool,
 }
 
@@ -134,29 +188,134 @@ pub(in crate::check::checker) struct ContextualWalkKey {
 /// walk leaves the same environment behind that performing it would have.
 pub(in crate::check::checker) struct MemoizedWalk<T> {
     value: T,
-    reads: Vec<(ValueStorageId, Option<TypeId>)>,
+    reads: Vec<DeclDependency>,
     writes: Vec<NetDeclWrite>,
 }
 
 /// A served entry, detached from the memo so the pass can be mutated while it is
 /// adopted: the answer, the declaration slots it depended on, and the ones it wrote.
-type ServedWalk<T> = (T, Vec<(ValueStorageId, Option<TypeId>)>, Vec<NetDeclWrite>);
+type ServedWalk<T> = (T, Vec<DeclDependency>, Vec<NetDeclWrite>);
 
-pub(in crate::check::checker) type MemoizedArgumentWalk = MemoizedWalk<(TypeId, Span)>;
+pub(in crate::check::checker) type MemoizedArgumentWalk = MemoizedWalk<CheckedExpr>;
 pub(in crate::check::checker) type MemoizedContextualWalk =
-    MemoizedWalk<((TypeId, Span), ContextualRewalk)>;
+    MemoizedWalk<(CheckedExpr, ContextualRewalk)>;
 
-impl<T: Copy> MemoizedWalk<T> {
+impl<T: Clone> MemoizedWalk<T> {
     /// The entry in `bucket` whose recorded reads all still hold, if any.
     fn serve(bucket: &[Self], decl_types: &DeclTypes) -> Option<ServedWalk<T>> {
         bucket
             .iter()
             .find(|entry| decl_types.dependencies_hold(&entry.reads))
-            .map(|entry| (entry.value, entry.reads.clone(), entry.writes.clone()))
+            .map(|entry| {
+                (
+                    entry.value.clone(),
+                    entry.reads.clone(),
+                    entry.writes.clone(),
+                )
+            })
     }
 }
 
 impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
+    fn with_inference_environment<T>(
+        &mut self,
+        environment: Option<Arc<ContextualInferenceEnvironment>>,
+        action: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let saved = std::mem::replace(&mut self.inference_environment, environment);
+        let result = action(self);
+        self.inference_environment = saved;
+        result
+    }
+
+    pub(in crate::check::checker) fn expected_inference_context(
+        &mut self,
+        target: TypeId,
+    ) -> TypeId {
+        let Some(environment) = &self.inference_environment else {
+            return target;
+        };
+        let map: FxHashMap<_, _> = environment.expected_result.iter().copied().collect();
+        if map.is_empty() {
+            return target;
+        }
+        let mut prepared = FxHashMap::default();
+        let mut pending = vec![(target, false)];
+        while let Some((ty, finish)) = pending.pop() {
+            let store = self.interner.store();
+            if !finish {
+                if prepared.contains_key(&ty) {
+                    continue;
+                }
+                prepared.insert(ty, ty);
+                pending.push((ty, true));
+                let children = if let Some(object) = store.object_type(ty) {
+                    object
+                        .properties
+                        .iter()
+                        .flat_map(|property| std::iter::once(property.ty).chain(property.write_ty))
+                        .chain(object.string_index)
+                        .chain(object.number_index)
+                        .collect::<Vec<_>>()
+                } else if let Some(array) = store.array_type(ty) {
+                    vec![array.element]
+                } else if let Some(tuple) = store.tuple_type(ty) {
+                    tuple
+                        .elements
+                        .iter()
+                        .copied()
+                        .chain(tuple.rest.map(|rest| rest.ty))
+                        .collect()
+                } else if let Some(operand) = store.readonly_operand(ty) {
+                    vec![operand]
+                } else {
+                    store
+                        .union_members(ty)
+                        .or_else(|| store.intersection_members(ty))
+                        .unwrap_or_default()
+                        .to_vec()
+                };
+                pending.extend(children.into_iter().map(|child| (child, false)));
+                continue;
+            }
+            let mapped = |child| prepared.get(&child).copied().unwrap_or(child);
+            // Existing callable binders belong to P/return-R; R may still introduce a shape at a bare binder.
+            let result = if store.function_type(ty).is_some() {
+                ty
+            } else if let Some(mut object) = store.object_type(ty).cloned() {
+                for property in &mut object.properties {
+                    property.ty = mapped(property.ty);
+                    property.write_ty = property.write_ty.map(mapped);
+                }
+                object.string_index = object.string_index.map(mapped);
+                object.number_index = object.number_index.map(mapped);
+                self.interner.intern_object(object)
+            } else if let Some(array) = store.array_type(ty) {
+                self.interner.intern_array(mapped(array.element))
+            } else if let Some(mut tuple) = store.tuple_type(ty).cloned() {
+                for element in &mut tuple.elements {
+                    *element = mapped(*element);
+                }
+                if let Some(rest) = &mut tuple.rest {
+                    rest.ty = mapped(rest.ty);
+                }
+                self.interner.intern_tuple_type(tuple)
+            } else if let Some(operand) = store.readonly_operand(ty) {
+                self.interner.intern_readonly(mapped(operand))
+            } else if let Some(members) = store.union_members(ty) {
+                let members = members.iter().copied().map(mapped).collect();
+                self.interner.union(members)
+            } else if let Some(members) = store.intersection_members(ty) {
+                let members = members.iter().copied().map(mapped).collect();
+                self.interner.intersection(members)
+            } else {
+                substitute(self.interner, ty, &map)
+            };
+            prepared.insert(ty, result);
+        }
+        prepared[&target]
+    }
+
     /// The environment key for a walk of `span` in `scope`, or `None` when this walk
     /// may not be memoized at all.
     ///
@@ -194,11 +353,13 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
         // Class construction states: member surfaces are still moving.
         if self.staged_class_validation.is_some()
             || self.current_body_this_environment.is_some()
+            || self.active_initializer_validation.is_some()
             || !matches!(self.type_environment, TypeEnvironmentState::Published(_))
         {
             return None;
         }
         Some(WalkEnvironment {
+            inference_environment: self.inference_environment.clone(),
             module: self.current_module,
             scope,
             start: span.start,
@@ -246,11 +407,7 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
 
     /// Adopt a served entry: inherit its declaration dependencies so the enclosing
     /// walk records them as its own, and republish the bindings it left behind.
-    fn adopt_memoized_walk(
-        &mut self,
-        reads: &[(ValueStorageId, Option<TypeId>)],
-        writes: &[NetDeclWrite],
-    ) {
+    fn adopt_memoized_walk(&mut self, reads: &[DeclDependency], writes: &[NetDeclWrite]) {
         DeclTypes::replay_dependencies(reads);
         self.decl_types.apply_writes(writes);
     }
@@ -259,7 +416,7 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
     /// than the memo carries or the node already has enough distinct environments.
     fn memoize_walk<T>(
         bucket: &mut Vec<MemoizedWalk<T>>,
-        reads: Vec<(ValueStorageId, Option<TypeId>)>,
+        reads: Vec<DeclDependency>,
         writes: Vec<NetDeclWrite>,
         value: T,
     ) {
@@ -280,7 +437,7 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
         &self,
         scope: ScopeId,
         raw: (TypeId, Span),
-        context: TypeId,
+        context: PreparedInitializerContext,
         use_contextual_arrow: bool,
     ) -> Option<ContextualWalkKey> {
         Some(ContextualWalkKey {
@@ -295,7 +452,7 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
     pub(in crate::check::checker) fn memoized_contextual_walk(
         &mut self,
         key: &ContextualWalkKey,
-    ) -> Option<((TypeId, Span), ContextualRewalk)> {
+    ) -> Option<(CheckedExpr, ContextualRewalk)> {
         let bucket = self.contextual_walk_memo.get(key)?;
         let (value, reads, writes) = MemoizedWalk::serve(bucket, &self.decl_types)?;
         self.adopt_memoized_walk(&reads, &writes);
@@ -308,7 +465,7 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
         &mut self,
         key: ContextualWalkKey,
         mark: usize,
-        value: ((TypeId, Span), ContextualRewalk),
+        value: (CheckedExpr, ContextualRewalk),
     ) {
         let reads = DeclTypes::dependencies_since(mark);
         let writes = DeclTypes::net_writes_since(mark);
@@ -318,6 +475,19 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
             writes,
             value,
         );
+    }
+
+    pub(in crate::check::checker) fn append_checked_walk_roots(&self, roots: &mut Vec<TypeId>) {
+        for bucket in self.raw_argument_walk_memo.values() {
+            for entry in bucket {
+                entry.value.append_type_roots(roots);
+            }
+        }
+        for bucket in self.contextual_walk_memo.values() {
+            for entry in bucket {
+                entry.value.0.append_type_roots(roots);
+            }
+        }
     }
 }
 
@@ -332,10 +502,19 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
 fn contextual_rewalk_candidate_shape(expr: &Expression<'_>) -> bool {
     match expr {
         Expression::ArrowFunctionExpression(_)
+        | Expression::FunctionExpression(_)
         | Expression::ObjectExpression(_)
         | Expression::ArrayExpression(_) => true,
         Expression::ParenthesizedExpression(paren) => {
             contextual_rewalk_candidate_shape(&paren.expression)
+        }
+        Expression::ConditionalExpression(conditional) => {
+            contextual_rewalk_candidate_shape(&conditional.consequent)
+                || contextual_rewalk_candidate_shape(&conditional.alternate)
+        }
+        Expression::LogicalExpression(logical) => {
+            contextual_rewalk_candidate_shape(&logical.left)
+                || contextual_rewalk_candidate_shape(&logical.right)
         }
         _ => false,
     }
@@ -498,16 +677,22 @@ macro_rules! contextual_source_after_walked {
         #[cfg(test)]
         {
             with_contextual_measure_phase($phase, || {
-                $pass.infer_contextual_source_after_walked(
-                    $scope, $expr, $context, $raw, $arrow, $retain,
-                )
+                $pass
+                    .infer_contextual_checked_source_after_walked_reporting(
+                        $scope, $expr, $context, $raw, $arrow, $retain,
+                    )
+                    .0
+                    .tuple()
             })
         }
         #[cfg(not(test))]
         {
-            $pass.infer_contextual_source_after_walked(
-                $scope, $expr, $context, $raw, $arrow, $retain,
-            )
+            $pass
+                .infer_contextual_checked_source_after_walked_reporting(
+                    $scope, $expr, $context, $raw, $arrow, $retain,
+                )
+                .0
+                .tuple()
         }
     }};
 }
@@ -517,16 +702,18 @@ macro_rules! contextual_source_after_walked_reporting {
         #[cfg(test)]
         {
             with_contextual_measure_phase($phase, || {
-                $pass.infer_contextual_source_after_walked_reporting(
+                let (value, rewalk) = $pass.infer_contextual_checked_source_after_walked_reporting(
                     $scope, $expr, $context, $raw, $arrow, $retain,
-                )
+                );
+                (value.tuple(), rewalk)
             })
         }
         #[cfg(not(test))]
         {
-            $pass.infer_contextual_source_after_walked_reporting(
+            let (value, rewalk) = $pass.infer_contextual_checked_source_after_walked_reporting(
                 $scope, $expr, $context, $raw, $arrow, $retain,
-            )
+            );
+            (value.tuple(), rewalk)
         }
     }};
 }
@@ -862,9 +1049,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         scope: ScopeId,
         argument_index: usize,
         arg_expr: &Expression<'_>,
-    ) -> Option<(TypeId, Span)> {
+    ) -> Option<CheckedExpr> {
         if !contextual_rewalk_candidate_shape(arg_expr) {
-            let inferred = self.infer_expr(scope, arg_expr);
+            let inferred = self.infer_checked_expr(scope, arg_expr);
             if inferred.is_some() {
                 self.hold_provisional_argument_effects(ProvisionalArgumentWalk::Settled);
             }
@@ -891,7 +1078,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
         let mark = DeclTypes::log_mark();
         let (inferred, effects) =
-            self.capture_candidate_effects(|pass| pass.infer_expr(scope, arg_expr));
+            self.capture_candidate_effects(|pass| pass.infer_checked_expr(scope, arg_expr));
         match inferred {
             Some(inferred) => {
                 if let Some(key) = key {
@@ -901,7 +1088,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         self.raw_argument_walk_memo.entry(key).or_default(),
                         reads,
                         writes,
-                        inferred,
+                        inferred.clone(),
                     );
                 }
                 self.hold_provisional_argument_effects(ProvisionalArgumentWalk::Held(effects));
@@ -963,7 +1150,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         scope: ScopeId,
         params: &[ParameterType],
-        arg_types: &[(TypeId, Span)],
+        arg_types: &[CheckedExpr],
         arg_exprs: &[&Expression<'_>],
         #[cfg(test)] phase: ContextualMeasurePhase,
     ) -> PreparedInferenceArgs {
@@ -971,8 +1158,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let undefined = self.interner.well_known().undefined;
         let mut types = Vec::with_capacity(arg_types.len());
         let mut optional_undefined_fallback = Vec::with_capacity(arg_types.len());
-        for (((arg_ty, arg_span), arg_expr), target) in arg_types.iter().zip(arg_exprs).zip(targets)
-        {
+        for ((checked, arg_expr), target) in arg_types.iter().zip(arg_exprs).zip(targets) {
+            let arg_ty = &checked.ty;
             let source = match target {
                 None => *arg_ty,
                 Some(target)
@@ -990,7 +1177,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         scope,
                         arg_expr,
                         target.declared,
-                        (*arg_ty, *arg_span),
+                        checked.clone(),
                         true,
                         false,
                         phase
@@ -1140,7 +1327,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
         // Infer arguments up front and build `arg_fresh` in the same loop so M24
         // clamp provenance stays index-aligned with skipped out-of-subset args.
-        let mut arg_types: Vec<(TypeId, Span)> = Vec::with_capacity(call.arguments.len());
+        let mut arg_types: Vec<CheckedExpr> = Vec::with_capacity(call.arguments.len());
         let mut arg_fresh: Vec<bool> = Vec::with_capacity(call.arguments.len());
         let mut arg_exprs: Vec<&Expression<'_>> = Vec::with_capacity(call.arguments.len());
         for (argument_index, arg) in call.arguments.iter().enumerate() {
@@ -1210,7 +1397,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             self.own_type_demand(DemandOutcome::Exhausted(exhaustion), call_span);
             return None;
         }
-        self.check_call_arguments(scope, &candidate.params, &arg_types, &arg_exprs, call_span);
+        self.check_call_arguments(
+            scope,
+            &candidate.params,
+            candidate.contextual_inputs.as_ref(),
+            &arg_types,
+            &arg_exprs,
+            call_span,
+        );
         if candidate.inference_exhaustion.is_some() {
             return None;
         }
@@ -2000,7 +2194,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// structural types may have dropped unsupported signatures, so they stay silent.
     fn provably_non_callable(&self, callee_ty: TypeId) -> bool {
         match self.interner.store().tag(callee_ty) {
-            TypeTag::Literal | TypeTag::Enum | TypeTag::EnumMember => true,
+            TypeTag::Literal | TypeTag::WideningLiteral | TypeTag::Enum | TypeTag::EnumMember => {
+                true
+            }
             TypeTag::Intrinsic => matches!(
                 self.interner.store().intrinsic_kind(callee_ty),
                 Some(
@@ -2120,14 +2316,24 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 }
             };
             let trial = self.with_speculative_candidate_queries(|pass| {
-                pass.try_call_candidate(
-                    scope,
-                    &candidate.params,
-                    receiver.trial_receivers(&candidate),
-                    args.types,
-                    args.exprs,
-                    span,
-                )
+                let environment = candidate
+                    .contextual_inputs
+                    .as_ref()
+                    .map(|inputs| inputs.environment.clone())
+                    .or_else(|| pass.inference_environment.clone());
+                pass.with_inference_environment(environment, |pass| {
+                    pass.try_call_candidate(
+                        scope,
+                        &candidate.params,
+                        candidate
+                            .contextual_inputs
+                            .as_ref()
+                            .map(|inputs| inputs.params.as_slice()),
+                        receiver.trial_receivers(&candidate),
+                        args.types,
+                        args.exprs,
+                    )
+                })
             });
             match trial {
                 CandidateTrial::Match => {
@@ -2197,6 +2403,416 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         DemandOutcome::Ready(None)
     }
 
+    fn prepare_expected_result_map(
+        &mut self,
+        type_params: &[GenericTypeParam],
+        retained_return: TypeId,
+        expected: Option<TypeId>,
+    ) -> Result<FxHashMap<TypeParamId, TypeId>, CandidateBuildFailure> {
+        let Some(expected) = expected else {
+            return Ok(FxHashMap::default());
+        };
+        let mut outer: FxHashMap<_, _> = self
+            .inference_environment
+            .iter()
+            .flat_map(|environment| environment.ordinary.iter().copied())
+            .collect();
+        outer.extend(
+            self.inference_environment
+                .iter()
+                .flat_map(|environment| environment.expected_result.iter().copied()),
+        );
+        let source = substitute(self.interner, expected, &outer);
+        self.semantic_queries.savepoint();
+        let result = self.infer_partial_signature_type_arguments_with_native_demands(
+            infer::SignatureInferenceRequest {
+                purpose: infer::SignatureInferencePurpose::ClassApplication,
+                type_params,
+                params: &[ParameterType::required("", retained_return)],
+                args: &[source],
+                fresh_args: &[false],
+                optional_undefined_fallback: &[false],
+                receiver: None,
+            },
+        );
+        match result {
+            DemandOutcome::Ready(result)
+                if result.exhaustion.is_none() && result.constraint_violations.is_empty() =>
+            {
+                self.semantic_queries.commit();
+                Ok(result.arguments.into_iter().collect())
+            }
+            _ => {
+                self.semantic_queries.rollback();
+                Ok(FxHashMap::default())
+            }
+        }
+    }
+
+    fn inference_shell_binders(
+        &mut self,
+        target: TypeId,
+        parameters: &[GenericTypeParam],
+    ) -> Vec<TypeParamId> {
+        crate::types::substitute::derived_free_params(self.interner, target)
+            .iter()
+            .copied()
+            .filter(|binder| parameters.iter().any(|parameter| parameter.id == *binder))
+            .collect()
+    }
+
+    fn summarize_inference_parameters(
+        &mut self,
+        source: &FormalParameters<'_>,
+        start: u32,
+        input: ShellInferenceInput,
+        parameters: &[GenericTypeParam],
+        preparation: &mut infer::CallInferencePreparation,
+    ) {
+        let ShellInferenceInput {
+            raw,
+            target,
+            root,
+            index,
+        } = input;
+        let Some(shape) = self.contextual_function_shape(target) else {
+            preparation
+                .legacy
+                .extend(self.inference_shell_binders(target, parameters));
+            return;
+        };
+        let scope = self
+            .binder
+            .fn_scopes
+            .get(&(self.current_module, start))
+            .copied();
+        let partial_header = source
+            .items
+            .iter()
+            .any(|parameter| parameter.type_annotation.is_none())
+            || source
+                .rest
+                .as_ref()
+                .is_some_and(|parameter| parameter.type_annotation.is_none());
+        for syntax in parameter_syntaxes(source) {
+            let (target, annotated) = match syntax {
+                ParameterSyntax::Fixed { parameter, index } => (
+                    self.contextual_parameter_target(&shape.params, index, source.items.len()),
+                    parameter.type_annotation.is_some(),
+                ),
+                ParameterSyntax::Rest { parameter } => (
+                    shape
+                        .params
+                        .iter()
+                        .find(|parameter| parameter.rest)
+                        .map(|parameter| parameter.ty),
+                    parameter.type_annotation.is_some(),
+                ),
+            };
+            let Some(target) = target else {
+                continue;
+            };
+            let binders = self.inference_shell_binders(target, parameters);
+            if !annotated {
+                preparation.fixed.extend(binders);
+                continue;
+            }
+            let declared = scope
+                .and_then(|scope| {
+                    parameter_name(syntax.pattern())
+                        .and_then(|name| self.binder.resolve_value(scope, &name))
+                })
+                .and_then(|symbol| self.binder.symbols.get(symbol))
+                .and_then(|symbol| symbol.value)
+                .and_then(|slot| self.decl_types.get(slot));
+            let mut sources = declared.into_iter().collect::<Vec<_>>();
+            if sources.is_empty() {
+                let members = raw
+                    .map(|raw| {
+                        self.interner
+                            .store()
+                            .union_members(raw)
+                            .map_or_else(|| vec![raw], <[_]>::to_vec)
+                    })
+                    .unwrap_or_default();
+                for member in members {
+                    if let Some(shape) = self.contextual_function_shape(member) {
+                        let source = match syntax {
+                            ParameterSyntax::Fixed { index, .. } => self
+                                .contextual_parameter_target(
+                                    &shape.params,
+                                    index,
+                                    source.items.len(),
+                                ),
+                            ParameterSyntax::Rest { .. } => shape
+                                .params
+                                .iter()
+                                .find(|parameter| parameter.rest)
+                                .map(|parameter| parameter.ty),
+                        };
+                        if let Some(source) =
+                            source.filter(|source| *source != self.interner.well_known().error)
+                        {
+                            sources.push(source);
+                        }
+                    }
+                }
+            }
+            if !sources.is_empty() {
+                for binder in binders {
+                    match infer::inference_position(self.interner, root, binder) {
+                        infer::InferencePosition::CallbackInput => {
+                            if partial_header {
+                                preparation.annotation_inputs.insert((index, binder));
+                            } else {
+                                preparation.upper_inputs.insert((index, binder));
+                            }
+                        }
+                        infer::InferencePosition::Mixed | infer::InferencePosition::Opaque => {
+                            preparation.legacy.insert(binder);
+                        }
+                        infer::InferencePosition::Output => {}
+                    }
+                }
+                for source in sources {
+                    preparation
+                        .independent_inputs
+                        .push(infer::IndependentInferenceInput {
+                            argument: index,
+                            source,
+                            target,
+                            original_target: root,
+                        });
+                }
+            } else {
+                preparation.legacy.extend(binders);
+            }
+        }
+    }
+
+    fn summarize_inference_shell(
+        &mut self,
+        scope: ScopeId,
+        expression: &Expression<'_>,
+        input: ShellInferenceInput,
+        parameters: &[GenericTypeParam],
+        preparation: &mut infer::CallInferencePreparation,
+    ) {
+        let ShellInferenceInput {
+            raw,
+            target,
+            root,
+            index,
+        } = input;
+        let affected = self.inference_shell_binders(target, parameters);
+        if self.interner.store().type_param(target).is_some() {
+            if let Some(source) = raw {
+                preparation
+                    .independent_inputs
+                    .push(infer::IndependentInferenceInput {
+                        argument: index,
+                        source,
+                        target,
+                        original_target: root,
+                    });
+                return;
+            }
+        }
+        for &binder in &affected {
+            if matches!(
+                infer::inference_position(self.interner, root, binder),
+                infer::InferencePosition::Mixed | infer::InferencePosition::Opaque
+            ) {
+                preparation.legacy.insert(binder);
+            }
+        }
+        match expression {
+            Expression::ParenthesizedExpression(parenthesized) => self.summarize_inference_shell(
+                scope,
+                &parenthesized.expression,
+                input,
+                parameters,
+                preparation,
+            ),
+            Expression::ArrowFunctionExpression(arrow) if arrow.type_parameters.is_none() => self
+                .summarize_inference_parameters(
+                    &arrow.params,
+                    arrow.span.start,
+                    input,
+                    parameters,
+                    preparation,
+                ),
+            Expression::FunctionExpression(function) if function.type_parameters.is_none() => self
+                .summarize_inference_parameters(
+                    &function.params,
+                    function.span.start,
+                    input,
+                    parameters,
+                    preparation,
+                ),
+            Expression::ConditionalExpression(conditional) => {
+                for arm in [&conditional.consequent, &conditional.alternate] {
+                    self.summarize_inference_shell(scope, arm, input, parameters, preparation);
+                }
+            }
+            Expression::LogicalExpression(logical) => {
+                for (position, arm) in [&logical.left, &logical.right].into_iter().enumerate() {
+                    let operand_raw = match arm {
+                        Expression::Identifier(identifier) => self
+                            .binder
+                            .resolve_value(scope, identifier.name.as_str())
+                            .and_then(|symbol| self.binder.symbols.get(symbol))
+                            .and_then(|symbol| symbol.value)
+                            .and_then(|slot| self.decl_types.get(slot)),
+                        _ => raw,
+                    };
+                    let operand_raw = if position == 0 {
+                        match logical.operator {
+                            oxc_ast::ast::LogicalOperator::And => continue,
+                            oxc_ast::ast::LogicalOperator::Coalesce => {
+                                operand_raw.map(|raw| self.strip_nullish(raw))
+                            }
+                            oxc_ast::ast::LogicalOperator::Or => operand_raw.map(|raw| {
+                                crate::check::flow::narrow_by_truthiness(self.interner, raw, true)
+                            }),
+                        }
+                    } else {
+                        operand_raw
+                    };
+                    if operand_raw == Some(self.interner.well_known().never) {
+                        continue;
+                    }
+                    self.summarize_inference_shell(
+                        scope,
+                        arm,
+                        ShellInferenceInput {
+                            raw: operand_raw,
+                            ..input
+                        },
+                        parameters,
+                        preparation,
+                    );
+                }
+            }
+            Expression::ObjectExpression(object) => {
+                for property in &object.properties {
+                    let oxc_ast::ast::ObjectPropertyKind::ObjectProperty(property) = property
+                    else {
+                        preparation.legacy.extend(affected.iter().copied());
+                        continue;
+                    };
+                    let Some(name) = property.key.static_name() else {
+                        preparation.legacy.extend(affected.iter().copied());
+                        continue;
+                    };
+                    let child_target = self
+                        .interner
+                        .store()
+                        .object_type(target)
+                        .and_then(|shape| shape.property(&name))
+                        .map(|property| property.ty);
+                    if let Some(child_target) = child_target {
+                        let child_raw = raw
+                            .and_then(|raw| self.interner.store().object_type(raw))
+                            .and_then(|shape| shape.property(&name))
+                            .map(|property| property.ty);
+                        self.summarize_inference_shell(
+                            scope,
+                            &property.value,
+                            ShellInferenceInput {
+                                raw: child_raw,
+                                target: child_target,
+                                ..input
+                            },
+                            parameters,
+                            preparation,
+                        );
+                    } else {
+                        preparation.legacy.extend(affected.iter().copied());
+                    }
+                }
+            }
+            Expression::ArrayExpression(array) => {
+                for (position, element) in array.elements.iter().enumerate() {
+                    let Some(element) = element.as_expression() else {
+                        preparation.legacy.extend(affected.iter().copied());
+                        continue;
+                    };
+                    let child_target = self
+                        .interner
+                        .store()
+                        .array_type(target)
+                        .map(|array| array.element)
+                        .or_else(|| {
+                            self.interner
+                                .store()
+                                .tuple_type(target)
+                                .and_then(|tuple| tuple.elements.get(position))
+                                .copied()
+                        });
+                    if let Some(child_target) = child_target {
+                        let child_raw = raw.and_then(|raw| {
+                            self.interner
+                                .store()
+                                .array_type(raw)
+                                .map(|array| array.element)
+                                .or_else(|| {
+                                    self.interner
+                                        .store()
+                                        .tuple_type(raw)
+                                        .and_then(|tuple| tuple.elements.get(position))
+                                        .copied()
+                                })
+                        });
+                        self.summarize_inference_shell(
+                            scope,
+                            element,
+                            ShellInferenceInput {
+                                raw: child_raw,
+                                target: child_target,
+                                ..input
+                            },
+                            parameters,
+                            preparation,
+                        );
+                    } else {
+                        preparation.legacy.extend(affected.iter().copied());
+                    }
+                }
+            }
+            _ => {
+                let raw = raw.or_else(|| match expression {
+                    Expression::Identifier(identifier) => self
+                        .binder
+                        .resolve_value(scope, identifier.name.as_str())
+                        .and_then(|symbol| self.binder.symbols.get(symbol))
+                        .and_then(|symbol| symbol.value)
+                        .and_then(|slot| self.decl_types.get(slot)),
+                    _ => None,
+                });
+                if let Some(raw) = raw {
+                    for binder in affected {
+                        if infer::inference_position(self.interner, root, binder)
+                            == infer::InferencePosition::CallbackInput
+                        {
+                            preparation.upper_inputs.insert((index, binder));
+                        }
+                    }
+                    preparation
+                        .independent_inputs
+                        .push(infer::IndependentInferenceInput {
+                            argument: index,
+                            source: raw,
+                            target,
+                            original_target: root,
+                        });
+                } else {
+                    preparation.legacy.extend(affected);
+                }
+            }
+        }
+    }
+
     /// Build one callable or constructable signature candidate from its persistent
     /// generic descriptors. Both `f<T>(...)` and `new C<T>(...)` share this path so
     /// outer-substituted constraints/defaults cannot fall back to stale store state.
@@ -2232,6 +2848,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .map(|function| function.type_params.clone())
             .ok_or(CandidateBuildFailure::Unavailable)?;
         let mut inference_exhaustion = None;
+        let mut contextual_inputs = None;
         let instantiated = if generic_params.is_empty() {
             signature_ty
         } else {
@@ -2294,75 +2911,111 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         .ok_or(CandidateBuildFailure::Unavailable)?
                         .params
                         .clone();
-                    // Fix only source arguments that precede a direct contextual callback.
-                    // This gives `on("event", listener)` its event-name `K` before
-                    // contextualizing `listener`, without perturbing ordinary fresh-literal
-                    // inference (which deliberately needs the full candidate policy).
-                    let contextual_start = args
+                    let retained_return = self
+                        .interner
+                        .store()
+                        .function_type(signature_ty)
+                        .ok_or(CandidateBuildFailure::Unavailable)?
+                        .ret;
+                    let mut preparation = infer::CallInferencePreparation::default();
+                    let raw_targets = self.call_argument_targets(&params, args.types.len());
+                    for (index, ((expression, raw), target)) in args
                         .exprs
                         .iter()
-                        .position(|expr| matches!(expr, Expression::ArrowFunctionExpression(_)));
-                    let contextual_params = if let Some(start) = contextual_start {
+                        .zip(args.types)
+                        .zip(&raw_targets)
+                        .enumerate()
+                    {
+                        if let Some(target) = target {
+                            preparation.deferred_arguments.insert(index);
+                            let raw = self.call_argument_inference_source(raw.ty, *target);
+                            self.summarize_inference_shell(
+                                scope,
+                                expression,
+                                ShellInferenceInput {
+                                    raw: Some(raw),
+                                    target: target.declared,
+                                    root: target.declared,
+                                    index,
+                                },
+                                &generic_params,
+                                &mut preparation,
+                            );
+                        }
+                    }
+                    let result_map = self.prepare_expected_result_map(
+                        &generic_params,
+                        retained_return,
+                        contextual_return,
+                    )?;
+                    let contextual_map = {
                         #[cfg(test)]
                         measure_call(|measure| measure.generic_preliminary_inference_runs += 1);
-                        let raw_targets = self.call_argument_targets(&params, args.types.len());
                         let undefined = self.interner.well_known().undefined;
-                        let mut raw_args = Vec::with_capacity(start);
-                        let mut raw_optional_undefined_fallback = Vec::with_capacity(start);
-                        for ((source, _), target) in args.types[..start].iter().zip(raw_targets) {
-                            let source = target.map_or(*source, |target| {
-                                self.call_argument_inference_source(*source, target)
+                        let mut raw_args = Vec::with_capacity(args.types.len());
+                        let mut raw_optional_undefined_fallback =
+                            Vec::with_capacity(args.types.len());
+                        for (source, target) in args.types.iter().zip(raw_targets) {
+                            let source = target.map_or(source.ty, |target| {
+                                self.call_argument_inference_source(source.ty, target)
                             });
                             raw_optional_undefined_fallback.push(target.is_some_and(|target| {
                                 target.accepts_undefined && source == undefined
                             }));
                             raw_args.push(source);
                         }
-                        let preliminary = self.infer_signature_type_arguments_with_native_demands(
-                            infer::SignatureInferenceRequest {
-                                type_params: &generic_params,
-                                params: &params,
-                                args: &raw_args,
-                                fresh_args: &args.fresh[..start],
-                                optional_undefined_fallback: &raw_optional_undefined_fallback,
-                                receiver: call_receiver.zip(
-                                    self.interner
-                                        .store()
-                                        .function_type(signature_ty)
-                                        .and_then(|function| function.receiver),
-                                ),
-                            },
-                            None,
-                        );
+                        let preliminary = self
+                            .infer_partial_signature_type_arguments_with_native_demands(
+                                infer::SignatureInferenceRequest {
+                                    purpose: infer::SignatureInferencePurpose::ContextualPreview {
+                                        retained_return,
+                                        preparation: &preparation,
+                                    },
+                                    type_params: &generic_params,
+                                    params: &params,
+                                    args: &raw_args,
+                                    fresh_args: args.fresh,
+                                    optional_undefined_fallback: &raw_optional_undefined_fallback,
+                                    receiver: call_receiver.zip(
+                                        self.interner
+                                            .store()
+                                            .function_type(signature_ty)
+                                            .and_then(|function| function.receiver),
+                                    ),
+                                },
+                            );
                         let preliminary = match preliminary {
                             DemandOutcome::Ready(result) => {
                                 inference_exhaustion = result.exhaustion;
+                                preparation.top_level = result.top_level;
                                 result.arguments
                             }
                             DemandOutcome::Exhausted(exhaustion) => {
                                 return Err(CandidateBuildFailure::Exhausted(exhaustion));
                             }
                         };
-                        let unknown = self.interner.well_known().unknown;
-                        let contextual_map: FxHashMap<TypeParamId, TypeId> = preliminary
-                            .into_iter()
-                            .filter(|(_, ty)| *ty != unknown)
-                            .collect();
-                        if contextual_map.is_empty() {
-                            params.clone()
-                        } else {
-                            let contextual_signature =
-                                instantiate_function(self.interner, signature_ty, &contextual_map);
-                            self.interner
-                                .store()
-                                .function_type(contextual_signature)
-                                .ok_or(CandidateBuildFailure::Unavailable)?
-                                .params
-                                .clone()
-                        }
-                    } else {
-                        params.clone()
+                        let contextual_map: FxHashMap<TypeParamId, TypeId> =
+                            preliminary.into_iter().collect();
+                        contextual_map
                     };
+                    let environment = ContextualInferenceEnvironment::extend(
+                        self.inference_environment.as_deref(),
+                        &generic_params,
+                        &contextual_map,
+                        &result_map,
+                    );
+                    let legacy_map: FxHashMap<_, _> = contextual_map
+                        .iter()
+                        .filter(|(binder, _)| preparation.legacy.contains(binder))
+                        .map(|(&binder, &ty)| (binder, ty))
+                        .collect();
+                    let contextual_params = params
+                        .iter()
+                        .map(|parameter| ParameterType {
+                            ty: substitute(self.interner, parameter.ty, &legacy_map),
+                            ..parameter.clone()
+                        })
+                        .collect();
                     let contextual_params = match self.evaluate_parameters(contextual_params, span)
                     {
                         DemandOutcome::Ready(params) => params,
@@ -2370,17 +3023,28 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                             return Err(CandidateBuildFailure::Exhausted(exhaustion))
                         }
                     };
-                    let inference_args = contextual_inference_args!(
-                        self,
-                        scope,
-                        &contextual_params,
-                        args.types,
-                        args.exprs,
-                        ContextualMeasurePhase::CandidateInference
-                    );
+                    let inference_args =
+                        self.with_inference_environment(Some(environment.clone()), |pass| {
+                            contextual_inference_args!(
+                                pass,
+                                scope,
+                                &contextual_params,
+                                args.types,
+                                args.exprs,
+                                ContextualMeasurePhase::CandidateInference
+                            )
+                        });
+                    contextual_inputs = Some(ContextualCallInputs {
+                        params: contextual_params,
+                        environment,
+                    });
                     #[cfg(test)]
                     measure_call(|measure| measure.generic_full_inference_runs += 1);
                     let request = infer::SignatureInferenceRequest {
+                        purpose: infer::SignatureInferencePurpose::FinalCall {
+                            retained_return,
+                            preparation: &preparation,
+                        },
                         type_params: &generic_params,
                         params: &params,
                         args: &inference_args.types,
@@ -2393,7 +3057,15 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                                 .and_then(|function| function.receiver),
                         ),
                     };
-                    let return_context = contextual_return.zip(
+                    let ordinary_expected = contextual_return.map(|target| {
+                        let map = self
+                            .inference_environment
+                            .as_ref()
+                            .map(|environment| environment.ordinary.iter().copied().collect())
+                            .unwrap_or_default();
+                        substitute(self.interner, target, &map)
+                    });
+                    let return_context = ordinary_expected.zip(
                         self.interner
                             .store()
                             .function_type(signature_ty)
@@ -2408,12 +3080,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                             if inference_exhaustion.is_none() {
                                 inference_exhaustion = result.exhaustion;
                             }
+                            let arguments = result.arguments;
+                            let constraint_violations = result.constraint_violations;
                             if reject_inferred_constraint_violations
-                                && !result.constraint_violations.is_empty()
+                                && !constraint_violations.is_empty()
                             {
                                 return Err(CandidateBuildFailure::InferredConstraint);
                             }
-                            result.arguments
+                            arguments
                         }
                         DemandOutcome::Exhausted(exhaustion) => {
                             return Err(CandidateBuildFailure::Exhausted(exhaustion));
@@ -2448,6 +3122,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             None => None,
         };
         Ok(CallCandidate {
+            contextual_inputs,
             receiver,
             params,
             ret,
@@ -2491,10 +3166,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         scope: ScopeId,
         params: &[ParameterType],
+        contextual_params: Option<&[ParameterType]>,
         receivers: (Option<TypeId>, Option<TypeId>),
-        arg_types: &[(TypeId, Span)],
+        arg_types: &[CheckedExpr],
         arg_exprs: &[&Expression<'_>],
-        _call_span: Span,
     ) -> CandidateTrial {
         #[cfg(test)]
         measure_call(|measure| measure.candidate_trials += 1);
@@ -2524,11 +3199,22 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             #[cfg(test)]
             let compatibility =
                 with_contextual_measure_phase(ContextualMeasurePhase::CandidateTrial, || {
-                    self.compatible_call_argument_targets(params, arg_types, arg_exprs, scope)
+                    self.compatible_call_argument_targets(
+                        params,
+                        contextual_params,
+                        arg_types,
+                        arg_exprs,
+                        scope,
+                    )
                 });
             #[cfg(not(test))]
-            let compatibility =
-                self.compatible_call_argument_targets(params, arg_types, arg_exprs, scope);
+            let compatibility = self.compatible_call_argument_targets(
+                params,
+                contextual_params,
+                arg_types,
+                arg_exprs,
+                scope,
+            );
             return match compatibility {
                 DemandOutcome::Ready(Some(_)) => {
                     #[cfg(test)]
@@ -2548,7 +3234,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .into_iter()
             .next()
             .expect("one alternative has a first element");
-        for (((arg_ty, arg_span), arg_expr), target) in arg_types.iter().zip(arg_exprs).zip(targets)
+        let contexts =
+            self.call_argument_targets(contextual_params.unwrap_or(params), arg_types.len());
+        for (index, ((checked, arg_expr), target)) in
+            arg_types.iter().zip(arg_exprs).zip(targets).enumerate()
         {
             let Some(target) = target else {
                 continue;
@@ -2557,8 +3246,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 self,
                 scope,
                 arg_expr,
-                target.declared,
-                (*arg_ty, *arg_span),
+                contexts
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .map_or(target.declared, |target| target.declared),
+                checked.clone(),
                 true,
                 false,
                 ContextualMeasurePhase::CandidateTrial
@@ -2577,7 +3270,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     measure.speculative_diagnostics_removed +=
                         u64::try_from(diagnostics.len()).expect("diagnostic count fits u64");
                 });
-                return CandidateTrial::Mismatch(Some(*arg_span));
+                return CandidateTrial::Mismatch(Some(checked.span));
             }
             let relation_target = self.call_argument_relation_target(target, src);
             match self.is_assignable(src, relation_target) {
@@ -2585,7 +3278,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 RelationOutcome::No(_) => {
                     #[cfg(test)]
                     measure_call(|measure| measure.candidate_mismatches += 1);
-                    return CandidateTrial::Mismatch(Some(*arg_span));
+                    return CandidateTrial::Mismatch(Some(checked.span));
                 }
                 RelationOutcome::Exhausted(exhaustion) => {
                     return CandidateTrial::Exhausted(exhaustion)
@@ -2645,7 +3338,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
         // Infer every argument up front (skipping spreads — out of subset); this descends
         // into nested calls/`new`/functions inside the arguments.
-        let mut arg_types: Vec<(TypeId, Span)> = Vec::with_capacity(call.arguments.len());
+        let mut arg_types: Vec<CheckedExpr> = Vec::with_capacity(call.arguments.len());
         let mut arg_exprs: Vec<&Expression<'_>> = Vec::with_capacity(call.arguments.len());
         for (argument_index, arg) in call.arguments.iter().enumerate() {
             if let Some(arg_expr) = arg.as_expression() {
@@ -2677,7 +3370,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
         // Reuse the shared call-checking path: arity (TK2554) + argument assignability
         // (TK2345). The `super(...)` expression's value type is unused.
-        self.check_call_arguments(scope, &params, &arg_types, &arg_exprs, call_span);
+        self.check_call_arguments(scope, &params, None, &arg_types, &arg_exprs, call_span);
 
         Some((wk.error, call_span))
     }
@@ -2689,7 +3382,32 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         scope: ScopeId,
         params: &[ParameterType],
-        arg_types: &[(TypeId, Span)],
+        inputs: Option<&ContextualCallInputs>,
+        arg_types: &[CheckedExpr],
+        arg_exprs: &[&Expression<'_>],
+        call_span: Span,
+    ) {
+        let environment = inputs
+            .map(|inputs| inputs.environment.clone())
+            .or_else(|| self.inference_environment.clone());
+        self.with_inference_environment(environment, |pass| {
+            pass.check_call_arguments_with_context(
+                scope,
+                params,
+                inputs.map(|inputs| inputs.params.as_slice()),
+                arg_types,
+                arg_exprs,
+                call_span,
+            )
+        });
+    }
+
+    fn check_call_arguments_with_context(
+        &mut self,
+        scope: ScopeId,
+        params: &[ParameterType],
+        contextual_params: Option<&[ParameterType]>,
+        arg_types: &[CheckedExpr],
         arg_exprs: &[&Expression<'_>],
         call_span: Span,
     ) {
@@ -2720,11 +3438,22 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             #[cfg(test)]
             let compatibility =
                 with_contextual_measure_phase(ContextualMeasurePhase::CommittedCheck, || {
-                    self.compatible_call_argument_targets(params, arg_types, arg_exprs, scope)
+                    self.compatible_call_argument_targets(
+                        params,
+                        contextual_params,
+                        arg_types,
+                        arg_exprs,
+                        scope,
+                    )
                 });
             #[cfg(not(test))]
-            let compatibility =
-                self.compatible_call_argument_targets(params, arg_types, arg_exprs, scope);
+            let compatibility = self.compatible_call_argument_targets(
+                params,
+                contextual_params,
+                arg_types,
+                arg_exprs,
+                scope,
+            );
             match compatibility {
                 DemandOutcome::Ready(Some(targets)) => targets,
                 DemandOutcome::Ready(None) => alternatives
@@ -2737,7 +3466,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 }
             }
         };
-        for (index, (((arg_ty, arg_span), arg_expr), target)) in
+        let contexts =
+            self.call_argument_targets(contextual_params.unwrap_or(params), arg_types.len());
+        for (index, ((checked, arg_expr), target)) in
             arg_types.iter().zip(arg_exprs).zip(targets).enumerate()
         {
             let Some(target) = target else {
@@ -2747,15 +3478,19 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 self,
                 scope,
                 arg_expr,
-                target.declared,
-                (*arg_ty, *arg_span),
+                contexts
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .map_or(target.declared, |target| target.declared),
+                checked.clone(),
                 true,
                 true,
                 ContextualMeasurePhase::CommittedCheck
             );
             // This walk saw the argument with its instantiated contextual target, so
             // it is the walk that reports; the raw walk's copy never commits.
-            if rewalk == ContextualRewalk::Rewalked {
+            if rewalk.was_rewalked() {
                 self.supersede_provisional_argument_effects(index);
             }
             match self.check_excess_properties_for_target(arg_expr, target.declared) {
@@ -2765,12 +3500,17 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     }
                 }
                 DemandOutcome::Exhausted(exhaustion) => {
-                    self.own_type_demand(DemandOutcome::Exhausted(exhaustion), *arg_span);
+                    self.own_type_demand(DemandOutcome::Exhausted(exhaustion), checked.span);
                     return;
                 }
             }
             let relation_target = self.call_argument_relation_target(target, src);
-            let obligation_kind = self.call_argument_obligation_kind(arg_expr, target.declared);
+            let obligation_kind = self.call_argument_obligation_kind(
+                arg_expr,
+                src,
+                target.declared,
+                contextual_params.is_some(),
+            );
             self.schedule_obligation(AssignObligation {
                 src,
                 tgt: relation_target,
@@ -2793,7 +3533,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     fn schedule_union_rest_tuple_obligation(
         &mut self,
         params: &[ParameterType],
-        arg_types: &[(TypeId, Span)],
+        arg_types: &[CheckedExpr],
         call_span: Span,
     ) {
         let fixed_count = params
@@ -2806,14 +3546,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let rest_types: Vec<TypeId> = arg_types
             .iter()
             .skip(fixed_count)
-            .map(|(ty, _)| *ty)
+            .map(|value| value.ty)
             .collect();
         if rest_types.len() < self.rest_parameter_arity(rest.ty).min {
             return;
         }
         let span = arg_types
             .get(fixed_count)
-            .map(|(_, span)| *span)
+            .map(|value| value.span)
             .unwrap_or(call_span);
         let src = self.interner.intern_tuple(rest_types);
         self.schedule_obligation(AssignObligation {
@@ -2828,27 +3568,35 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     fn compatible_call_argument_targets(
         &mut self,
         params: &[ParameterType],
-        arg_types: &[(TypeId, Span)],
+        contextual_params: Option<&[ParameterType]>,
+        arg_types: &[CheckedExpr],
         arg_exprs: &[&Expression<'_>],
         scope: ScopeId,
     ) -> DemandOutcome<Option<Vec<Option<CallArgumentTarget>>>> {
         let alternatives = self.call_argument_target_alternatives(params, arg_types.len());
+        let contexts =
+            self.call_argument_targets(contextual_params.unwrap_or(params), arg_types.len());
         for targets in alternatives {
             let mut compatible = true;
-            for (((arg_ty, arg_span), arg_expr), target) in
-                arg_types.iter().zip(arg_exprs).zip(&targets)
+            for (index, ((checked, arg_expr), target)) in
+                arg_types.iter().zip(arg_exprs).zip(&targets).enumerate()
             {
                 let Some(target) = *target else {
                     continue;
                 };
-                let (src, _) = self.infer_contextual_source_after_walked(
+                let (src, _) = self.infer_contextual_checked_source_after_walked_reporting(
                     scope,
                     arg_expr,
-                    target.declared,
-                    (*arg_ty, *arg_span),
+                    contexts
+                        .get(index)
+                        .copied()
+                        .flatten()
+                        .map_or(target.declared, |target| target.declared),
+                    checked.clone(),
                     true,
                     false,
                 );
+                let src = src.ty;
                 let diagnostics =
                     match self.check_excess_properties_for_target(arg_expr, target.declared) {
                         DemandOutcome::Ready(diagnostics) => diagnostics,
@@ -3127,19 +3875,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     }
 
     fn rest_parameter_arity(&self, rest_ty: TypeId) -> RestArity {
-        if let Some(shapes) = self.rest_call_shapes(rest_ty) {
-            let min = shapes.iter().map(RestCallShape::min_len).min().unwrap_or(0);
-            let max = if self.interner.store().union_members(rest_ty).is_some() {
-                // Union-rest mismatches are reported once against the tuple union.
-                None
-            } else if shapes.iter().any(|shape| shape.max_len().is_none()) {
-                None
-            } else {
-                shapes.iter().filter_map(RestCallShape::max_len).max()
-            };
-            return RestArity { min, max };
-        }
-        RestArity { min: 0, max: None }
+        super::signature_projection::rest_parameter_arity(self.interner.store(), rest_ty)
     }
 
     fn call_argument_targets(
@@ -3147,34 +3883,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         params: &[ParameterType],
         arg_count: usize,
     ) -> Vec<Option<CallArgumentTarget>> {
-        let alternatives = self.call_argument_target_alternatives(params, arg_count);
-        let Some(first) = alternatives.first() else {
-            return vec![None; arg_count];
-        };
-        if alternatives.len() == 1 {
-            return first.clone();
-        }
-        (0..arg_count)
-            .map(|index| {
-                let targets: Vec<CallArgumentTarget> = alternatives
-                    .iter()
-                    .filter_map(|targets| targets.get(index).copied().flatten())
-                    .collect();
-                let first = targets.first().copied()?;
-                assert!(
-                    targets
-                        .iter()
-                        .all(|target| target.accepts_undefined == first.accepts_undefined),
-                    "call target alternatives disagree on optional fixed-slot metadata"
-                );
-                Some(CallArgumentTarget {
-                    declared: self
-                        .interner
-                        .union(targets.into_iter().map(|target| target.declared).collect()),
-                    accepts_undefined: first.accepts_undefined,
-                })
-            })
-            .collect()
+        super::signature_projection::call_argument_targets(self.interner, params, arg_count)
     }
 
     fn call_argument_target_alternatives(
@@ -3182,72 +3891,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         params: &[ParameterType],
         arg_count: usize,
     ) -> Vec<Vec<Option<CallArgumentTarget>>> {
-        let fixed: Vec<&ParameterType> = params.iter().filter(|param| param.is_fixed()).collect();
-        let rest = params.iter().find(|param| param.rest);
-        let total_rest_args = arg_count.saturating_sub(fixed.len());
-        let fixed_targets = || {
-            (0..arg_count)
-                .map(|index| {
-                    fixed.get(index).map(|param| CallArgumentTarget {
-                        declared: param.ty,
-                        accepts_undefined: param.optional,
-                    })
-                })
-                .collect::<Vec<_>>()
-        };
-        let Some(rest) = rest else {
-            return vec![fixed_targets()];
-        };
-        let Some(shapes) = self.rest_call_shapes(rest.ty) else {
-            return if self.interner.store().union_members(rest.ty).is_some() {
-                Vec::new()
-            } else {
-                vec![fixed_targets()]
-            };
-        };
-        let alternatives: Vec<Vec<Option<CallArgumentTarget>>> = shapes
-            .iter()
-            .filter(|shape| shape.accepts_len(total_rest_args))
-            .map(|shape| {
-                (0..arg_count)
-                    .map(|index| {
-                        if let Some(param) = fixed.get(index) {
-                            return Some(CallArgumentTarget {
-                                declared: param.ty,
-                                accepts_undefined: param.optional,
-                            });
-                        }
-                        shape
-                            .element_at(index - fixed.len(), total_rest_args)
-                            .map(|declared| CallArgumentTarget {
-                                declared,
-                                accepts_undefined: false,
-                            })
-                    })
-                    .collect()
-            })
-            .collect();
-        if !alternatives.is_empty() {
-            return alternatives;
-        }
-        if self.interner.store().union_members(rest.ty).is_some() {
-            return Vec::new();
-        }
-        vec![(0..arg_count)
-            .map(|index| {
-                if let Some(param) = fixed.get(index) {
-                    return Some(CallArgumentTarget {
-                        declared: param.ty,
-                        accepts_undefined: param.optional,
-                    });
-                }
-                self.rest_argument_target(rest.ty, index - fixed.len(), total_rest_args)
-                    .map(|declared| CallArgumentTarget {
-                        declared,
-                        accepts_undefined: false,
-                    })
-            })
-            .collect()]
+        super::signature_projection::call_argument_target_alternatives(
+            self.interner.store(),
+            params,
+            arg_count,
+        )
     }
 
     /// Contextual arrows use the same positional/rest expansion as calls, so an
@@ -3258,20 +3906,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         index: usize,
         parameter_count: usize,
     ) -> Option<TypeId> {
-        let fixed_count = params
-            .iter()
-            .filter(|parameter| parameter.is_fixed())
-            .count();
-        let minimum_count = params
-            .iter()
-            .find(|parameter| parameter.rest)
-            .map(|rest| fixed_count + self.rest_parameter_arity(rest.ty).min)
-            .unwrap_or(fixed_count);
-        self.call_argument_targets(params, parameter_count.max(minimum_count))
-            .get(index)
-            .copied()
-            .flatten()
-            .map(|target| target.declared)
+        super::signature_projection::contextual_parameter_target(
+            self.interner,
+            params,
+            index,
+            parameter_count,
+        )
     }
 
     fn call_argument_inference_source(
@@ -3317,6 +3957,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     fn call_source_is_concrete_non_nullish(&self, source: TypeId) -> bool {
         match self.interner.store().tag(source) {
             TypeTag::Literal
+            | TypeTag::WideningLiteral
             | TypeTag::Enum
             | TypeTag::EnumMember
             | TypeTag::Object
@@ -3353,86 +3994,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
     }
 
-    fn rest_argument_target(
-        &self,
-        rest_ty: TypeId,
-        offset: usize,
-        total_rest_args: usize,
-    ) -> Option<TypeId> {
-        self.rest_call_shapes(rest_ty)?
-            .into_iter()
-            .find(|shape| shape.accepts_len(total_rest_args))?
-            .element_at(offset, total_rest_args)
-    }
-
     fn rest_call_shapes(&self, rest_ty: TypeId) -> Option<Vec<RestCallShape>> {
-        let rest_ty = self
-            .interner
-            .store()
-            .readonly_operand(rest_ty)
-            .unwrap_or(rest_ty);
-        if let Some(members) = self.interner.store().union_members(rest_ty) {
-            let members = members.to_vec();
-            let mut shapes = Vec::with_capacity(members.len());
-            for member in members {
-                let member = self
-                    .interner
-                    .store()
-                    .readonly_operand(member)
-                    .unwrap_or(member);
-                if self.interner.store().array_type(member).is_none()
-                    && self.interner.store().tuple_type(member).is_none()
-                {
-                    return None;
-                }
-                shapes.extend(self.rest_call_shapes(member)?);
-            }
-            return Some(shapes);
-        }
-        if let Some(array) = self.interner.store().array_type(rest_ty) {
-            return Some(vec![RestCallShape {
-                prefix: Vec::new(),
-                variadic: Some(array.element),
-                suffix: Vec::new(),
-            }]);
-        }
-        if let Some(tuple) = self.interner.store().tuple_type(rest_ty) {
-            return self.tuple_call_shapes(tuple);
-        }
-        Some(vec![RestCallShape {
-            prefix: Vec::new(),
-            variadic: Some(rest_ty),
-            suffix: Vec::new(),
-        }])
-    }
-
-    fn tuple_call_shapes(&self, tuple: &TupleType) -> Option<Vec<RestCallShape>> {
-        let Some(rest) = tuple.rest else {
-            return Some(vec![RestCallShape {
-                prefix: tuple.elements.clone(),
-                variadic: None,
-                suffix: Vec::new(),
-            }]);
-        };
-        if rest.position > tuple.elements.len() {
-            return None;
-        }
-        let suffix = tuple.elements[rest.position..].to_vec();
-        self.rest_call_shapes(rest.ty)?
-            .into_iter()
-            .map(|rest_shape| {
-                let mut prefix = tuple.elements[..rest.position].to_vec();
-                prefix.extend(rest_shape.prefix);
-                let mut combined_suffix = rest_shape.suffix;
-                combined_suffix.extend_from_slice(&suffix);
-                RestCallShape {
-                    prefix,
-                    variadic: rest_shape.variadic,
-                    suffix: combined_suffix,
-                }
-            })
-            .collect::<Vec<_>>()
-            .into()
+        super::signature_projection::rest_call_shapes(self.interner.store(), rest_ty)
     }
 
     /// Return the contextual type for a tuple-literal position, including a represented
@@ -3443,16 +4006,20 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         index: usize,
         total_elements: usize,
     ) -> Option<TypeId> {
-        self.tuple_call_shapes(tuple)?
-            .into_iter()
-            .find(|shape| shape.accepts_len(total_elements))?
-            .element_at(index, total_elements)
+        super::signature_projection::tuple_context_element(
+            self.interner.store(),
+            tuple,
+            index,
+            total_elements,
+        )
     }
 
     fn call_argument_obligation_kind(
         &mut self,
         arg_expr: &Expression<'_>,
+        source: TypeId,
         param_ty: TypeId,
+        native_call: bool,
     ) -> ObligationKind {
         let context = match self.demand_apparent_type(param_ty) {
             DemandOutcome::Ready(context) => {
@@ -3464,7 +4031,30 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         };
         match arg_expr {
             Expression::ParenthesizedExpression(paren) => {
-                self.call_argument_obligation_kind(&paren.expression, context)
+                self.call_argument_obligation_kind(&paren.expression, source, context, native_call)
+            }
+            Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_)
+                if native_call
+                    && self
+                        .interner
+                        .store()
+                        .function_type(source)
+                        .zip(self.interner.store().function_type(context))
+                        .is_some_and(|(source, target)| {
+                            source.type_params.is_empty()
+                                && target.type_params.is_empty()
+                                && source.receiver == target.receiver
+                                && source.params.len() == target.params.len()
+                                && source.params.iter().zip(&target.params).all(
+                                    |(source, target)| {
+                                        source.ty == target.ty
+                                            && source.optional == target.optional
+                                            && source.rest == target.rest
+                                    },
+                                )
+                        }) =>
+            {
+                ObligationKind::FreshArgument
             }
             Expression::ObjectExpression(_)
                 if self.interner.store().object_type(context).is_some() =>
@@ -3524,7 +4114,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         // into nested calls/`new`/functions inside the arguments. `arg_fresh` mirrors
         // `infer_call`'s: which arguments are fresh object/array literals (M24 clamp
         // exemption), built in the same loop so the vecs stay index-aligned.
-        let mut arg_types: Vec<(TypeId, Span)> = Vec::with_capacity(new_expr.arguments.len());
+        let mut arg_types: Vec<CheckedExpr> = Vec::with_capacity(new_expr.arguments.len());
         let mut arg_fresh: Vec<bool> = Vec::with_capacity(new_expr.arguments.len());
         let mut arg_exprs: Vec<&Expression<'_>> = Vec::with_capacity(new_expr.arguments.len());
         for (argument_index, arg) in new_expr.arguments.iter().enumerate() {
@@ -3569,6 +4159,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                             self.check_call_arguments(
                                 scope,
                                 &candidate.params,
+                                candidate.contextual_inputs.as_ref(),
                                 &arg_types,
                                 &arg_exprs,
                                 new_span,
@@ -3646,6 +4237,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     self.check_call_arguments(
                         scope,
                         &candidate.params,
+                        candidate.contextual_inputs.as_ref(),
                         &arg_types,
                         &arg_exprs,
                         new_span,
@@ -3677,7 +4269,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
         // Reuse the M3 call-checking path: arity (TK2554) + argument assignability
         // (TK2345). The `new` expression's type is the (instantiated) instance type.
-        self.check_call_arguments(scope, &params, &arg_types, &arg_exprs, new_span);
+        self.check_call_arguments(scope, &params, None, &arg_types, &arg_exprs, new_span);
 
         Some((instance, new_span))
     }
@@ -3853,7 +4445,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         scope: ScopeId,
         info: &ClassInfo,
         new_expr: &NewExpression<'_>,
-        args: (&[(TypeId, Span)], &[bool], &[&Expression<'_>]),
+        args: (&[CheckedExpr], &[bool], &[&Expression<'_>]),
     ) -> Option<(TypeId, TypeId)> {
         let (arg_types, arg_fresh, arg_exprs) = args;
         // Non-generic class: no parameters to substitute — the M11 identity.
@@ -3960,6 +4552,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 );
                 match self.infer_partial_signature_type_arguments_with_native_demands(
                     infer::SignatureInferenceRequest {
+                        purpose: infer::SignatureInferencePurpose::ClassApplication,
                         type_params: &generic_params,
                         params: &params,
                         args: &args.types,
@@ -4089,6 +4682,15 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         enclosing: ScopeId,
         func: &Function<'_>,
     ) -> FunctionReservation<Ticket> {
+        self.reserve_function_with_context(enclosing, func, None)
+    }
+
+    fn reserve_function_with_context(
+        &mut self,
+        enclosing: ScopeId,
+        func: &Function<'_>,
+        context: Option<&FunctionType>,
+    ) -> FunctionReservation<Ticket> {
         let retained = self
             .lexical_events
             .callable_at(
@@ -4137,7 +4739,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         .map(Some),
                     None => Some(None),
                 };
-                let params = pass.lower_parameter_slots(enclosing, fn_scope, &func.params, false);
+                let params = pass.lower_parameter_slots(
+                    enclosing,
+                    fn_scope,
+                    &func.params,
+                    false,
+                    context.map(|context| context.params.as_slice()),
+                );
                 // Type references in the signature resolve from the enclosing scope,
                 // while declared type parameters resolve through the pushed frame.
                 let declared_return = match func.return_type.as_ref() {
@@ -4205,9 +4813,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     ) -> TypeId {
         match surface.tickets {
             Some(tickets) => self.with_ticket_effects(tickets.body, |pass| {
-                pass.fill_reserved_function_inner(enclosing, func, surface)
+                pass.fill_reserved_function_inner(enclosing, func, surface, None)
             }),
-            None => self.fill_reserved_function_inner(enclosing, func, surface),
+            None => self.fill_reserved_function_inner(enclosing, func, surface, None),
         }
     }
 
@@ -4216,6 +4824,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         enclosing: ScopeId,
         func: &Function<'_>,
         surface: &FunctionSurface<Ticket>,
+        return_context: Option<TypeId>,
     ) -> TypeId {
         let params = surface.params.clone();
         let receiver = surface.receiver;
@@ -4228,15 +4837,25 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 .copied();
             let body_scope = fn_scope.unwrap_or(enclosing);
             pass.bind_retained_parameter_types(enclosing, fn_scope, &func.params, &surface.params);
-            pass.check_reserved_parameter_initializers(body_scope, &func.params, &surface.params);
+            pass.check_reserved_parameter_initializers(
+                body_scope,
+                &func.params,
+                surface.params.iter().map(|parameter| Some(parameter.ty)),
+            );
             let saved_this = pass.current_this;
             if let Some(receiver) = receiver {
                 pass.current_this = Some(receiver);
             }
-            let inferred_return = func
-                .body
-                .as_ref()
-                .map(|body| pass.check_function_body(body_scope, body, surface.declared_return));
+            let inferred_return = func.body.as_ref().map(|body| {
+                pass.check_function_body_with_return_policy(
+                    body_scope,
+                    body,
+                    surface.declared_return.map_or(
+                        super::statements::ReturnCheckPolicy::inferred(return_context),
+                        super::statements::ReturnCheckPolicy::Declared,
+                    ),
+                )
+            });
             pass.current_this = saved_this;
             let ret = resolve_return_type(pass.interner, surface.declared_return, inferred_return);
             pass.interner.intern_function(FunctionType {
@@ -4305,6 +4924,15 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         enclosing: ScopeId,
         func: &Function<'_>,
     ) -> TypeId {
+        self.infer_function_with_context(enclosing, func, None)
+    }
+
+    fn infer_function_with_context(
+        &mut self,
+        enclosing: ScopeId,
+        func: &Function<'_>,
+        context: Option<FunctionType>,
+    ) -> TypeId {
         let tickets = self
             .lexical_events
             .callable_at(
@@ -4315,13 +4943,21 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .map(|callable| callable.tickets);
         let reservation = match tickets {
             Some(tickets) => self.with_ticket_effects(tickets.signature, |pass| {
-                pass.reserve_function(enclosing, func)
+                pass.reserve_function_with_context(enclosing, func, context.as_ref())
             }),
-            None => self.reserve_function(enclosing, func),
+            None => self.reserve_function_with_context(enclosing, func, context.as_ref()),
         };
         match reservation {
             FunctionReservation::Ready(surface) => {
-                self.fill_reserved_function(enclosing, func, &surface)
+                let return_context = context.map(|context| context.ret);
+                match tickets {
+                    Some(tickets) => self.with_ticket_effects(tickets.body, |pass| {
+                        pass.fill_reserved_function_inner(enclosing, func, &surface, return_context)
+                    }),
+                    None => {
+                        self.fill_reserved_function_inner(enclosing, func, &surface, return_context)
+                    }
+                }
             }
             FunctionReservation::Unavailable(surface) => {
                 self.check_retained_function_body(enclosing, func, &surface);
@@ -4337,6 +4973,21 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         enclosing: ScopeId,
         arrow: &ArrowFunctionExpression<'_>,
+    ) -> TypeId {
+        self.infer_reserved_arrow(
+            enclosing,
+            arrow,
+            None,
+            ContextualLiteralProvenance::Existing,
+        )
+    }
+
+    fn infer_reserved_arrow(
+        &mut self,
+        enclosing: ScopeId,
+        arrow: &ArrowFunctionExpression<'_>,
+        context: Option<(TypeId, FunctionType)>,
+        provenance: ContextualLiteralProvenance,
     ) -> TypeId {
         let retained = self
             .lexical_events
@@ -4371,7 +5022,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     .fn_scopes
                     .get(&(pass.current_module, arrow.span.start))
                     .copied();
-                let params = pass.lower_parameters(enclosing, fn_scope, &arrow.params, false);
+                let params = pass.lower_parameter_slots(
+                    enclosing,
+                    fn_scope,
+                    &arrow.params,
+                    false,
+                    context.as_ref().map(|(_, shape)| shape.params.as_slice()),
+                );
                 let declared_ret = arrow.return_type.as_ref().and_then(|ann| {
                     pass.lower_callable_annotation(enclosing, &ann.type_annotation, false)
                 });
@@ -4385,14 +5042,43 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let fill_body = |pass: &mut Self| {
             pass.with_type_params(frame, |pass| {
                 let body_scope = fn_scope.unwrap_or(enclosing);
-                pass.check_reserved_parameter_initializers(body_scope, &arrow.params, &params);
-                pass.finish_arrow_inference(
-                    enclosing,
-                    arrow,
-                    fn_scope,
-                    params,
-                    ArrowReturnPolicy::Ordinary(declared_ret),
-                )
+                pass.check_reserved_parameter_initializers(
+                    body_scope,
+                    &arrow.params,
+                    params
+                        .iter()
+                        .map(|parameter| parameter.as_ref().map(|parameter| parameter.ty)),
+                );
+                let params = parameter_syntaxes(&arrow.params)
+                    .zip(params)
+                    .map(|(syntax, parameter)| {
+                        parameter.unwrap_or_else(|| {
+                            syntax.with_type(
+                                syntax.name().unwrap_or_default(),
+                                pass.interner.well_known().error,
+                            )
+                        })
+                    })
+                    .collect();
+                let expression_context = context.as_ref().map(|(_, shape)| shape.ret);
+                let policy = match context {
+                    Some((context, shape))
+                        if provenance == ContextualLiteralProvenance::Satisfies
+                            && pass.has_satisfies_check_sink()
+                            && (arrow.return_type.is_none() || declared_ret.is_some()) =>
+                    {
+                        ArrowReturnPolicy::Satisfies {
+                            context,
+                            return_target: shape.ret,
+                            annotation: declared_ret,
+                        }
+                    }
+                    _ => ArrowReturnPolicy::Ordinary {
+                        annotation: declared_ret,
+                        expression_context,
+                    },
+                };
+                pass.finish_arrow_inference(enclosing, arrow, fn_scope, params, policy)
             })
         };
         match tickets {
@@ -4401,57 +5087,48 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
     }
 
-    /// Contextualize an arrow's parameters and, when requested, its return. Call
-    /// arguments retain their source return so the enclosing argument obligation owns
-    /// a callback incompatibility (`TK2345`) instead of an inner assignment diagnostic.
-    pub(in crate::check::checker) fn infer_contextual_arrow_with_return_context(
+    pub(in crate::check::checker) fn infer_contextual_arrow(
         &mut self,
         enclosing: ScopeId,
         arrow: &ArrowFunctionExpression<'_>,
-        context: TypeId,
-        contextual_return: bool,
+        context: PreparedInitializerContext,
+        provenance: ContextualLiteralProvenance,
     ) -> Option<TypeId> {
         if arrow.type_parameters.is_some() {
             return None;
         }
-        let context_type = context;
-        let context = self.contextual_function_shape(context_type)?;
-        let fn_scope = self
-            .binder
-            .fn_scopes
-            .get(&(self.current_module, arrow.span.start))
-            .copied();
-        let params = self.lower_contextual_arrow_parameters(
+        let shape = self.contextual_callable_input(context.shaping_context)?;
+        Some(self.infer_reserved_arrow(
             enclosing,
-            fn_scope,
-            &arrow.params,
-            &context.params,
-        );
-        let annotation = arrow
-            .return_type
-            .as_ref()
-            .and_then(|ann| self.lower_annotation(enclosing, &ann.type_annotation));
-        let declared_ret = if arrow.return_type.is_some() {
-            annotation
-        } else if !contextual_return || self.interner.store().tag(context.ret) == TypeTag::TypeParam
-        {
-            // An unresolved generic return is the inference variable itself. Infer
-            // the callback return normally so that variable can receive a candidate.
-            None
-        } else {
-            Some(context.ret)
-        };
-        let annotation_ready = arrow.return_type.is_none() || annotation.is_some();
-        let policy = if contextual_return && annotation_ready && self.has_satisfies_check_sink() {
-            ArrowReturnPolicy::Satisfies {
-                context: context_type,
-                return_target: context.ret,
-                annotation,
+            arrow,
+            Some((context.original_target, shape)),
+            provenance,
+        ))
+    }
+
+    pub(in crate::check::checker) fn infer_contextual_function(
+        &mut self,
+        enclosing: ScopeId,
+        function: &Function<'_>,
+        context: PreparedInitializerContext,
+    ) -> Option<TypeId> {
+        if function.type_parameters.is_some() {
+            return None;
+        }
+        let shape = self.contextual_callable_input(context.shaping_context)?;
+        Some(self.infer_function_with_context(enclosing, function, Some(shape)))
+    }
+
+    fn contextual_callable_input(&mut self, target: TypeId) -> Option<FunctionType> {
+        let mut shape = self.contextual_function_shape(target)?;
+        if let Some(environment) = &self.inference_environment {
+            let ordinary = environment.ordinary.iter().copied().collect();
+            for parameter in &mut shape.params {
+                parameter.ty = substitute(self.interner, parameter.ty, &ordinary);
             }
-        } else {
-            ArrowReturnPolicy::Ordinary(declared_ret)
-        };
-        Some(self.finish_arrow_inference(enclosing, arrow, fn_scope, params, policy))
+            shape.ret = self.expected_inference_context(shape.ret);
+        }
+        Some(shape)
     }
 
     fn contextual_function_shape(&self, context: TypeId) -> Option<FunctionType> {
@@ -4483,52 +5160,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         self.interner.store().function_type(candidate?).cloned()
     }
 
-    fn lower_contextual_arrow_parameters(
-        &mut self,
-        enclosing: ScopeId,
-        fn_scope: Option<ScopeId>,
-        params: &FormalParameters<'_>,
-        context: &[ParameterType],
-    ) -> Vec<ParameterType> {
-        let error_ty = self.interner.well_known().error;
-        let mut lowered = Vec::with_capacity(parameter_count(params));
-        for syntax in parameter_syntaxes(params) {
-            let name = syntax.name().unwrap_or_default();
-            let ty = match syntax {
-                ParameterSyntax::Fixed { index, parameter } => parameter
-                    .type_annotation
-                    .as_ref()
-                    .and_then(|ann| self.lower_annotation(enclosing, &ann.type_annotation))
-                    .unwrap_or_else(|| {
-                        self.contextual_parameter_target(context, index, params.items.len())
-                            .unwrap_or(error_ty)
-                    }),
-                ParameterSyntax::Rest { parameter } => parameter
-                    .type_annotation
-                    .as_ref()
-                    .and_then(|ann| self.lower_annotation(enclosing, &ann.type_annotation))
-                    .unwrap_or_else(|| {
-                        context
-                            .iter()
-                            .find(|parameter| parameter.rest)
-                            .map(|parameter| parameter.ty)
-                            .unwrap_or(error_ty)
-                    }),
-            };
-            if let Some(scope) = fn_scope {
-                if let Some(decl_id) = parameter_name(syntax.pattern())
-                    .and_then(|name| self.binder.resolve_value(scope, &name))
-                    .and_then(|symbol_id| self.binder.symbols.get(symbol_id))
-                    .and_then(|symbol| symbol.value)
-                {
-                    self.publish_copied_decl_type(decl_id, ty);
-                }
-            }
-            lowered.push(syntax.with_type(name, ty));
-        }
-        lowered
-    }
-
     fn finish_arrow_inference(
         &mut self,
         enclosing: ScopeId,
@@ -4544,7 +5175,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 annotation: None,
                 ..
             } => Some(context),
-            ArrowReturnPolicy::Ordinary(_)
+            ArrowReturnPolicy::Ordinary { .. }
             | ArrowReturnPolicy::Satisfies {
                 annotation: Some(_),
                 ..
@@ -4553,13 +5184,44 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         if grouped_context.is_some() {
             self.begin_satisfies_container();
         }
+        let declared_body = matches!(
+            policy,
+            ArrowReturnPolicy::Ordinary {
+                annotation: Some(_),
+                ..
+            } | ArrowReturnPolicy::Satisfies {
+                annotation: Some(_),
+                ..
+            }
+        );
+        let saved_validation = if declared_body {
+            self.active_initializer_validation.take()
+        } else {
+            None
+        };
         let ret = match policy {
-            ArrowReturnPolicy::Ordinary(declared) => {
+            ArrowReturnPolicy::Ordinary {
+                annotation,
+                expression_context,
+            } => {
                 if let Some(body_expr) = arrow.get_expression() {
-                    self.infer_ordinary_arrow_expression_return(body_scope, body_expr, declared)
+                    self.infer_ordinary_arrow_expression_return(
+                        body_scope,
+                        body_expr,
+                        annotation,
+                        expression_context,
+                    )
                 } else {
-                    let inferred = self.check_function_body(body_scope, &arrow.body, declared);
-                    resolve_return_type(self.interner, declared, Some(inferred))
+                    let policy = annotation.map_or(
+                        super::statements::ReturnCheckPolicy::inferred(expression_context),
+                        super::statements::ReturnCheckPolicy::Declared,
+                    );
+                    let inferred = self.check_function_body_with_return_policy(
+                        body_scope,
+                        &arrow.body,
+                        policy,
+                    );
+                    resolve_return_type(self.interner, annotation, Some(inferred))
                 }
             }
             ArrowReturnPolicy::Satisfies {
@@ -4571,27 +5233,45 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         body_scope,
                         body_expr,
                         Some(annotation),
+                        None,
                     )
                 } else {
                     self.check_function_body(body_scope, &arrow.body, Some(annotation));
                     annotation
                 }
             }
+            ArrowReturnPolicy::Satisfies { return_target, .. }
+                if return_target == self.interner.well_known().void =>
+            {
+                if let Some(body_expr) = arrow.get_expression() {
+                    self.infer_ordinary_arrow_expression_return(body_scope, body_expr, None, None)
+                } else {
+                    self.check_function_body(body_scope, &arrow.body, None)
+                }
+            }
             ArrowReturnPolicy::Satisfies { return_target, .. } => {
                 if let Some(body_expr) = arrow.get_expression() {
                     let mark = self.satisfies_check_mark();
-                    let value = self.infer_initializer_with_provenance(
+                    let value = self.infer_initializer_value(
                         body_scope,
                         body_expr,
                         Some(return_target),
                         ContextualLiteralProvenance::Satisfies,
                     );
                     match value {
-                        Some((source, span)) => {
+                        Some(value) => {
                             if self.satisfies_check_mark() == mark {
-                                self.record_satisfies_child_check(source, return_target, span);
+                                self.record_satisfies_child_check(
+                                    self.initializer_validation_source(
+                                        Span::from_oxc(body_expr.span()),
+                                        InitializerValidationBoundary::InferredArrowBody,
+                                        value.source,
+                                    ),
+                                    return_target,
+                                    value.span,
+                                );
                             }
-                            source
+                            self.inferred_return_type(value.source, value.publication_context())
                         }
                         None => self.interner.well_known().error,
                     }
@@ -4599,11 +5279,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     self.check_function_body_with_return_policy(
                         body_scope,
                         &arrow.body,
-                        super::statements::ReturnCheckPolicy::SatisfiesUnannotated(return_target),
+                        super::statements::ReturnCheckPolicy::satisfies_unannotated(return_target),
                     )
                 }
             }
         };
+        if declared_body {
+            self.active_initializer_validation = saved_validation;
+        }
         let function = self.interner.intern_function(FunctionType {
             type_params: Vec::new(),
             receiver: None,
@@ -4612,7 +5295,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         });
         if let Some(context) = grouped_context {
             self.finish_satisfies_relation_container(
-                function,
+                self.initializer_validation_source(
+                    Span::from_oxc(arrow.span),
+                    InitializerValidationBoundary::CompletedContainer,
+                    function,
+                ),
                 context,
                 Span::from_oxc(arrow.span),
                 Vec::new(),
@@ -4626,13 +5313,18 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         body_scope: ScopeId,
         body_expr: &Expression<'_>,
         declared: Option<TypeId>,
+        expression_context: Option<TypeId>,
     ) -> TypeId {
-        let value = match declared {
-            Some(ret) => self.infer_initializer(body_scope, body_expr, Some(ret)),
-            None => self.infer_expr(body_scope, body_expr),
-        };
+        let value = self.infer_initializer_value(
+            body_scope,
+            body_expr,
+            declared.or(expression_context),
+            ContextualLiteralProvenance::Existing,
+        );
         match (declared, value) {
-            (Some(ret), Some((src, src_span))) => {
+            (Some(ret), Some(value)) => {
+                let src = value.source;
+                let src_span = value.span;
                 let target_ready = match self.check_excess_properties_for_target(body_expr, ret) {
                     DemandOutcome::Ready(diagnostics) => {
                         for diagnostic in diagnostics {
@@ -4656,32 +5348,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 }
                 ret
             }
-            (None, Some((value_ty, _))) => widen(self.interner, value_ty),
+            (None, Some(value)) => {
+                self.inferred_return_type(value.source, value.publication_context())
+            }
             (None, None) => self.interner.well_known().error,
             (Some(ret), None) => ret,
         }
-    }
-
-    /// Lower a function's/arrow's parameters to `ParameterType`s and, when a function
-    /// scope is known, record each parameter's type in `decl_types` so the body can
-    /// resolve it. An un-annotated parameter is out of the MVP subset → the error
-    /// type (no diagnostic), matching M0/M1 leniency.
-    fn lower_parameters(
-        &mut self,
-        enclosing: ScopeId,
-        fn_scope: Option<ScopeId>,
-        params: &FormalParameters<'_>,
-        check_initializers: bool,
-    ) -> Vec<ParameterType> {
-        let error_ty = self.interner.well_known().error;
-        parameter_syntaxes(params)
-            .zip(self.lower_parameter_slots(enclosing, fn_scope, params, check_initializers))
-            .map(|(syntax, lowered)| {
-                lowered.unwrap_or_else(|| {
-                    syntax.with_type(syntax.name().unwrap_or_default(), error_ty)
-                })
-            })
-            .collect()
     }
 
     fn lower_parameter_slots(
@@ -4690,6 +5362,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         fn_scope: Option<ScopeId>,
         params: &FormalParameters<'_>,
         check_initializers: bool,
+        context: Option<&[ParameterType]>,
     ) -> Vec<Option<ParameterType>> {
         let error_ty = self.interner.well_known().error;
         let mut lowered = Vec::with_capacity(parameter_count(params));
@@ -4697,7 +5370,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         for syntax in parameter_syntaxes(params) {
             let name = syntax.name().unwrap_or_default();
             let ty = match syntax {
-                ParameterSyntax::Fixed { parameter, .. } => {
+                ParameterSyntax::Fixed { parameter, index } => {
                     // Annotated type, or the error type for an un-annotated parameter. Type
                     // references in the annotation resolve from the enclosing scope.
                     let annotation_ty = parameter.type_annotation.as_ref().and_then(|ann| {
@@ -4710,7 +5383,17 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     let ty = if parameter.type_annotation.is_some() {
                         annotation_ty
                     } else {
-                        Some(error_ty)
+                        Some(
+                            context
+                                .and_then(|context| {
+                                    self.contextual_parameter_target(
+                                        context,
+                                        index,
+                                        params.items.len(),
+                                    )
+                                })
+                                .unwrap_or(error_ty),
+                        )
                     };
 
                     // F4: object destructuring parameters run M13 access checks against the
@@ -4765,7 +5448,16 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         &ann.type_annotation,
                         false,
                     ),
-                    None => Some(error_ty),
+                    None => Some(
+                        context
+                            .and_then(|context| {
+                                context
+                                    .iter()
+                                    .find(|parameter| parameter.rest)
+                                    .map(|parameter| parameter.ty)
+                            })
+                            .unwrap_or(error_ty),
+                    ),
                 },
             };
 
@@ -4825,26 +5517,17 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
     }
 
-    /// Parameter defaults are executable expressions, so declaration pre-reservation
-    /// leaves them until the original function source position. Their parameter types
-    /// were lowered once into the reserved surface.
     fn check_reserved_parameter_initializers(
         &mut self,
         scope: ScopeId,
         params: &FormalParameters<'_>,
-        lowered: &[ParameterType],
+        targets: impl IntoIterator<Item = Option<TypeId>>,
     ) {
         self.mark_syntax_only_object_parameters(scope, params);
-        for (param, parameter) in params.items.iter().zip(lowered) {
-            if param.type_annotation.is_some() {
-                if let Some(init) = &param.initializer {
-                    self.check_pattern_annotated_initializer(
-                        scope,
-                        Some(parameter.ty),
-                        &param.pattern,
-                        init,
-                    );
-                }
+        for (param, target) in params.items.iter().zip(targets) {
+            if let Some(init) = &param.initializer {
+                let target = target.filter(|target| *target != self.interner.well_known().error);
+                self.check_pattern_annotated_initializer(scope, target, &param.pattern, init);
             }
         }
     }
@@ -5036,9 +5719,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
     }
 
-    /// Walk a function body, checking returns against a declared type or inferring
-    /// the first value return's widened type. Missing-return analysis (`TK2355`)
-    /// remains deferred.
     fn check_function_body(
         &mut self,
         scope: ScopeId,
@@ -5060,6 +5740,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     ) -> TypeId {
         let void_ty = self.interner.well_known().void;
         let mut inferred: Option<TypeId> = None;
+        let preparation = InitializerContextSlot::new(return_policy.context());
+        let return_policy = return_policy.with_preparation(&preparation);
 
         // M23: the function-boundary narrowing reset lives in the flow pre-pass (each
         // body is built at its own `START`, so a reference never sees the caller's
@@ -5073,7 +5755,21 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             &mut inferred,
         );
 
-        inferred.unwrap_or(void_ty)
+        let source = inferred.unwrap_or(void_ty);
+        match return_policy {
+            super::statements::ReturnCheckPolicy::Declared(_) => source,
+            super::statements::ReturnCheckPolicy::Inferred { .. }
+            | super::statements::ReturnCheckPolicy::SatisfiesUnannotated { .. } => {
+                match preparation.state.get() {
+                    InitializerContextState::Unprepared => source,
+                    InitializerContextState::Absent => self.inferred_return_type(source, None),
+                    InitializerContextState::Prepared(context) => {
+                        self.inferred_return_type(source, Some(context.publication_context))
+                    }
+                    InitializerContextState::Failed { .. } => self.interner.well_known().error,
+                }
+            }
+        }
     }
 
     fn complete_standalone_namespace_value(
@@ -5123,10 +5819,17 @@ fn direct_identifier_name<'a>(expression: &'a Expression<'_>) -> Option<&'a str>
 }
 
 struct CallCandidate {
+    contextual_inputs: Option<ContextualCallInputs>,
     receiver: Option<TypeId>,
     params: Vec<ParameterType>,
     ret: TypeId,
     inference_exhaustion: Option<Exhaustion>,
+}
+
+#[derive(Clone)]
+struct ContextualCallInputs {
+    params: Vec<ParameterType>,
+    environment: Arc<ContextualInferenceEnvironment>,
 }
 
 enum CallableSignatures {
@@ -5199,7 +5902,7 @@ impl CandidateReceiver {
 
 #[derive(Copy, Clone)]
 struct PreparedCallArgs<'a, 'ast> {
-    types: &'a [(TypeId, Span)],
+    types: &'a [CheckedExpr],
     fresh: &'a [bool],
     exprs: &'a [&'a Expression<'ast>],
 }
@@ -5322,12 +6025,6 @@ enum CandidateBuildFailure {
     Unavailable,
 }
 
-#[derive(Clone, Copy)]
-struct CallArgumentTarget {
-    declared: TypeId,
-    accepts_undefined: bool,
-}
-
 struct PreparedInferenceArgs {
     types: Vec<TypeId>,
     optional_undefined_fallback: Vec<bool>,
@@ -5338,54 +6035,6 @@ struct CallArity {
     min: usize,
     max: Option<usize>,
     unbounded_rest: bool,
-}
-
-#[derive(Clone, Copy)]
-struct RestArity {
-    min: usize,
-    max: Option<usize>,
-}
-
-#[derive(Clone)]
-struct RestCallShape {
-    prefix: Vec<TypeId>,
-    variadic: Option<TypeId>,
-    suffix: Vec<TypeId>,
-}
-
-impl RestCallShape {
-    fn min_len(&self) -> usize {
-        self.prefix.len() + self.suffix.len()
-    }
-
-    fn max_len(&self) -> Option<usize> {
-        if self.variadic.is_some() {
-            None
-        } else {
-            Some(self.min_len())
-        }
-    }
-
-    fn accepts_len(&self, len: usize) -> bool {
-        if len < self.min_len() {
-            return false;
-        }
-        self.variadic.is_some() || len == self.min_len()
-    }
-
-    fn element_at(&self, index: usize, len: usize) -> Option<TypeId> {
-        if !self.accepts_len(len) || index >= len {
-            return None;
-        }
-        if index < self.prefix.len() {
-            return self.prefix.get(index).copied();
-        }
-        let suffix_start = len.saturating_sub(self.suffix.len());
-        if index >= suffix_start {
-            return self.suffix.get(index - suffix_start).copied();
-        }
-        self.variadic
-    }
 }
 
 /// The function's return type: a declared annotation always wins; otherwise the
@@ -5496,40 +6145,7 @@ fn parameter_from_shape(
     }
 }
 
-/// Widen a type: a literal widens to its base intrinsic (`1` → `number`); every
-/// other type passes through unchanged.
+#[cfg(test)]
 pub(in crate::check::checker) fn widen(interner: &mut Interner, ty: TypeId) -> TypeId {
-    if let Some(whole) = interner.store().enum_member_whole_type_id(ty) {
-        return whole;
-    }
-    match interner.store().literal_value(ty) {
-        Some(lit) => intrinsic_id(interner.well_known(), lit.base_kind()),
-        None => ty,
-    }
-}
-
-/// Well-known id for an intrinsic kind (small helper mirroring the relater's).
-pub(in crate::check::checker) fn intrinsic_id(wk: WellKnown, kind: IntrinsicKind) -> TypeId {
-    match kind {
-        IntrinsicKind::Error => wk.error,
-        IntrinsicKind::Any => wk.any,
-        IntrinsicKind::Unknown => wk.unknown,
-        IntrinsicKind::Never => wk.never,
-        IntrinsicKind::Void => wk.void,
-        IntrinsicKind::Null => wk.null,
-        IntrinsicKind::Undefined => wk.undefined,
-        IntrinsicKind::Boolean => wk.boolean,
-        IntrinsicKind::Number => wk.number,
-        IntrinsicKind::String => wk.string,
-        // M28 string-intrinsic markers.
-        IntrinsicKind::Uppercase => wk.uppercase,
-        IntrinsicKind::Lowercase => wk.lowercase,
-        IntrinsicKind::Capitalize => wk.capitalize,
-        IntrinsicKind::Uncapitalize => wk.uncapitalize,
-        IntrinsicKind::ThisType => wk.this_type,
-        IntrinsicKind::OmitThisParameter => wk.omit_this_parameter,
-        IntrinsicKind::Object => wk.object,
-        IntrinsicKind::BigInt => wk.bigint,
-        IntrinsicKind::Symbol => wk.symbol,
-    }
+    interner.widen_literal_type(ty)
 }
