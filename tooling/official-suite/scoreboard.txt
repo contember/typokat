@@ -1,7 +1,7 @@
 # typokat × official TS conformance — regression scoreboard
 # TS @ 050880ce59e30b356b686bd3144efe24f875ebc8
 # corpus 874  in-scope 379  out-of-scope 495
-# clean-kept 90/116  error-exact 63/263  diag-recall 761/2354
+# clean-kept 90/116  error-exact 63/263  diag-recall 763/2354
 # cols: status<TAB>matched fn fp expected<TAB>ids<TAB>rel  (status=IN | OOS:<bucket>; nums/ids '-' = n/a; ids=<matched>|<fp> as sorted line:code identities; OOS:unsupported carries nums + <matched>|<fp>|<incomplete> — an exit-3 demotion keeps its diagnostic diff plus its surface identities)
 IN	8 0 1 8	15:2341,16:2341,17:2341,18:2341,20:2341,21:2341,22:2341,23:2341|21:2349	conformance/classes/members/accessibility/classPropertyAsPrivate.ts
 IN	8 0 1 8	15:2445,16:2445,17:2445,18:2445,20:2445,21:2445,22:2445,23:2445|21:2349	conformance/classes/members/accessibility/classPropertyAsProtected.ts
@@ -332,7 +332,7 @@ IN	1 1 2 2	23:2322|93:2345,103:2345	conformance/controlFlow/controlFlowWhileStat
 OOS:unsupported	0 0 2 0	|3:2339,8:2339|expr-infer/template-literal/self,expr-infer/template-literal/self	conformance/controlFlow/controlFlowWithTemplateLiterals.ts
 OOS:syntax:module	- - - -	-	conformance/controlFlow/definiteAssignmentAssertions.ts
 OOS:parse-error	- - - -	-	conformance/controlFlow/definiteAssignmentAssertionsWithObjectShortHand.ts
-OOS:unsupported	0 3 46 3	|17:2339,20:2339,50:2339,53:2339,76:2339,79:2339,88:2339,91:2339,137:2304,138:2304,140:2304,141:2304,160:2345,163:2345,194:2345,203:2322,212:2322,223:2345,234:2322,257:2322,274:2322,291:2322,308:2322,322:2322,376:2322,407:2304,408:2304,410:2304,411:2304,413:2304,414:2304,416:2304,417:2304,419:2304,420:2304,422:2304,423:2304,430:2304,431:2304,439:2304,441:2304,442:2304,448:2304,450:2304,451:2304,457:2322|bind/binding-pattern/array-pattern,bind/binding-pattern/object-pattern,bind/binding-pattern/object-pattern,bind/binding-pattern/object-pattern,bind/binding-pattern/object-pattern,bind/binding-pattern/object-pattern,bind/binding-pattern/object-pattern,bind/binding-pattern/object-pattern,bind/binding-pattern/object-pattern,expr-infer/template-literal/interpolation,expr-infer/template-literal/interpolation	conformance/controlFlow/dependentDestructuredVariables.ts
+OOS:unsupported	0 3 54 3	|17:2339,20:2339,50:2339,53:2339,76:2339,79:2339,88:2339,91:2339,137:2304,138:2304,140:2304,141:2304,160:2345,163:2345,194:2345,203:2322,205:2339,208:2339,212:2322,223:2345,234:2322,237:2339,237:2339,240:2339,240:2339,257:2322,274:2322,291:2322,308:2322,322:2322,324:2339,327:2339,376:2322,407:2304,408:2304,410:2304,411:2304,413:2304,414:2304,416:2304,417:2304,419:2304,420:2304,422:2304,423:2304,430:2304,431:2304,439:2304,441:2304,442:2304,448:2304,450:2304,451:2304,457:2322|bind/binding-pattern/array-pattern,bind/binding-pattern/object-pattern,bind/binding-pattern/object-pattern,bind/binding-pattern/object-pattern,bind/binding-pattern/object-pattern,bind/binding-pattern/object-pattern,bind/binding-pattern/object-pattern,bind/binding-pattern/object-pattern,bind/binding-pattern/object-pattern,expr-infer/template-literal/interpolation,expr-infer/template-literal/interpolation	conformance/controlFlow/dependentDestructuredVariables.ts
 OOS:syntax:as-const	- - - -	-	conformance/controlFlow/dependentDestructuredVariablesFromNestedPatterns.ts
 OOS:syntax:module	- - - -	-	conformance/controlFlow/dependentDestructuredVariablesWithExport.ts
 OOS:unsupported	0 3 1 3	|206:2678|expr-infer/non-null-assertion/self,expr-infer/optional-chain/self	conformance/controlFlow/exhaustiveSwitchStatements1.ts
@@ -472,7 +472,7 @@ IN	0 0 2 0	|75:2345,112:2345	conformance/types/literal/enumLiteralTypes2.ts
 IN	14 0 0 14	10:2322,11:2322,12:2322,18:2322,19:2322,37:2322,39:2322,40:2322,52:2367,54:2367,55:2367,87:2678,89:2678,96:2678|	conformance/types/literal/enumLiteralTypes3.ts
 OOS:syntax:module	- - - -	-	conformance/types/literal/literalTypeWidening.ts
 IN	0 0 0 0	|	conformance/types/literal/literalTypes1.ts
-OOS:unsupported	0 0 2 0	|138:2322,139:2322|class/property-definition/initializer-inference,class/property-definition/initializer-inference,class/property-definition/initializer-inference,class/property-definition/initializer-inference,class/property-definition/initializer-inference,class/property-definition/initializer-inference	conformance/types/literal/literalTypes2.ts
+OOS:unsupported	0 0 1 0	|139:2322|class/property-definition/initializer-inference,class/property-definition/initializer-inference,class/property-definition/initializer-inference,class/property-definition/initializer-inference,class/property-definition/initializer-inference,class/property-definition/initializer-inference	conformance/types/literal/literalTypes2.ts
 IN	0 0 0 0	|	conformance/types/literal/literalTypes3.ts
 OOS:syntax:as-const	- - - -	-	conformance/types/literal/literalTypesAndDestructuring.ts
 IN	0 0 0 0	|	conformance/types/literal/literalTypesAndTypeAssertions.ts
@@ -636,9 +636,9 @@ OOS:syntax:module	- - - -	-	conformance/types/primitives/void/invalidVoidValues.
 IN	0 0 0 0	|	conformance/types/primitives/void/validVoidAssignments.ts
 IN	1 0 0 1	3:2322|	conformance/types/primitives/void/validVoidValues.ts
 OOS:unsupported	13 4 4 17	18:2322,20:2322,21:2322,23:2322,24:2322,25:2322,26:2322,27:2322,28:2322,29:2322,30:2322,31:2322,32:2322|19:2322,22:2322,34:2322,35:2322|bind/binding-pattern/array-pattern,bind/binding-pattern/array-pattern,bind/binding-pattern/array-pattern	conformance/types/tuple/arityAndOrderCompatibility01.ts
-OOS:unsupported	0 13 0 13	||class/implements-clause/self,class/implements-clause/self,class/property-definition/implicit-any,class/property-definition/implicit-any,class/property-definition/implicit-any,class/property-definition/implicit-any,expr-infer/as-assertion/compatibility,expr-infer/as-assertion/compatibility,expr-infer/type-assertion/compatibility,expr-infer/type-assertion/compatibility,expr-infer/type-assertion/compatibility,expr-infer/type-assertion/compatibility,expr-infer/type-assertion/compatibility	conformance/types/tuple/castingTuple.ts
+OOS:unsupported	1 12 0 13	33:2304||class/implements-clause/self,class/implements-clause/self,class/property-definition/implicit-any,class/property-definition/implicit-any,class/property-definition/implicit-any,class/property-definition/implicit-any,expr-infer/as-assertion/compatibility,expr-infer/as-assertion/compatibility,expr-infer/type-assertion/compatibility,expr-infer/type-assertion/compatibility,expr-infer/type-assertion/compatibility,expr-infer/type-assertion/compatibility,expr-infer/type-assertion/compatibility	conformance/types/tuple/castingTuple.ts
 OOS:syntax:module	- - - -	-	conformance/types/tuple/contextualTypeTupleEnd.ts
-OOS:unsupported	7 1 3 8	3:2322,15:2322,19:2322,20:2322,23:2322,24:2322,25:2322|18:2322,30:2322,35:2322|interface/heritage/topology	conformance/types/tuple/contextualTypeWithTuple.ts
+OOS:unsupported	8 0 2 8	3:2322,15:2322,18:2741,19:2322,20:2322,23:2322,24:2322,25:2322|30:2322,35:2322|interface/heritage/topology	conformance/types/tuple/contextualTypeWithTuple.ts
 IN	0 1 0 1	|	conformance/types/tuple/emptyTuples/emptyTuplesTypeAssertion01.ts
 IN	0 1 0 1	|	conformance/types/tuple/emptyTuples/emptyTuplesTypeAssertion02.ts
 IN	0 6 0 6	|	conformance/types/tuple/indexerWithTuple.ts
@@ -657,7 +657,7 @@ IN	0 0 0 0	|	conformance/types/tuple/tupleElementTypes2.ts
 OOS:unsupported	0 0 0 0	||bind/binding-pattern/array-pattern	conformance/types/tuple/tupleElementTypes3.ts
 IN	0 0 0 0	|	conformance/types/tuple/tupleElementTypes4.ts
 IN	0 2 0 2	|	conformance/types/tuple/tupleLengthCheck.ts
-OOS:unsupported	1 5 2 6	11:2322|31:2322,32:2322|expr-infer/as-assertion/compatibility,expr-infer/as-assertion/compatibility	conformance/types/tuple/typeInferenceWithTupleType.ts
+OOS:unsupported	1 5 0 6	11:2322||expr-infer/as-assertion/compatibility,expr-infer/as-assertion/compatibility	conformance/types/tuple/typeInferenceWithTupleType.ts
 OOS:unsupported	0 8 0 8	||bind/binding-pattern/array-pattern,bind/binding-pattern/array-pattern,bind/binding-pattern/array-pattern,bind/binding-pattern/array-pattern,bind/binding-pattern/array-pattern,expr-infer/as-assertion/compatibility	conformance/types/tuple/unionsOfTupleTypes1.ts
 OOS:syntax:as-const	- - - -	-	conformance/types/tuple/variadicTuples1.ts
 OOS:parse-error	- - - -	-	conformance/types/tuple/variadicTuples2.ts
@@ -665,7 +665,7 @@ IN	0 3 0 3	|	conformance/types/tuple/variadicTuples3.ts
 IN	0 0 1 0	|4:2322	conformance/types/tuple/wideningTuples1.ts
 OOS:unresolved	- - - -	-	conformance/types/tuple/wideningTuples2.ts
 IN	1 1 0 2	3:2322|	conformance/types/tuple/wideningTuples3.ts
-IN	1 0 1 1	3:2322|4:2322	conformance/types/tuple/wideningTuples4.ts
+IN	1 0 2 1	3:2322|4:2322,4:2322	conformance/types/tuple/wideningTuples4.ts
 OOS:unsupported	0 2 0 2	||bind/binding-pattern/array-pattern	conformance/types/tuple/wideningTuples5.ts
 OOS:unsupported	0 0 0 0	||bind/binding-pattern/array-pattern	conformance/types/tuple/wideningTuples6.ts
 IN	0 1 1 1	|3:2322	conformance/types/tuple/wideningTuples7.ts
