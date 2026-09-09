@@ -8,6 +8,9 @@ gets pulled into a `../sprints/` plan) or it's **deleted**. It is never a place 
 decided work or status.
 
 <!-- index the ideas here, one line each -->
+- [`checker-semantic-boundaries-and-maintainability.md`](checker-semantic-boundaries-and-maintainability.md) —
+  graduated 2026-09-06 audit record (findings → backlog `125`–`131`, S1–S3 repaired by the as-const
+  sprint); keeps the evidence limits, refuted proposals, and the open ownership-table question.
 - [`phpstan-architecture-lessons.md`](phpstan-architecture-lessons.md) — PHPStan comparison
   survey + adversarial peer-review verdicts (adopted → backlog `17` Stage A; rejected
   proposals recorded so they aren't re-proposed).

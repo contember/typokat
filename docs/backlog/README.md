@@ -78,8 +78,8 @@ numeric pass/fail gate.
 
 ## Roadmap at a glance
 
-The roadmap has **53 remaining items**: 51 release/consumer items in the existing four-track view
-and 2 non-blocking engineering-maintenance items. The release classification comes from
+The roadmap has **60 remaining items**: 51 release/consumer items in the existing four-track view
+and 9 non-blocking engineering-maintenance items. The release classification comes from
 [`completion-1.0.toml`](completion-1.0.toml) — that manifest, not this prose, decides what blocks
 checker 1.0; the grouping below is the human roadmap view. Consumer-surface items are deliberately
 absent from the manifest — they gate *consumers* of the checker, not the checker.
@@ -90,7 +90,7 @@ absent from the manifest — they gate *consumers* of the checker, not the check
 | **B — checker completeness** | 11 | M–L | Exhaust the Tier S/A/B diagnostic surface; independent items make useful sprint fillers. |
 | **C — soundness/parity tail** | 32 | S–XL | Release-blocking known gaps, safe-direction parity improvements, reporting/robustness, default-library fallout, and checker scaling. |
 | **D — scale + IDE** | 7 | M–XL | Preview, resolver breadth, parallel identity, incrementality — plus the non-blocking consumer surface (resolution queries, the resolution oracle). |
-| **Maintenance — non-blocking** | 2 | S–XL | Safe checker seams and reliable development feedback. |
+| **Maintenance — non-blocking** | 9 | S–XL | Safe checker seams and reliable development feedback. |
 
 Effort is a **relative planning estimate**, not a time promise:
 
@@ -227,13 +227,27 @@ and must not weaken soundness or parity gates merely to improve layout or speed.
   preserving one visible atomic publication facade.
 - **S** · [`121`](121-optional-project-binder-probe-test-build.md) — repair the optional workspace
   probe's stale normalized import/export test projection.
+- **S** · [`125`](125-checker-duplicate-helper-cleanup.md) — delete two unused dev-dependencies and
+  dedupe the alias-surface and tuple-rest helpers (audit M12/M6/M7).
+- **S+M** · [`126`](126-pass-request-and-manifest-ownership.md) — collapse the mirrored pass request,
+  then build and authenticate the declaration manifest once per route (audit M4 then M1).
+- **M** · [`127`](127-test-guard-parsers-and-shape-assertions.md) — replace the four partial Rust
+  scanners and the spelling assertions in the architecture test guards (audit M2/M3).
+- **M** · [`128`](128-typed-native-library-roles.md) — replace the eight-slot positional native
+  library role protocol with a typed role (audit M5).
+- **S** · [`129`](129-reexport-notice-formatter.md) — format the re-export provenance notice in
+  one place (audit M10).
+- **M** · [`130`](130-transition-regression-coverage.md) — transition-oriented regression coverage
+  across publication, copy and write boundaries in the differential grammar and fixtures (audit S4/U5).
+- **S–M** · [`131`](131-conditional-ownership-cleanups.md) — conditional: member-context scope
+  helper and driver error payload retention (audit M9/M11); each half may close as rejected.
+
+`125`, `126` and `129` are scheduled in the active
+[`audit cleanup sprint`](../sprints/sprint-2026-09-09-audit-cleanup-batch.md).
 
 ## Recommended order
 
-1. **Finish bounded `as const` and its regressions.** Follow the active sprint's reduced delivery
-   boundary; preserve the primary WIP and frozen experiments. General construction-order fidelity
-   and its remaining infrastructure belong to `120`, not to this feature's immediate critical path.
-2. **Close the remaining general blockers exposed by the immutable `placetext` screen.** The
+1. **Close the remaining general blockers exposed by the immutable `placetext` screen.** The
    archived [`object-binding sprint`](../archive/sprint-2026-08-09-object-binding-publication.md)
    removed all 22 measured binding `TK2304` identities, and the archived
    [`optional-parameter sprint`](../archive/sprint-2026-08-11-optional-parameter-undefined-arguments.md)
@@ -243,19 +257,19 @@ and must not weaken soundness or parity gates merely to improve layout or speed.
    diagnostics: computed keys plus their revealed `TK2741` (`75`), template interpolation (`71`),
    and predicate-bearing array diagnostics plus their revealed downstream `TK2322` (`50`/`107`).
    Re-screen only from reviewed general commits; do not patch the project.
-3. **Close `72` only when a re-screen is genuinely zero-clean.** Preserve the
+2. **Close `72` only when a re-screen is genuinely zero-clean.** Preserve the
    native-versus-overlay distinction and prove target/library meaning equivalence. Only after the
    unchanged zero gate passes may the descriptor, three exact TS/TK mutations, deterministic
    fresh-cache runner, fault controls, and CI identity ratchet land. Do not relax a threshold or
    add a shim.
-4. **Continue the full-project/scale ladder** (package/config/`.d.ts` remainder of `15` → `16` →
+3. **Continue the full-project/scale ladder** (package/config/`.d.ts` remainder of `15` → `16` →
    `17`), finishing the A/B/C remainder along the way. After `15` ships, it and the shipped
    production work of `14` must graduate a pinned Bundler-compatible full-stack witness (deptective
    only if it qualifies); the small `72` preview is not evidence for full resolver/lib fidelity. Per
    [`ADR-0007`](../decisions/0007-bundler-resolution-via-oxc-resolver.md), `15` integrates and
    differentially validates `oxc_resolver` for the 1.0 Bundler profile; NodeNext/alternate profiles
    are deferred and physical lookup is not reimplemented locally.
-5. **Land `79` + `80` alongside the breadth climb.** The shipped project summary provides the
+4. **Land `79` + `80` alongside the breadth climb.** The shipped project summary provides the
    bounded orchestration base; the resolution oracle adds breadth without enlarging the public
    checker claim. Pavouk already holds ~138k compiler-accurate resolution assertions over a real monorepo,
    so `80` turns `14`/`15` into a measured coverage derivative — including ~16.5k member-call edges.
