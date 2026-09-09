@@ -8,6 +8,9 @@ decisions → reference → archive.
 
 - [`reference/`](reference/README.md) — how the system works now (architecture, dev method, invariants, scope map, `tsc` divergences).
 - [`ideas/`](ideas/README.md) — proposals, no commitment.
+  - [`Checker semantic boundaries and maintainability`](ideas/checker-semantic-boundaries-and-maintainability.md) —
+    graduated audit record: evidence, refuted proposals, and the open ownership-table question;
+    its findings are backlog `125`–`131`.
 - [`decisions/`](decisions/README.md) — ADRs (the *why*), immutable.
 - [`backlog/`](backlog/README.md) — decided work, not yet scheduled (the roadmap).
 - [`sprints/`](sprints/README.md) — active thematic work-plans.
@@ -24,8 +27,12 @@ decisions → reference → archive.
 
 ## Active sprints
 
-No sprint is active. General constraint construction (including deferred ADR-0040 execution) and
-remaining reference-authentication infrastructure are tracked by
+- [`sprints/sprint-2026-09-09-audit-cleanup-batch.md`](sprints/sprint-2026-09-09-audit-cleanup-batch.md) —
+  behaviour-neutral cleanups from the maintainability audit (backlog `125`, `126`, `129`): delete,
+  dedupe, own the declaration manifest once per route.
+
+General constraint construction (including deferred ADR-0040 execution) and remaining
+reference-authentication infrastructure are tracked by
 [120](backlog/120-semantic-constraint-construction-order.md).
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->

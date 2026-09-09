@@ -20,3 +20,6 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
+- [`sprint-2026-09-09-audit-cleanup-batch.md`](sprint-2026-09-09-audit-cleanup-batch.md) —
+  behaviour-neutral audit cleanups: delete two dev-deps, dedupe three helpers, collapse the mirrored
+  pass request, build the declaration manifest once (backlog 125, 126, 129).
