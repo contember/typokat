@@ -54,6 +54,25 @@ The newly exposed `variadicTuples1.ts:363:13 TK2345` is owned primarily by
 Its identical embedded-rest header works with explicit scalar inputs; coordinate future rest inference
 with that operand owner rather than treating every generic callback as this item's gap.
 
+## Correlated rest-parameter narrowing (ADR-0033 row views)
+
+Contextual parameters taken from a union of rest tuples (`(...args: ["A", number] | ["B", string]) =>
+void`) are typed per column (`payload: number | string`). tsc narrows `payload` through the
+discriminating `kind` parameter; typokat does not, so member access on the narrowed column
+over-reports `TK2339`. This is the safe direction and is ledgered in `divergences.md`
+(`signatures/correlated-rest-parameter-narrowing`). Pre-feature `main` already emits the same class
+of false positive on `dependentDestructuredVariables.ts` (46 rows, `OOS:unsupported`); the shipped
+`as const` candidate adds eight more there (205/208/237×2/240×2/324/327) and nine in the mixed
+corpus (`contextual_rest_parameter_correlation.ts:5/9/16/20/28/32`,
+`contextual_rest_signature_identity.ts:13`, `contextual_rest_write_boundaries.ts:24/28`).
+
+The full repair is the five-step row-view plan (binder write census, symbolic `T[i]` versus
+bound-column body view, invocation-scoped CFG row state, whole-row relation, effect ownership)
+recorded in the archived as-const sprint (`git show 27225f03:docs/sprints/sprint-2026-08-17-as-const.md`,
+section R2b) with its independent step review under the sprint evidence root. Witness fixtures:
+`tests/cases/b44_as_const/contextual_rest_{arity_boundaries,body_result_identity,parameter_correlation,signature_identity,write_boundaries}.ts`,
+all disabled rows of the mixed corpus until this lands.
+
 ## Approach / acceptance
 
 Extend rest-shape inference to flatten embedded tuple rest patterns in both call-site

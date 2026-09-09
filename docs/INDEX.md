@@ -24,16 +24,11 @@ decisions → reference → archive.
 
 ## Active sprints
 
-The active `as const` sprint targets bounded feature delivery and regression safety, not complete
-TypeScript compatibility. General constraint construction and remaining reference-authentication
-infrastructure are tracked by [120](backlog/120-semantic-constraint-construction-order.md).
+No sprint is active. General constraint construction (including deferred ADR-0040 execution) and
+remaining reference-authentication infrastructure are tracked by
+[120](backlog/120-semantic-constraint-construction-order.md).
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprint-2026-08-17-as-const.md`](sprints/sprint-2026-08-17-as-const.md) — autonomous completion
-  through immutable literal modes ([ADR-0031](decisions/0031-preserve-literal-widening-in-immutable-type-identity.md))
-  and source-owned assignment work ([ADR-0032](decisions/0032-own-semantic-assignment-work-by-source-and-query-environment.md)); implementation remains uncommitted.
-  Callable construction is a proposed dependency, not an approved source cutover
-  ([ADR-0034](decisions/0034-own-callable-construction-before-publishing-signatures.md)).
 
 ## What's hot
 
@@ -53,9 +48,10 @@ infrastructure are tracked by [120](backlog/120-semantic-constraint-construction
   freezes the one-pass manifest, exact binder join, module-local dense map, and AST-free frozen
   product boundary. The archived
   [`satisfies sprint`](archive/sprint-2026-08-17-satisfies.md) implements source-preserving
-  contextual checking and records the comparison with TypeScript PR #46827. The
-  [`as const` sprint](sprints/sprint-2026-08-17-as-const.md) now migrates literal producers and
-  assignment flow after independent reviews exposed provenance loss in the uncommitted WU1 port.
+  contextual checking and records the comparison with TypeScript PR #46827. The archived
+  [`as const` sprint](archive/sprint-2026-08-17-as-const.md) shipped bounded const contexts on
+  2026-09-09 (feature `6b3cd507`); ADR-0040 execution and the remaining shared gaps moved to
+  backlog 120, 69, 123 and 124.
 - **Library compiler decomposition shipped 2026-08-21** — the
   [`archived sprint`](archive/sprint-2026-08-15-library-compiler-decomposition.md) split the
   14,009-line root into a 176-line stable facade, thirteen bounded production owners, and one test

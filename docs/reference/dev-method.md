@@ -70,8 +70,8 @@ spec, review, differential, or final gate above.
 6. Run the ordinary exact conformance gate when the cluster closes, not after every edit, unless no
    narrower gate can observe the bug. Use
    `cpu-lease run -n 2 -- cargo test --test conformance conformance -- --exact --nocapture`. It
-   covers the frozen 583-project / 699-source inventory once through the repeated
-   `CheckerSession` route and prints receipt `583/699/583/0`. Freeze the resulting small diff and
+   covers the frozen 660-project / 776-source inventory once through the repeated
+   `CheckerSession` route and prints receipt `660/776/660/0`. Freeze the resulting small diff and
    hand that exact diff to the independent adversarial reviewer. Start no new RED cluster until the
    reviewed cluster lands.
 7. Check progress every 20 minutes. Progress means an edit, a test result, or concrete root-cause
@@ -92,11 +92,11 @@ spec, review, differential, or final gate above.
       conformance_full_repeated_standalone_parity -- --ignored --exact --nocapture
     ```
 
-    It uses the same frozen inventory and prints receipt `583/699/583/583`; the latest closure run
-    took 138.30 s. `.github/workflows/full-parity.yml` also runs this unsharded gate weekly and on
+    It uses the same frozen inventory and prints receipt `660/776/660/660`; the latest closure run
+    took 25.54 s. `.github/workflows/full-parity.yml` also runs this unsharded gate weekly and on
     manual dispatch.
 
-The expanded ordinary exact gate took 69.77 s in the latest two-vCPU closure run.
+The expanded ordinary exact gate took 15.30 s in the latest two-vCPU closure run.
 `conformance_inventory_matches_frozen_receipt` is the count and ordering authority; the printed
 receipt repeats aggregate totals. Do not maintain a second hand-counted inventory.
 

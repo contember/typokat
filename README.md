@@ -180,7 +180,9 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   `keyof` over unions/`never`/template-literal key sources plus two tsc-parity conditional
   edges are documented divergences (backlog `26`, `27`, `35`–`37`). (A bytecode VM is a
   deferred, profiling-gated refactor — see `docs/decisions/0001-…`.)
-- **Remaining type-model gaps** — `satisfies` is modeled; `as const` remains deferred. Enums now have
+- **Remaining type-model gaps** — `satisfies` and bounded `as const` are modeled (literal retention,
+  readonly literal-owned properties and tuples, reference boundaries; spread/elision, computed keys
+  and object methods remain backlog `71`/`75`). Enums now have
   nominal whole/member types, initializer checking, value access, flow narrowing, legal merges,
   and project slots. Function-local and other nested enum declarations remain explicitly
   incomplete, and an enum nested in an attached-owner namespace remains withheld with that owner

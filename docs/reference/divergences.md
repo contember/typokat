@@ -479,6 +479,15 @@ flow-node CFG (M23), the single narrowing model.
   <!-- div: id=narrowing/semantic-assignment-loop-products dir=under scope=a-narrowing-tail owner=../backlog/51-narrowing-tail.md witness=../../tests/cases/b44_as_const/loop_semantic_dependencies.ts -->
   <!-- div: id=narrowing/contextual-assignment-result dir=under scope=a-narrowing-tail owner=../backlog/51-narrowing-tail.md witness=../../tests/cases/b44_as_const/assignment_contextual_result.ts -->
 
+- **Correlated rest-parameter columns are not narrowed by their discriminant (over-report).**
+  Parameters contextually typed from a union of rest tuples receive the per-column union
+  (`payload: number | string`); a guard on the discriminating sibling parameter does not narrow
+  the payload, so member access reports `TK2339` where tsc is clean. The same class already exists
+  on pre-feature `main` (`dependentDestructuredVariables.ts`, `OOS:unsupported`); the as-const
+  candidate adds eight rows there and nine in the mixed `b44_as_const` corpus. Repair is the
+  ADR-0033 row-view plan recorded in backlog 69.
+  <!-- div: id=narrowing/correlated-rest-parameter-columns dir=over scope=a-narrowing-tail owner=../backlog/69-signature-rest-parity-tail.md witness=../../tests/cases/b44_as_const/contextual_rest_parameter_correlation.ts -->
+
 ## Generics & constraints (M9 / M10 / M24)
 
 Implemented: explicit type arguments + instantiation (M9); type-argument **inference** (M10);
@@ -499,6 +508,24 @@ type, clamp-to-constraint inference reporting `TK2345`, `TK2313` for a circular 
   store-side column keyed by `TypeParamId`, not folded into the interned type's identity.
   [ADR-0002](../decisions/0002-de-bruijn-scoped-to-infer-binders.md) scopes de Bruijn indices to
   `infer` binders within conditional nodes.
+
+- **Cyclic generic constraints complete one layer only (under-report).** Parameters whose
+  constraints form a cycle (`B extends { c: C }, C extends { b: B }`) are fixed once in dependency
+  order; a cycle member is left symbolic or at its raw candidate, so the constructed result is one
+  layer deep and a downstream write into the second layer misses `TK2322`. tsc completes the
+  constraint graph on demand. Pre-feature `main` has the same gap; the as-const sprint replaced an
+  exhausting fixed-point loop (false `TK2589`) with this bounded behaviour.
+  <!-- div: id=constraints/cyclic-constraint-completion dir=under scope=a-generic-constraints owner=../backlog/120-semantic-constraint-construction-order.md witness=../../tests/cases/b44_as_const/source_construction_array_first.ts -->
+- **Rejected candidates on cyclic constraints keep the raw candidate as the fallback seed (over-report).**
+  When every supplied candidate of a cyclic constraint group violates its constraint, the clamped
+  fallback substitutes sibling constraints through the rejected raw candidates and a later read
+  reports a false `TK2322`; the argument `TK2345` itself is correct. Same behaviour on pre-feature `main`.
+  <!-- div: id=constraints/cyclic-supplied-candidate-fallback dir=over scope=a-generic-constraints owner=../backlog/120-semantic-constraint-construction-order.md witness=../../tests/cases/b44_as_const/erased_constraint_supplied.ts -->
+- **Union constraint member order is erased by interning (under-report).** `A extends C | B` and
+  `A extends B | C` share one `TypeId`, so dependency-ordered fixing visits the same member first
+  for both and only one of two symmetric cyclic groups completes as tsc does; the other misses a
+  downstream `TK2322` and reports a false one. Pre-feature `main` fails the mirror pair.
+  <!-- div: id=constraints/union-constraint-member-order dir=under scope=a-generic-constraints owner=../backlog/120-semantic-constraint-construction-order.md witness=../../tests/cases/b44_as_const/recursive_constraint_use_order_supplied.ts -->
 
 ## Classes (M11–M16 · b06 · b20)
 
@@ -635,6 +662,18 @@ completeness (`TK2515`/`TK2654`) (b06); private/protected constructor accessibil
   class now preserve the direct path, but `const Alias = GenericClass; new Alias<T>()`
   still loses generic substitution and abstract/constructor-accessibility facts.
   <!-- div: id=classes/generic-new-alias dir=under scope=s-class-access owner=../backlog/78-generic-class-value-aliases.md witness=../../tests/cases/b78_generic_class_value_aliases/generic_aliases.ts -->
+
+- **Local class member selection inside const-asserted initializers is incomplete (under-report).**
+  A field initializer that reads a member of an earlier local-class field records
+  `class/property-definition/initializer-inference` instead of publishing the selected member, so
+  the downstream `TK2540`/`TK2322` writes are missed. Same on pre-feature `main`; the capability is
+  ADR-0042, owned by backlog 123.
+  <!-- div: id=classes/local-class-member-selection dir=under scope=s-assignability owner=../backlog/123-contextual-class-initializer-publication.md witness=../../tests/cases/b44_as_const/class_member_selector_modes.ts -->
+- **Ready tuple/array element references inside const-asserted initializers are incomplete (under-report).**
+  `({ value: this.source[0] }) as const` over a complete tuple/array/readonly field records the
+  initializer-inference incomplete and misses the downstream `TK2540`/`TK2322` pair. Same on
+  pre-feature `main`; bounded producer repair in backlog 124.
+  <!-- div: id=classes/ready-collection-reference-projection dir=under scope=s-assignability owner=../backlog/124-class-initializer-ready-reference-projection.md witness=../../tests/cases/b44_as_const/class_ready_collection_references.ts -->
 
 ## Arrays & tuples (M17 / M18 / M30)
 

@@ -1,10 +1,30 @@
+> **OUTCOME — shipped 2026-09-09.** Bounded `as const` is modeled: literal retention, readonly
+> literal-owned properties and tuples, reference boundaries, literal-owned instance fields, flat
+> binding defaults and ready enum keys. Feature commit `6b3cd507`, reviewed official scoreboard
+> `634d1535`, spec re-plan `2911e105`; the earlier accepted M2 candidate (`dab3f745…`, `83b9aaaa`)
+> was reconstructed byte-exactly on `main` and repaired in three bounded units (R-A dependency-ordered
+> constraint fixing, R-B binding defaults + enum keys, R-C registration). Independent adversarial
+> review: R-A PASS; R-B FAIL on one silent false-negative class (untyped binding default dropped
+> the leaf), repaired and re-verified on every repro; one pre-existing candidate over-report
+> (`<T, U = T>` contextual default) repaired in R-A. Verification on the unchanged final tree:
+> full `cargo test` 1,923 passed / 0 failed, `cargo clippy --all-targets -- -D warnings`, `fmt`,
+> ordinary conformance `660/776/660/0` (13.64 s), parity `660/776/660/660` (29.45 s), differential
+> repros unchanged and three 400-program seeds against `main` with 20 message-only divergences
+> (widened literal rendering, zero lost diagnostics), official suite 874 cases with 4 progress and
+> 2 reviewed movements. Against pre-feature `main` over all 116 `b44_as_const` fixtures: 414 rows
+> fixed, 136 shared gaps ledgered (owners 120, 69, 123, 124, 51/60/76), 11 accepted deviations
+> (9 TK2339 over-reports, owner 69; one symmetric union-order pair, owner 120). Not delivered:
+> ADR-0040 execution (moved to backlog 120 with its U1 patch retained under the evidence root),
+> R2b row views (69), class member selection (123), ready collection projection (124).
+
 # Sprint — AST-directed `as const` contexts (2026-08-17)
 
-**Goal.** Finish the `as const` half of [44](../backlog/44-satisfies-as-const.md): retain literal
+**Goal.** Finish the `as const` half of backlog 44 (closed with this sprint; see
+`completion-1.0.toml` criterion `A-satisfies-as-const`): retain literal
 values, make literal-owned object properties readonly, infer readonly tuples, and stop const
 propagation at references. The [satisfies sprint](../archive/sprint-2026-08-17-satisfies.md) shipped.
 
-**Standing (2026-09-09, re-planned).** The accepted cumulative M2 candidate
+**Standing at closure (2026-09-09).** Shipped; see OUTCOME. The accepted cumulative M2 candidate
 (`dab3f745…`, recorded in `83b9aaaa`) is the delivery baseline. It was reconstructed byte-exactly on
 current `main` from the frozen output manifest (2,088 entries; all code paths hash-verified) and
 behaves identically to the frozen binary on all 116 `b44_as_const` fixtures. The registered-callable
@@ -28,7 +48,7 @@ ownership, but no required diagnostic may be lost relative to `main`, and no tes
 ## Measured classification (M2 candidate versus `main` `27225f03`)
 
 Both binaries were run over all 116 `b44_as_const` fixtures and diffed per line against the
-markers (`compare.py` under the scratch root; receipts `cmp-main-m2.json`).
+markers (`compare.py` under the scratch root; receipts `cmp-main-m2.json`; final receipts `cmp-main-final.json`).
 
 | Class | Rows | Disposition |
 |---|---|---|
@@ -127,7 +147,7 @@ Enum keys (`enum_member_*_endpoint`, `infer_const_assertion`, `seed_const_enum_r
 - Ledger every remaining shared gap in `divergences.md` with owner and witness; create backlog 124;
   extend 120, 69 and 123 with the exact rows.
 
-## Closure gates (all on the unchanged final tree)
+## Closure gates (all executed on the unchanged final tree; results in OUTCOME)
 
 1. Independent adversarial review of R-A and R-B with `tsc 6.0.3 --strict` cross-checks.
 2. `cargo test`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`.

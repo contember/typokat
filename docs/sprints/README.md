@@ -20,5 +20,3 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
-- [`sprint-2026-08-17-as-const.md`](sprint-2026-08-17-as-const.md) — autonomous literal-model and
-  assignment-flow migration toward B44 closure; the reviewed WU1 WIP remains preserved.

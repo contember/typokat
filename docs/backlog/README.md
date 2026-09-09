@@ -72,7 +72,7 @@ The pinned TS 6.0.3 `lib.d.ts` surface audit — the historical start gate for `
 `41`, receiver typing shipped with `70`, and namespace/merging work shipped in the archived
 2026-07-15 sprint). The committed proof is GO for starting `14`. Backlogs `50` and `75`
 independently block 1.0; `63` owns both canonical Callable/Newable compatibility and its surplus
-diagnostic cardinality as parity work. `44` is not used by ES5 core. The official-suite
+diagnostic cardinality as parity work. The official-suite
 scoreboard is the ratchet on the way there — its syntax gates flip OOS→IN as features land — not a
 numeric pass/fail gate.
 
@@ -86,9 +86,9 @@ absent from the manifest — they gate *consumers* of the checker, not the check
 
 | Track | Active items | Typical effort | Role |
 |---|---:|---|---|
-| **A — model completeness** | 2 | L–XL | Eliminate the remaining silently-permissive model gaps; namespace/declaration merging is shipped. |
+| **A — model completeness** | 1 | L–XL | Eliminate the remaining silently-permissive model gaps; namespace/declaration merging is shipped. |
 | **B — checker completeness** | 11 | M–L | Exhaust the Tier S/A/B diagnostic surface; independent items make useful sprint fillers. |
-| **C — soundness/parity tail** | 31 | S–XL | Release-blocking known gaps, safe-direction parity improvements, reporting/robustness, default-library fallout, and checker scaling. |
+| **C — soundness/parity tail** | 32 | S–XL | Release-blocking known gaps, safe-direction parity improvements, reporting/robustness, default-library fallout, and checker scaling. |
 | **D — scale + IDE** | 7 | M–XL | Preview, resolver breadth, parallel identity, incrementality — plus the non-blocking consumer surface (resolution queries, the resolution oracle). |
 | **Maintenance — non-blocking** | 2 | S–XL | Safe checker seams and reliable development feedback. |
 
@@ -107,11 +107,9 @@ section are non-blocking groups.
 ## Items
 
 **A. Model completeness — exact declaration types.** Every item kills a silently-permissive or
-deliberately approximate model family. `44` and `76` still block checker 1.0 but are not
-needed by the
-`lib.es5.d.ts` core.
+deliberately approximate model family. `76` still blocks checker 1.0 but is not needed by the
+`lib.es5.d.ts` core; `44` shipped (bounded `satisfies` + `as const`).
 
-- **L** · [`44`](44-satisfies-as-const.md) — `satisfies` checking plus readonly literal/tuple semantics for `as const`.
 - **XL** · [`76`](76-lazy-value-type-resolution.md) — demand-driven declaration/value types and inferred-return cycles · blocked by `46`, `48`.
 
 **B. Checker completeness — Tier A/B diagnostic surface.** Independent of A; good sprint
@@ -153,6 +151,7 @@ items — `53` `55` `57` `58` `61` — **shipped** in sprint-2026-07-07-soundnes
   contextual parameter fixing and compound return-role policy beyond bounded feature regressions.
 - **XL** · [`123`](123-contextual-class-initializer-publication.md) — effective contextual class
   initializer inputs, including self-dependent contexts; separate from bounded field `as const`.
+- **S–M** · [`124`](124-class-initializer-ready-reference-projection.md) — project ready tuple/array element references inside const-asserted class initializers.
 
 FP / tsc-parity tail (safe direction, scheduled by opportunity):
 

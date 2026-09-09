@@ -33,5 +33,5 @@ green. No checker semantic or library publication change is required by this iss
 ## Touch points
 
 `crates/typokat-library/src/project_binder_projection.rs`, the optional project-binder probe's test
-fixtures and feature wiring. The [as-const sprint](../sprints/sprint-2026-08-17-as-const.md) records the
+fixtures and feature wiring. The [as-const sprint](../archive/sprint-2026-08-17-as-const.md) records the
 baseline reproduction.

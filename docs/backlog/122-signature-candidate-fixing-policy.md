@@ -33,7 +33,7 @@ Retained witnesses in `tests/cases/b44_as_const/`:
 
 These are mixed fixtures, not permission to disable all their tests. Direct enum-result widening,
 newly restored contextual body errors and consumed-parameter negative controls remain required by
-the [active feature sprint](../sprints/sprint-2026-08-17-as-const.md).
+the [archived as-const sprint](../archive/sprint-2026-08-17-as-const.md).
 
 ## Approach / acceptance
 

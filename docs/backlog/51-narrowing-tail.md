@@ -54,7 +54,7 @@ The same pre-existing transfer gaps appear in `b44_as_const/flow_target_reductio
 6/35/40 and `assignment_semantic_reduction.ts` at lines 26/33/40. These mixed fixtures also contain
 required feature assertions: deferring the old failures must not disable their newly recovered
 errors or waive introduced invalid-write false positives. Exact-source comparisons and the retained
-feature boundary are recorded in the [as-const sprint](../sprints/sprint-2026-08-17-as-const.md).
+feature boundary are recorded in the [as-const sprint](../archive/sprint-2026-08-17-as-const.md).
 
 ## Approach / acceptance
 

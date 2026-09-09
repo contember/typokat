@@ -171,7 +171,7 @@ to replace.
   `satisfies`/`as const` — Track A backlogs [`41`](../backlog/41-generic-methods.md),
   [`43`](sprint-2026-07-15-namespaces-declaration-merging.md),
   `70` (subsequently shipped by WU4), [`42`](sprint-2026-08-12-enum-type-value-model.md),
-  and [`44`](../backlog/44-satisfies-as-const.md).
+  and `44`.
 - A new primitive-boxing or array instance-member architecture. WU1 established
   that it is required for a proposed name, the sprint stops and asks rather than
   silently widening its design.

@@ -25,11 +25,11 @@ cargo test <name>                           # a single unit test by name
 cargo clippy --all-targets -- -D warnings   # must stay clean
 ```
 
-The ordinary conformance command discovers 583 fixture projects / 699 source files from the
+The ordinary conformance command discovers 660 fixture projects / 776 source files from the
 registrations in `tests/conformance.rs`, checks each once through the repeated `CheckerSession`
-route, and prints receipt `583/699/583/0` (projects/sources/repeated/standalone).
+route, and prints receipt `660/776/660/0` (projects/sources/repeated/standalone).
 `conformance_inventory_matches_frozen_receipt` is the count and ordering authority. The latest
-closure run over this inventory took 69.77 s under `cpu-lease run -n 2 --`.
+closure run over this inventory took 15.30 s under `cpu-lease run -n 2 --`.
 
 Run complete repeated/standalone parity with:
 
@@ -38,8 +38,8 @@ cpu-lease run -n 2 -- cargo test --test conformance \
   conformance_full_repeated_standalone_parity -- --ignored --exact --nocapture
 ```
 
-That exact command covers the same inventory and prints receipt `583/699/583/583`; the latest
-closure run took 138.30 s. `.github/workflows/full-parity.yml` runs it weekly and on manual
+That exact command covers the same inventory and prints receipt `660/776/660/660`; the latest
+closure run took 25.54 s. `.github/workflows/full-parity.yml` runs it weekly and on manual
 dispatch.
 
 Rough incremental costs after one edit in `check/` (median of 3, quiet machine),
@@ -111,7 +111,7 @@ against real `tsc --strict`). Implementation goes through subagents; the leader 
 commits. The soundness/architecture **invariants you must not break** are in
 [docs/reference/invariants.md](docs/reference/invariants.md); the roadmap **is** the
 [docs/backlog/](docs/backlog/README.md) (its README carries the definition of done and the
-recommended order — next: resume the active as-const sprint, then close the remaining general
+recommended order — next: close the remaining general
 blockers exposed by the immutable `placetext` screen and re-screen for backlog `72`; continue
 Bundler module breadth and the remaining model-completeness track, then parallel cross-file
 identity and incrementality; the bytecode VM stays a deferred,

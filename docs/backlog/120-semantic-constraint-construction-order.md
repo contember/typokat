@@ -8,9 +8,10 @@ blocked-by: []
 
 **Summary.** Complete generic constraint instantiation and source-construction fidelity without
 reconstructing lost order from canonical types. Effort XL. The bounded source-owned protocol in
-[ADR-0040](../decisions/0040-complete-registered-callables-at-source-demand-boundaries.md) is now
-explicitly required by the as-const sprint; broader construction/lazy-source compatibility remains here.
-Deferral does not authorize new diagnostic losses or restoring old missed errors in that proof.
+[ADR-0040](../decisions/0040-complete-registered-callables-at-source-demand-boundaries.md) stays
+accepted, but its execution (units U1–U6) was moved here when the as-const sprint closed on
+2026-09-09; the bounded feature shipped with dependency-ordered constraint fixing instead.
+Deferral does not authorize new diagnostic losses.
 
 ## Problem
 
@@ -31,7 +32,7 @@ Aliases add another distinction: erased written arguments must not request unuse
 parameters, while retained applications can preserve argument order not visible in their members.
 Declared compound returns and bound-to-bound demand expose further scheduling differences.
 
-The [as-const sprint](../sprints/sprint-2026-08-17-as-const.md) preserves the failed planner experiments
+The [as-const sprint](../archive/sprint-2026-08-17-as-const.md) preserves the failed planner experiments
 and their oracle witnesses. Its intersection-only retained-expression proof was independently
 accepted, but never integrated as a general union/source migration. Later planner candidates also
 introduced erased-alias false cleans; those candidates cannot be shipped under this deferral.
@@ -68,6 +69,30 @@ Independent preview found one omitted bounds dependency: `GlobalAugmentation.own
 bounds-check that owner domain and audit its edges, even while deferred-module contents and
 resolution remain excluded. Pin the existing ambient-global constructor and malformed owner IDs.
 This is retained design evidence, not authorization to restart C1b during backlog-44 delivery.
+
+### Rows deferred from the as-const sprint (2026-09-09)
+
+All rows below fail identically on the pre-feature `main` and on the shipped candidate; none is a
+feature regression. They are disabled rows of the mixed `tests/cases/b44_as_const/` corpus (see
+`tests/cases/README.md`).
+
+- Missing `TK2322` after cyclic-constraint completion: `source_construction_*.ts` (last line of
+  each), `constraint_instantiation_order.ts:6/11/16`, `constraint_return_construction_call.ts:6`,
+  `constraint_return_construction_relation.ts:3/7`, `constraint_semantic_identity.ts:7/13/18/23/29`,
+  `constraint_union_construction.ts:5/11/17`, `constraint_union_forward_demand.ts:6`,
+  `recursive_constraint_use_order.ts:8/12/17/23/28/32/37/43`,
+  `recursive_constraint_use_order_supplied.ts:17`, `erased_constraint_supplied.ts:8/16`.
+- False `TK2322` on cyclic constraints with rejected supplied candidates:
+  `erased_constraint_supplied.ts:7/15`.
+- Union constraint member order is not part of type identity: `A extends C | B` and
+  `A extends B | C` intern to one `TypeId`, so the shipped first-occurrence fixing order can satisfy
+  only one of the two symmetric groups in `recursive_constraint_use_order_supplied.ts` (rows 16/17
+  are right, rows 8/9 are wrong; pre-feature `main` had the opposite pair). tsc keeps creation order.
+- ADR-0040 U1 work in progress (registered identity, snapshots, Source transport; 14 non-exhaustive
+  matches outstanding) is retained as
+  `registered-callable-u1-authority-from-lifecycle-output.patch` under the sprint evidence root and
+  is reconstructible from the frozen M2 manifest. Restarting it requires the lossless scalar-wrapper
+  decision recorded in the archived sprint.
 
 ## Touch points
 

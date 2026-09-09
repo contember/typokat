@@ -73,6 +73,18 @@ Do not charge semantic scheduling to [119](119-class-publication-preparation.md)
 requires unchanged behavior and publication order. Coordinate with
 [76](76-lazy-value-type-resolution.md) only after demonstrating the actual dependency.
 
+## Local class member selection (ADR-0042)
+
+The separately approved capability in
+[ADR-0042](../decisions/0042-qualify-deferred-class-member-results.md) — reading a member of an
+earlier local-class field inside a const-asserted initializer — is owned here after the as-const
+sprint closed (2026-09-09). Witnesses, all disabled rows of the mixed `b44_as_const` corpus and
+failing identically on pre-feature `main`: `class_member_selector_{modes,lexical_checks,enum_and_scc}.ts`
+(13 + 5 strict-tsc markers, oracles `m3-class-selector-leader-*.json` under the sprint evidence root),
+`class_published_reference_surfaces.ts:10/17`,
+`class_reference_publication_controls.ts:8/21/24/27/34/35`. Ready tuple/array reference projection
+in the same fixtures is the smaller, independent [124](124-class-initializer-ready-reference-projection.md).
+
 ## Touch points
 
 `checker/classes/publication.rs`, initializer annotation seeding, owned construction inputs,

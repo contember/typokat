@@ -78,11 +78,11 @@ scope = ["b-namespaces"]
 id = "A-satisfies-as-const"
 track = "A"
 title = "satisfies + as const semantics"
-state = "incomplete"
+state = "complete"
 blocks_release = "true"
-owner = "./44-satisfies-as-const.md"
-witness = "spec-first corpus; NOT used by lib.es5 core (audit: 0 uses) but required for DoD model completeness"
-links = ["./lib-audit-6.0.3.md"]
+owner = "shipped"
+witness = "cargo test conformance (b44_satisfies whole; b44_as_const mixed corpus, green fixtures enabled by row); independent tsc 6.0.3 adversarial review; zero lost diagnostics versus pre-feature main over all 116 b44 fixtures; remaining shared gaps ledgered under 120/69/123/124"
+links = ["../../tests/cases/b44_satisfies", "../../tests/cases/b44_as_const", "../archive/sprint-2026-08-17-satisfies.md", "../archive/sprint-2026-08-17-as-const.md", "../reference/divergences.md", "./lib-audit-6.0.3.md"]
 deps = []
 
 [[criterion]]
